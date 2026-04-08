@@ -133,7 +133,7 @@ test_invokes_qemu_with_expected_milestone2_args() {
 
   qemu_args="$(cat "${CASE_TMP}/qemu.args")"
   build_profile="$(cat "${CASE_TMP}/build-vm.profile")"
-  assert_contains "$output" "page marker: MILESTONE2_BROWSER_OK"
+  assert_contains "$output" "graphical proof: Firefox launches as the in-guest UI shell"
   assert_contains "$output" "serial output: terminal"
   assert_contains "$qemu_args" "-enable-kvm"
   assert_contains "$qemu_args" "-cpu host"

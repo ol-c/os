@@ -87,8 +87,7 @@ if [[ "$PROFILE" == "milestone1" ]]; then
 fi
 
 echo "booting image: $IMAGE_PATH"
-echo "graphical proof: Firefox opens /etc/secureos/milestone2.html inside the VM"
-echo "page marker: MILESTONE2_BROWSER_OK"
+echo "graphical proof: Firefox launches as the in-guest UI shell"
 echo "serial output: terminal"
 
 exec qemu-system-x86_64 \

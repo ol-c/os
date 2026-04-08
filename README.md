@@ -17,12 +17,13 @@ Run it with:
 
 ## Milestone 2
 
-Milestone 2 proves that we can boot a graphical VM session and launch a real browser inside the guest.
+Milestone 2 proves that we can boot a graphical VM session and use a real browser inside the guest as the visible UI shell.
 
 Proof of success:
 - QEMU opens a VM window
 - Firefox launches automatically inside the guest
-- the in-guest page displays `MILESTONE2_BROWSER_OK`
+- Firefox opens as a normal interactive browser session
+- the browser window is maximized to fill the VM display
 
 Run it with:
 

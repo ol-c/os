@@ -60,13 +60,13 @@ Milestone 2 decisions:
 - Keep the browser inside the VM rather than using the host browser.
 - Use a graphical QEMU window instead of a serial-only boot flow.
 - Autologin into a lightweight graphical session and start Firefox automatically.
-- Display a local milestone page inside the guest browser as the proof target.
+- Use Firefox itself as the visible UI shell for the guest session.
 
 Success criteria:
 - The guest boots into a graphical session.
 - QEMU opens a visible VM display window on the host.
 - Firefox launches automatically inside the guest.
-- The visible in-guest page includes a deterministic success marker: `MILESTONE2_BROWSER_OK`.
+- Firefox opens as a normal interactive browser session and fills the VM display.
 
 Out of scope:
 - Remote browser access from the host
