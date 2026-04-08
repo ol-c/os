@@ -52,6 +52,8 @@
     cat > /home/demo/.mozilla/firefox/secureos.default/user.js <<'EOF'
     user_pref("browser.tabs.inTitlebar", 1);
     user_pref("browser.tabs.drawInTitlebar", true);
+    user_pref("browser.tabs.closeWindowWithLastTab", false);
+    user_pref("browser.startup.homepage", "about:home");
     user_pref("browser.toolbars.bookmarks.visibility", "never");
     EOF
     cat > /home/demo/.xinitrc <<'EOF'

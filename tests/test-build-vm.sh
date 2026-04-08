@@ -140,6 +140,8 @@ test_milestone2_runs_firefox_borderless_and_maximized() {
 
   [[ "$contents" == *"user_pref(\"browser.tabs.inTitlebar\", 1);"* ]] || fail "expected milestone2 to keep Firefox tabs in the title bar"
   [[ "$contents" == *"user_pref(\"browser.tabs.drawInTitlebar\", true);"* ]] || fail "expected milestone2 to force Firefox titlebar drawing"
+  [[ "$contents" == *"user_pref(\"browser.tabs.closeWindowWithLastTab\", false);"* ]] || fail "expected milestone2 to keep Firefox open when the last tab closes"
+  [[ "$contents" == *"user_pref(\"browser.startup.homepage\", \"about:home\");"* ]] || fail "expected milestone2 to pin the Firefox home page for last-tab recovery"
   [[ "$contents" == *"matchbox-window-manager -use_titlebar no -use_cursor yes &"* ]] || fail "expected milestone2 to launch matchbox without a title bar"
   [[ "$contents" == *"xdotool windowsize \"\$window_id\" 100% 100%"* ]] || fail "expected milestone2 to force Firefox to fill the screen"
   [[ "$contents" == *"firefox --no-remote --profile /home/demo/.mozilla/firefox/secureos.default --new-window about:home &"* ]] || fail "expected milestone2 to launch Firefox with the managed profile"
