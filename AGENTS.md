@@ -77,7 +77,28 @@ Out of scope:
 Question this milestone answers:
 - Can the OS launch and visibly present a real browser inside the guest itself?
 
-## Milestone 3: First-Time Setup and Persistence
+## Milestone 3: Browser-Based System Controls
+
+Goal:
+- Expose the core computer management controls through the browser interface inside the guest.
+
+Milestone 3 decisions:
+- Keep the browser as the primary control surface rather than introducing a separate native settings app.
+- Focus on the basic machine controls users expect immediately: Wi-Fi and general network state, battery and power status, volume, display brightness, appearance mode such as light mode and dark mode, and Bluetooth.
+- Prioritize proving visibility and control of live system state over polishing the final information architecture.
+- Prefer the minimum guest-side services and browser UI needed to demonstrate these controls end to end.
+
+Success criteria:
+- The browser UI shows current state for the core device utilities we care about.
+- The browser UI can trigger changes for the controls that are meant to be interactive.
+- At minimum, the milestone demonstrates browser-accessible management for Wi-Fi or network state, battery or power status when available, volume, brightness, appearance mode, and Bluetooth state.
+- The guest reflects user-triggered changes in a way that is observable and testable.
+- Automated tests cover the browser-to-system control contract with deterministic fakes or controlled test hooks where direct hardware access is not reliable.
+
+Question this milestone answers:
+- Can the browser act as the basic control panel for managing the computer itself?
+
+## Milestone 4: First-Time Setup and Persistence
 
 Goal:
 - Implement first boot onboarding and persist machine state.
@@ -91,7 +112,7 @@ Success criteria:
 Question this milestone answers:
 - Can the system transition cleanly from unconfigured to configured state?
 
-## Milestone 4: Development Loop
+## Milestone 5: Development Loop
 
 Goal:
 - Tighten the build and launch workflow for normal development.
@@ -111,7 +132,7 @@ Examples of things that may belong here:
 Question this milestone answers:
 - Do we have a development workflow that is practical and repeatable?
 
-## Milestone 5: Self-Hosted Development
+## Milestone 6: Self-Hosted Development
 
 Goal:
 - Evaluate and possibly support development from inside the OS itself.
@@ -126,7 +147,9 @@ Question this milestone answers:
 
 # Current Focus
 
-We are currently focused on Milestones 1 and 2.
+Milestones 1 and 2 are complete.
+
+We are currently focused on Milestone 3.
 
 Implementation status:
 - [x] Chose QEMU for the first development backend.
@@ -136,7 +159,11 @@ Implementation status:
 - [x] Added a simple build script and QEMU launch script for Milestone 1.
 - [x] Added a graphical Milestone 2 guest with autologin and Firefox.
 - [x] Added tests for the build and launch contract for both milestones.
-- [ ] Verify the full Milestone 2 graphical boot and browser launch on an Ubuntu host with nix and QEMU/KVM installed.
+- [x] Verified the full Milestone 2 graphical boot and browser launch on an Ubuntu host with nix and QEMU/KVM installed.
+- [ ] Define the Milestone 3 browser-based system controls proof surface and test strategy.
+- [ ] Implement the first browser-visible system status surfaces for core device utilities.
+- [ ] Implement browser-driven control flows for the selected Milestone 3 utilities.
+- [ ] Add excellent automated coverage for the browser-to-system control contract.
 
 # Deferred Decisions
 
