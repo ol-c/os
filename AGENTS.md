@@ -84,6 +84,8 @@ Goal:
 
 Milestone 3 decisions:
 - Keep the browser as the primary control surface rather than introducing a separate native settings app.
+- Use `https://localhost` inside the guest as the initial Milestone 3 browser origin, served locally by a Node.js process on port `443`.
+- Package Firefox through a repo-local source patch so closing the final tab reopens `https://localhost` instead of Firefox's default replacement tab.
 - Focus on the basic machine controls users expect immediately: Wi-Fi and general network state, battery and power status, volume, display brightness, appearance mode such as light mode and dark mode, and Bluetooth.
 - Prioritize proving visibility and control of live system state over polishing the final information architecture.
 - Prefer the minimum guest-side services and browser UI needed to demonstrate these controls end to end.
@@ -98,7 +100,37 @@ Success criteria:
 Question this milestone answers:
 - Can the browser act as the basic control panel for managing the computer itself?
 
-## Milestone 4: First-Time Setup and Persistence
+## Milestone 4: Synced In-VM Development
+
+Goal:
+- Enable practical development from inside the guest against a host-shared SecureOS repo.
+
+Milestone 4 decisions:
+- Use QEMU `virtiofs` as the only supported first shared-directory path.
+- Mount the whole SecureOS repo into the guest, read-write.
+- Treat the shared host repo as the durable source of truth.
+- Allow in-guest Codex-assisted development against that mounted repo.
+- Use the in-VM workflow to validate browser and Firefox-source changes before updating the repo's packaged patch file.
+- Keep final Nix packaging and VM-image integration as a separate explicit step after in-VM validation.
+
+Success criteria:
+- There is one documented host setup path for synced in-VM development.
+- There is one documented command to launch the VM with the shared repo mounted.
+- The mounted repo is visible and writable inside the guest at a fixed path.
+- A developer can edit files inside the VM and see those changes immediately on the host.
+- A developer can validate a Firefox or browser-surface change inside the VM without rebuilding the full Nix-packaged Firefox on every source edit.
+- After validation, the developer can update the repo patch artifact and run the final packaged build path intentionally.
+
+Out of scope:
+- Replacing the final Nix packaging path
+- Multiple shared-folder backends
+- Full self-hosting as the primary development model
+- Multi-user sync, remote sync, or networked dev environments
+
+Question this milestone answers:
+- Can we make browser and Firefox development practical by working inside the VM against a shared repo, while keeping the host repo and Nix packaging as the final source of truth?
+
+## Milestone 5: First-Time Setup and Persistence
 
 Goal:
 - Implement first boot onboarding and persist machine state.
@@ -112,7 +144,7 @@ Success criteria:
 Question this milestone answers:
 - Can the system transition cleanly from unconfigured to configured state?
 
-## Milestone 5: Development Loop
+## Milestone 6: Development Loop
 
 Goal:
 - Tighten the build and launch workflow for normal development.
@@ -132,7 +164,7 @@ Examples of things that may belong here:
 Question this milestone answers:
 - Do we have a development workflow that is practical and repeatable?
 
-## Milestone 6: Self-Hosted Development
+## Milestone 7: Self-Hosted Development
 
 Goal:
 - Evaluate and possibly support development from inside the OS itself.
@@ -164,6 +196,10 @@ Implementation status:
 - [ ] Implement the first browser-visible system status surfaces for core device utilities.
 - [ ] Implement browser-driven control flows for the selected Milestone 3 utilities.
 - [ ] Add excellent automated coverage for the browser-to-system control contract.
+- [ ] Define the Milestone 4 synced in-VM development proof surface and test strategy.
+- [ ] Add one supported host↔guest shared repo mount path using `virtiofs`.
+- [ ] Enable in-guest development against the shared tree with a fixed mount location.
+- [ ] Document the validate-inside-VM, then package-with-Nix workflow for Firefox and browser-surface changes.
 
 # Deferred Decisions
 

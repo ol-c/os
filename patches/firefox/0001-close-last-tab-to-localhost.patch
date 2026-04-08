@@ -1,0 +1,135 @@
+diff --git a/browser/base/content/test/general/browser.toml b/browser/base/content/test/general/browser.toml
+--- a/browser/base/content/test/general/browser.toml
++++ b/browser/base/content/test/general/browser.toml
+@@ -323,6 +323,8 @@
+ # DO NOT ADD MORE TESTS HERE. USE A TOPICAL DIRECTORY INSTEAD.
+ 
+ ["browser_hide_removing.js"]
++["browser_closeLastTab_loads_localhost.js"]
++
+ # DO NOT ADD MORE TESTS HERE. USE A TOPICAL DIRECTORY INSTEAD.
+ 
+ ["browser_homeDrop.js"]
+diff --git a/browser/base/content/test/general/browser_closeLastTab_loads_localhost.js b/browser/base/content/test/general/browser_closeLastTab_loads_localhost.js
+new file mode 100644
+--- /dev/null
++++ b/browser/base/content/test/general/browser_closeLastTab_loads_localhost.js
+@@ -0,0 +1,106 @@
++const SECUREOS_LAST_TAB_URL = "https://localhost";
++
++add_task(async function test_close_last_tab_uses_localhost_replacement_url() {
++  await SpecialPowers.pushPrefEnv({
++    set: [["browser.tabs.closeWindowWithLastTab", false]],
++  });
++
++  let win = await BrowserTestUtils.openNewBrowserWindow();
++  let originalAddTrustedTab = win.gBrowser.addTrustedTab;
++  let replacementURL = null;
++
++  try {
++    let closingTab = win.gBrowser.selectedTab;
++    BrowserTestUtils.startLoadingURIString(
++      closingTab.linkedBrowser,
++      "https://example.com/"
++    );
++    await BrowserTestUtils.browserLoaded(
++      closingTab.linkedBrowser,
++      false,
++      "https://example.com/"
++    );
++
++    win.gBrowser.addTrustedTab = function (url, options) {
++      replacementURL = url;
++      return originalAddTrustedTab.call(this, "about:blank", options);
++    };
++
++    win.gBrowser.removeTab(closingTab, {
++      animate: false,
++      skipPermitUnload: true,
++    });
++
++    await TestUtils.waitForCondition(
++      () => replacementURL !== null,
++      "Expected Firefox to create a replacement tab when closing the final tab"
++    );
++    is(
++      replacementURL,
++      SECUREOS_LAST_TAB_URL,
++      "Closing the final tab should reopen the SecureOS localhost surface"
++    );
++    is(win.gBrowser.tabs.length, 1, "The browser window should remain open");
++  } finally {
++    win.gBrowser.addTrustedTab = originalAddTrustedTab;
++    await BrowserTestUtils.closeWindow(win);
++  }
++});
++
++add_task(async function test_closing_non_final_tab_does_not_force_localhost() {
++  await SpecialPowers.pushPrefEnv({
++    set: [["browser.tabs.closeWindowWithLastTab", false]],
++  });
++
++  let win = await BrowserTestUtils.openNewBrowserWindow();
++  let originalAddTrustedTab = win.gBrowser.addTrustedTab;
++  let replacementURL = null;
++
++  try {
++    let firstTab = win.gBrowser.selectedTab;
++    BrowserTestUtils.startLoadingURIString(
++      firstTab.linkedBrowser,
++      "https://example.com/"
++    );
++    await BrowserTestUtils.browserLoaded(
++      firstTab.linkedBrowser,
++      false,
++      "https://example.com/"
++    );
++
++    let secondTab = win.gBrowser.addTab("https://example.org/");
++    await BrowserTestUtils.browserLoaded(
++      secondTab.linkedBrowser,
++      false,
++      "https://example.org/"
++    );
++
++    win.gBrowser.addTrustedTab = function (url, options) {
++      replacementURL = url;
++      return originalAddTrustedTab.call(this, "about:blank", options);
++    };
++
++    win.gBrowser.removeTab(secondTab, {
++      animate: false,
++      skipPermitUnload: true,
++    });
++
++    await TestUtils.waitForCondition(
++      () => win.gBrowser.tabs.length === 1,
++      "Expected the extra tab to close without spawning a replacement tab"
++    );
++    is(
++      replacementURL,
++      null,
++      "Closing a non-final tab should not force the localhost replacement path"
++    );
++    is(
++      win.gBrowser.selectedBrowser.currentURI.spec,
++      "https://example.com/",
++      "The remaining tab should keep its current page"
++    );
++  } finally {
++    win.gBrowser.addTrustedTab = originalAddTrustedTab;
++    await BrowserTestUtils.closeWindow(win);
++  }
++});
+diff --git a/browser/components/tabbrowser/content/tabbrowser.js b/browser/components/tabbrowser/content/tabbrowser.js
+--- a/browser/components/tabbrowser/content/tabbrowser.js
++++ b/browser/components/tabbrowser/content/tabbrowser.js
+@@ -5877,7 +5877,7 @@
+       aTab._mouseleave();
+ 
+       if (newTab) {
+-        this.addTrustedTab(BROWSER_NEW_TAB_URL, {
++        this.addTrustedTab("https://localhost", {
+           skipAnimation: true,
+           // In the event that insertAfterCurrent is set and the current tab is
+           // inside a group that is being closed we want to avoid creating the

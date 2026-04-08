@@ -22,14 +22,23 @@ Milestone 2 proves that we can boot a graphical VM session and use a real browse
 Proof of success:
 - QEMU opens a VM window
 - Firefox launches automatically inside the guest
-- Firefox opens as a normal interactive browser session
+- Firefox opens `https://localhost` as a normal interactive browser session
 - the browser window is maximized to fill the VM display
+- Closing the final tab keeps the window open and reopens `https://localhost`
 
 Run it with:
 
 ```sh
 ./launch-vm --milestone milestone2
 ```
+
+Firefox in the guest is packaged from nixpkgs with a repo-local source patch. The patch currently forces the last-tab replacement path to reopen `https://localhost` so the browser always returns to the local control surface.
+
+## Firefox Patch Workflow
+
+For fast Firefox patch iteration, use a separate upstream Firefox source checkout and validate the behavior there first. Once the patch is correct, export it into `patches/firefox/0001-close-last-tab-to-localhost.patch` and let this repo package it through the `firefox-localhost` derivation in `flake.nix`.
+
+Firefox updates should be handled by bumping the repo's pinned nixpkgs input, refreshing the patch if it drifts, and rerunning the repo tests plus a VM smoke boot.
 
 ## Host Setup
 

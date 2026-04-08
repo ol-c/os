@@ -3,7 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BUILD_VM="${ROOT_DIR}/build-vm"
+FLAKE_NIX="${ROOT_DIR}/flake.nix"
 MILESTONE2_NIX="${ROOT_DIR}/nix/milestone2.nix"
+FIREFOX_PATCH="${ROOT_DIR}/patches/firefox/0001-close-last-tab-to-localhost.patch"
 TEST_TMP_ROOT="${ROOT_DIR}/.tmp-tests"
 CASE_TMP=""
 
@@ -138,14 +140,31 @@ test_milestone2_runs_firefox_borderless_and_maximized() {
   local contents
   contents="$(cat "${MILESTONE2_NIX}")"
 
+  [[ "$contents" == *"SECUREOS_UI_SERVER_OK https://localhost"* ]] || fail "expected milestone2 to define a localhost HTTPS UI service"
+  [[ "$contents" == *"server.listen(443, '127.0.0.1'"* ]] || fail "expected milestone2 to serve the UI on localhost:443"
   [[ "$contents" == *"user_pref(\"browser.tabs.inTitlebar\", 1);"* ]] || fail "expected milestone2 to keep Firefox tabs in the title bar"
   [[ "$contents" == *"user_pref(\"browser.tabs.drawInTitlebar\", true);"* ]] || fail "expected milestone2 to force Firefox titlebar drawing"
   [[ "$contents" == *"user_pref(\"browser.tabs.closeWindowWithLastTab\", false);"* ]] || fail "expected milestone2 to keep Firefox open when the last tab closes"
-  [[ "$contents" == *"user_pref(\"browser.startup.homepage\", \"about:home\");"* ]] || fail "expected milestone2 to pin the Firefox home page for last-tab recovery"
+  [[ "$contents" == *"user_pref(\"browser.startup.homepage\", \"https://localhost\");"* ]] || fail "expected milestone2 to pin the Firefox home page to the in-guest HTTPS UI"
+  [[ "$contents" == *"user_pref(\"security.enterprise_roots.enabled\", true);"* ]] || fail "expected milestone2 to trust the guest localhost certificate through system roots"
   [[ "$contents" == *"matchbox-window-manager -use_titlebar no -use_cursor yes &"* ]] || fail "expected milestone2 to launch matchbox without a title bar"
+  [[ "$contents" == *"curl --silent --fail --cacert"* ]] || fail "expected milestone2 to wait for the localhost HTTPS UI before launching Firefox"
   [[ "$contents" == *"xdotool windowsize \"\$window_id\" 100% 100%"* ]] || fail "expected milestone2 to force Firefox to fill the screen"
-  [[ "$contents" == *"firefox --no-remote --profile /home/demo/.mozilla/firefox/secureos.default --new-window about:home &"* ]] || fail "expected milestone2 to launch Firefox with the managed profile"
+  [[ "$contents" == *"firefox --no-remote --profile /home/demo/.mozilla/firefox/secureos.default --new-window https://localhost &"* ]] || fail "expected milestone2 to launch Firefox against the localhost UI"
   [[ "$contents" != *"openbox"* ]] || fail "expected milestone2 to avoid Openbox"
+}
+
+test_packages_firefox_with_localhost_patch() {
+  local flake_contents patch_contents
+  flake_contents="$(cat "${FLAKE_NIX}")"
+  patch_contents="$(cat "${FIREFOX_PATCH}")"
+
+  [[ "$flake_contents" == *"firefoxLocalhostPatch = ./patches/firefox/0001-close-last-tab-to-localhost.patch;"* ]] || fail "expected flake to define the repo-local Firefox patch"
+  [[ "$flake_contents" == *"\"firefox-unwrapped\" = prev.\"firefox-unwrapped\".overrideAttrs"* ]] || fail "expected flake to override nixpkgs firefox-unwrapped"
+  [[ "$flake_contents" == *"patches = (old.patches or []) ++ [ firefoxLocalhostPatch ];"* ]] || fail "expected flake to append the localhost patch to firefox-unwrapped"
+  [[ "$flake_contents" == *"firefox-localhost"* ]] || fail "expected flake to expose the patched Firefox package"
+  [[ "$patch_contents" == *"+        this.addTrustedTab(\"https://localhost\", {"* ]] || fail "expected Firefox patch to replace the last closed tab with localhost"
+  [[ "$patch_contents" == *"browser_closeLastTab_loads_localhost.js"* ]] || fail "expected Firefox patch to add a browser regression test"
 }
 
 test_requires_nix
@@ -154,5 +173,6 @@ test_prints_resolved_image_path_for_milestone2
 test_rejects_unknown_profile
 test_requires_bootable_image_in_output
 test_milestone2_runs_firefox_borderless_and_maximized
+test_packages_firefox_with_localhost_patch
 
 echo "PASS: build-vm"
