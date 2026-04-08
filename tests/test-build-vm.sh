@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BUILD_VM="${ROOT_DIR}/build-vm"
+MILESTONE2_NIX="${ROOT_DIR}/nix/milestone2.nix"
 TEST_TMP_ROOT="${ROOT_DIR}/.tmp-tests"
 CASE_TMP=""
 
@@ -133,10 +134,23 @@ EOF
   cleanup_case
 }
 
+test_milestone2_runs_firefox_borderless_and_maximized() {
+  local contents
+  contents="$(cat "${MILESTONE2_NIX}")"
+
+  [[ "$contents" == *"user_pref(\"browser.tabs.inTitlebar\", 1);"* ]] || fail "expected milestone2 to keep Firefox tabs in the title bar"
+  [[ "$contents" == *"user_pref(\"browser.tabs.drawInTitlebar\", true);"* ]] || fail "expected milestone2 to force Firefox titlebar drawing"
+  [[ "$contents" == *"matchbox-window-manager -use_titlebar no -use_cursor yes &"* ]] || fail "expected milestone2 to launch matchbox without a title bar"
+  [[ "$contents" == *"xdotool windowsize \"\$window_id\" 100% 100%"* ]] || fail "expected milestone2 to force Firefox to fill the screen"
+  [[ "$contents" == *"firefox --no-remote --profile /home/demo/.mozilla/firefox/secureos.default --new-window about:home &"* ]] || fail "expected milestone2 to launch Firefox with the managed profile"
+  [[ "$contents" != *"openbox"* ]] || fail "expected milestone2 to avoid Openbox"
+}
+
 test_requires_nix
 test_prints_resolved_image_path_for_milestone1
 test_prints_resolved_image_path_for_milestone2
 test_rejects_unknown_profile
 test_requires_bootable_image_in_output
+test_milestone2_runs_firefox_borderless_and_maximized
 
 echo "PASS: build-vm"
