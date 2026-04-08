@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: build-vm [milestone1|milestone2]
+
+Builds the requested guest image and prints the image path.
+Default milestone: milestone1.
+EOF
+}
+
+fail() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    fail "required command not found: $1"
+  fi
+}
+
+resolve_image_path() {
+  local out_path="$1"
+
+  if [[ -f "$out_path" ]]; then
+    printf '%s\n' "$out_path"
+    return
+  fi
+
+  find "$out_path" -maxdepth 2 -type f \
+    \( -name '*.qcow2' -o -name '*.qcow' -o -name '*.img' -o -name '*.raw' \) \
+    | LC_ALL=C sort \
+    | sed -n '1p'
+}
+
+if [[ "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+PROFILE="${1:-milestone1}"
+case "$PROFILE" in
+  milestone1)
+    BUILD_TARGET="${BUILD_TARGET:-.#milestone1-image}"
+    ;;
+  milestone2)
+    BUILD_TARGET="${BUILD_TARGET:-.#milestone2-image}"
+    ;;
+  *)
+    fail "unsupported milestone: $PROFILE"
+    ;;
+esac
+
+require_command nix
+
+NIX_BUILD_OUTPUT="$(
+  nix build "$BUILD_TARGET" --print-out-paths --no-link
+)"
+
+IMAGE_PATH="$(resolve_image_path "$NIX_BUILD_OUTPUT")"
+[[ -n "$IMAGE_PATH" ]] || fail "unable to locate a bootable disk image in nix build output: $NIX_BUILD_OUTPUT"
+
+printf '%s\n' "$IMAGE_PATH"

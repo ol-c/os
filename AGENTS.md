@@ -26,38 +26,56 @@ That means:
 Goal:
 - Boot a reproducible nixOS-based guest on an Ubuntu host.
 
+Milestone 1 decisions:
+- Use QEMU as a development backend for fast local iteration.
+- Use a minimal custom nixOS guest owned by this repo.
+- Require KVM acceleration on the Ubuntu host.
+- Boot a normal disk image rather than using direct kernel boot.
+- Treat serial output as the proof surface for success.
+
 Success criteria:
 - There is one documented host setup path.
 - There is one documented command to build and boot the guest.
 - The guest boots successfully in a repeatable way.
-- Boot success is visible through serial log, console output, or another equally direct proof.
+- Serial output includes a deterministic success marker: `MILESTONE1_BOOT_OK`.
 
 Out of scope:
 - Browser UI
 - First-time setup flow
 - Persistent machine state
 - Self-hosted development inside the guest
+- VM backend abstraction
+- Auto-build manifests, overlays, and snapshot management beyond the minimum needed to boot
 
 Question this milestone answers:
 - Can we reliably build and run the base OS at all?
 
-## Milestone 2: Reachable Browser UI
+## Milestone 2: In-Guest Browser UI
 
 Goal:
-- Serve a minimal browser UI from inside the guest and reach it from the host.
+- Boot a graphical guest session and launch a real browser inside the VM.
+
+Milestone 2 decisions:
+- Use the same QEMU development backend as Milestone 1.
+- Keep the browser inside the VM rather than using the host browser.
+- Use a graphical QEMU window instead of a serial-only boot flow.
+- Autologin into a lightweight graphical session and start Firefox automatically.
+- Display a local milestone page inside the guest browser as the proof target.
 
 Success criteria:
-- The guest boots into a running networked system.
-- The host can open a browser page served by the guest.
-- The page can be intentionally minimal and only needs to prove the browser-first UI model.
+- The guest boots into a graphical session.
+- QEMU opens a visible VM display window on the host.
+- Firefox launches automatically inside the guest.
+- The visible in-guest page includes a deterministic success marker: `MILESTONE2_BROWSER_OK`.
 
 Out of scope:
+- Remote browser access from the host
 - Full onboarding
 - Durable setup state
-- Rich product behavior
+- Rich product behavior beyond proving the browser surface exists
 
 Question this milestone answers:
-- Can the OS actually present its UI through the browser model?
+- Can the OS launch and visibly present a real browser inside the guest itself?
 
 ## Milestone 3: First-Time Setup and Persistence
 
@@ -108,22 +126,26 @@ Question this milestone answers:
 
 # Current Focus
 
-We are currently focused on Milestone 1.
+We are currently focused on Milestones 1 and 2.
 
-The next thing to decide is:
-- What exact artifact we want to boot first.
-- What the simplest acceptable proof of boot success is.
-- Whether the first implementation should optimize for fastest prototype or long-term architecture.
+Implementation status:
+- [x] Chose QEMU for the first development backend.
+- [x] Chose a minimal custom nixOS guest as the first boot target.
+- [x] Chose serial output as the Milestone 1 proof surface.
+- [x] Added a minimal nix guest definition with a deterministic Milestone 1 boot marker.
+- [x] Added a simple build script and QEMU launch script for Milestone 1.
+- [x] Added a graphical Milestone 2 guest with autologin and Firefox.
+- [x] Added tests for the build and launch contract for both milestones.
+- [ ] Verify the full Milestone 2 graphical boot and browser launch on an Ubuntu host with nix and QEMU/KVM installed.
 
 # Deferred Decisions
 
 The following are intentionally not locked in yet:
-- Primary VM backend
-- Direct kernel boot versus other boot paths
 - Networking model
-- Artifact manifest format
-- Auto-build behavior in the launcher
-- Persistent overlays and snapshots
+- Browser UI stack after the current Firefox proof
+- Automatic rebuild policy
+- Persistent overlays and snapshots beyond the current QEMU `-snapshot` dev behavior
 - First-time setup data shape
+- Long-term VM backend choice outside these milestones
 
-These decisions should be made when a milestone actually requires them.
+These decisions should be made when a later milestone actually requires them.
