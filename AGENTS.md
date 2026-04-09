@@ -212,6 +212,7 @@ We are currently focused on Milestone 3.
 
 Immediate next task:
 - Prove out the current Firefox source-patch flow end to end by getting the patched `firefox-unwrapped` build to succeed, booting the guest with that patched browser, and verifying that closing the final tab reopens `https://localhost`.
+- Use the Firefox workflow documented in `README.md` as the canonical reference for the current packaged validation path versus the faster source-iteration path.
 - Commands to run on the host:
   `git add patches/firefox/0001-close-last-tab-to-localhost.patch tests/test-build-vm.sh flake.nix AGENTS.md`
   `nix build .#firefox-localhost --print-build-logs`

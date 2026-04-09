@@ -3,7 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
-    nixos-generators.url = "github:nix-community/nixos-generators";
+    nixos-generators = {
+      url = "github:nix-community/nixos-generators";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs@{ self, nixpkgs, nixos-generators, ... }:
@@ -14,6 +17,10 @@
         "firefox-unwrapped" = prev."firefox-unwrapped".overrideAttrs (old: {
           patches = (old.patches or []) ++ [ firefoxLocalhostPatch ];
         });
+      };
+      firefoxPkgs = import nixpkgs {
+        inherit system;
+        overlays = [ firefoxOverlay ];
       };
       overlayModule = {
         nixpkgs.overlays = [ firefoxOverlay ];
@@ -36,23 +43,20 @@
       };
 
       packages.${system} = {
-        firefox-localhost = let
-          pkgs = import nixpkgs {
-            inherit system;
-            overlays = [ firefoxOverlay ];
-          };
-        in pkgs.firefox;
+        firefox-localhost = firefoxPkgs.firefox;
 
         milestone1-image = nixos-generators.nixosGenerate {
           inherit system;
           format = "qcow";
-          modules = [ overlayModule milestone1Module ];
+          pkgs = firefoxPkgs;
+          modules = [ milestone1Module ];
         };
 
         milestone2-image = nixos-generators.nixosGenerate {
           inherit system;
           format = "qcow";
-          modules = [ overlayModule milestone2Module ];
+          pkgs = firefoxPkgs;
+          modules = [ milestone2Module ];
         };
       };
     };

@@ -36,7 +36,43 @@ Firefox in the guest is packaged from nixpkgs with a repo-local source patch. Th
 
 ## Firefox Patch Workflow
 
-For fast Firefox patch iteration, use a separate upstream Firefox source checkout and validate the behavior there first. Once the patch is correct, export it into `patches/firefox/0001-close-last-tab-to-localhost.patch` and let this repo package it through the `firefox-localhost` derivation in `flake.nix`.
+The repo has two distinct Firefox workflows. Use them for different purposes.
+
+### 1. Reproducible packaged path
+
+Use this when you need to prove that the repo-local Firefox patch still builds through Nix and still works in the guest image.
+
+```sh
+git add patches/firefox/0001-close-last-tab-to-localhost.patch tests/test-build-vm.sh flake.nix AGENTS.md
+nix build .#firefox-localhost --print-build-logs
+./launch-vm --milestone milestone2
+```
+
+Then validate inside the VM by closing the final Firefox tab with the tab close button or `Ctrl+W` and confirming that Firefox stays open on `https://localhost`.
+
+This is the authoritative packaging check, but it is intentionally not the main edit-test-edit loop because rebuilding packaged Firefox is slow.
+
+### 2. Fast Firefox source iteration
+
+Use this when you are actively changing Firefox behavior and need quick feedback.
+
+The intended inner loop is:
+- make the behavior change in a separate Firefox source checkout
+- validate it there first
+- once the behavior is correct, export or refresh the repo patch at `patches/firefox/0001-close-last-tab-to-localhost.patch`
+- rerun the reproducible packaged path above
+
+Until Milestone 4 is complete, that fast loop happens outside this repo's final Nix packaging path. Milestone 4 exists to make the fast loop practical inside the VM against a host-shared repo, while keeping this repo's packaged Nix build as the final verification gate.
+
+### Updating the repo patch
+
+The packaged Firefox change in this repo lives at:
+- `patches/firefox/0001-close-last-tab-to-localhost.patch`
+
+The Nix packaging entry point is:
+- `flake.nix` package `.#firefox-localhost`
+
+When the Firefox source change is validated, update the patch file, rerun the build and launch flow above, and keep `tests/test-build-vm.sh` aligned with the expected packaging contract.
 
 Firefox updates should be handled by bumping the repo's pinned nixpkgs input, refreshing the patch if it drifts, and rerunning the repo tests plus a VM smoke boot.
 

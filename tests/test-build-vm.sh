@@ -160,9 +160,14 @@ test_packages_firefox_with_localhost_patch() {
   patch_contents="$(cat "${FIREFOX_PATCH}")"
 
   [[ "$flake_contents" == *"firefoxLocalhostPatch = ./patches/firefox/0001-close-last-tab-to-localhost.patch;"* ]] || fail "expected flake to define the repo-local Firefox patch"
+  [[ "$flake_contents" == *"inputs.nixpkgs.follows = \"nixpkgs\";"* ]] || fail "expected nixos-generators to follow the repo nixpkgs input"
+  [[ "$flake_contents" == *"firefoxPkgs = import nixpkgs {"* ]] || fail "expected flake to share one nixpkgs import for Firefox packaging and images"
   [[ "$flake_contents" == *"\"firefox-unwrapped\" = prev.\"firefox-unwrapped\".overrideAttrs"* ]] || fail "expected flake to override nixpkgs firefox-unwrapped"
   [[ "$flake_contents" == *"patches = (old.patches or []) ++ [ firefoxLocalhostPatch ];"* ]] || fail "expected flake to append the localhost patch to firefox-unwrapped"
-  [[ "$flake_contents" == *"firefox-localhost"* ]] || fail "expected flake to expose the patched Firefox package"
+  [[ "$flake_contents" == *"firefox-localhost = firefoxPkgs.firefox;"* ]] || fail "expected flake to expose the shared patched Firefox package"
+  [[ "$flake_contents" == *"pkgs = firefoxPkgs;"* ]] || fail "expected generated images to use the same patched nixpkgs import"
+  [[ "$flake_contents" == *"modules = [ milestone1Module ];"* ]] || fail "expected milestone1 image generation to avoid reapplying the overlay module"
+  [[ "$flake_contents" == *"modules = [ milestone2Module ];"* ]] || fail "expected milestone2 image generation to avoid reapplying the overlay module"
   [[ "$patch_contents" == *"+        this.addTrustedTab(\"https://localhost\", {"* ]] || fail "expected Firefox patch to replace the last closed tab with localhost"
   [[ "$patch_contents" == *"browser_closeLastTab_loads_localhost.js"* ]] || fail "expected Firefox patch to add a browser regression test"
 }
