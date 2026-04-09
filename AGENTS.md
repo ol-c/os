@@ -177,11 +177,46 @@ Success criteria:
 Question this milestone answers:
 - Can this OS become a practical environment for developing itself?
 
+## Milestone 8: Browser Accountability and Activity Visibility
+
+Goal:
+- Expose important browser-site behaviors in a user-facing browser interface so users can understand what sites are doing with sensitive browser capabilities and persistent browser state.
+
+Milestone 8 decisions:
+- De-prioritize this milestone behind the current roadmap.
+- Make the first proof visibility-only, not control-oriented.
+- Include aggregate CPU, memory, and network accounting alongside important event tracking in the first version.
+- Treat this as a product capability of the browser shell, not as a developer or devtools feature.
+- Prefer browser-internal instrumentation and first-party UI over standard extension APIs.
+
+Success criteria:
+- The browser UI shows important current and recent activity for sites or tabs.
+- At minimum, the milestone demonstrates visibility for a defined set of high-value events such as screen capture, camera access, microphone access, persistent storage use or grant, service worker install or active state, and background worker activity where practical.
+- The browser UI shows aggregate CPU, memory, and network usage attributable to a tab, site, or origin.
+- The UI can show both what is happening now and a recent history or timeline of important events.
+- Event data is attributable to a tab, site, or origin in a way users can understand.
+- Automated tests cover the event-to-UI contract with deterministic triggers or test hooks.
+
+Out of scope:
+- Throttling, suspension, kill, or policy enforcement controls
+- Broad developer tooling or raw internal telemetry dumps
+
+Question this milestone answers:
+- Can the browser act as a trustworthy activity ledger that tells users what sites are doing with sensitive browser capabilities and persistent browser state?
+
 # Current Focus
 
 Milestones 1 and 2 are complete.
 
 We are currently focused on Milestone 3.
+
+Immediate next task:
+- Prove out the current Firefox source-patch flow end to end by getting the patched `firefox-unwrapped` build to succeed, booting the guest with that patched browser, and verifying that closing the final tab reopens `https://localhost`.
+- Commands to run on the host:
+  `git add patches/firefox/0001-close-last-tab-to-localhost.patch tests/test-build-vm.sh flake.nix AGENTS.md`
+  `nix build .#firefox-localhost --print-build-logs`
+  `./launch-vm --milestone milestone2`
+  Then validate in the VM by closing the final Firefox tab with the tab close button or `Ctrl+W` and confirming the browser stays open on `https://localhost`.
 
 Implementation status:
 - [x] Chose QEMU for the first development backend.
