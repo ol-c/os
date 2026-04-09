@@ -85,7 +85,7 @@ Goal:
 Milestone 3 decisions:
 - Keep the browser as the primary control surface rather than introducing a separate native settings app.
 - Use `https://localhost` inside the guest as the initial Milestone 3 browser origin, served locally by a Node.js process on port `443`.
-- Package Firefox through a repo-local source patch so closing the final tab reopens `https://localhost` instead of Firefox's default replacement tab.
+- Package Firefox through repo-local source patches so Firefox keeps returning to `https://localhost`: closing the final tab must reopen `https://localhost`, and opening a new tab should also load `https://localhost`.
 - Focus on the basic machine controls users expect immediately: Wi-Fi and general network state, battery and power status, volume, display brightness, appearance mode such as light mode and dark mode, and Bluetooth.
 - Prioritize proving visibility and control of live system state over polishing the final information architecture.
 - Prefer the minimum guest-side services and browser UI needed to demonstrate these controls end to end.
@@ -211,13 +211,14 @@ Milestones 1 and 2 are complete.
 We are currently focused on Milestone 3.
 
 Immediate next task:
-- Prove out the current Firefox source-patch flow end to end by getting the patched `firefox-unwrapped` build to succeed, booting the guest with that patched browser, and verifying that closing the final tab reopens `https://localhost`.
+- Add Firefox behavior so opening a new tab loads `https://localhost/` in addition to the existing behavior where closing the final tab reopens `https://localhost`, and use that change as the next proof that the faster Firefox development loop can be validated inside the VM before the final packaged rebuild.
 - Use the Firefox workflow documented in `README.md` as the canonical reference for the current packaged validation path versus the faster source-iteration path.
-- Commands to run on the host:
-  `git add patches/firefox/0001-close-last-tab-to-localhost.patch tests/test-build-vm.sh flake.nix AGENTS.md`
+- First validate the Firefox source change inside the running VM with the fastest available loop.
+- After the behavior is correct, update `patches/firefox/0001-close-last-tab-to-localhost.patch` or add the next repo-local Firefox patch artifact as needed, then rerun the packaged validation path:
+  `git add patches/firefox/0001-close-last-tab-to-localhost.patch tests/test-build-vm.sh flake.nix README.md AGENTS.md`
   `nix build .#firefox-localhost --print-build-logs`
   `./launch-vm --milestone milestone2`
-  Then validate in the VM by closing the final Firefox tab with the tab close button or `Ctrl+W` and confirming the browser stays open on `https://localhost`.
+  Then validate in the VM by opening a new tab and confirming it loads `https://localhost/`, and by rechecking that closing the final tab still reopens `https://localhost`.
 
 Implementation status:
 - [x] Chose QEMU for the first development backend.
@@ -228,6 +229,8 @@ Implementation status:
 - [x] Added a graphical Milestone 2 guest with autologin and Firefox.
 - [x] Added tests for the build and launch contract for both milestones.
 - [x] Verified the full Milestone 2 graphical boot and browser launch on an Ubuntu host with nix and QEMU/KVM installed.
+- [x] Proved the current Firefox source-patch flow end to end by building the patched browser, booting the guest with it, and verifying that closing the final tab reopens `https://localhost`.
+- [ ] Extend the Firefox localhost shell behavior so opening a new tab also loads `https://localhost/` without regressing the final-tab reopen behavior.
 - [ ] Define the Milestone 3 browser-based system controls proof surface and test strategy.
 - [ ] Implement the first browser-visible system status surfaces for core device utilities.
 - [ ] Implement browser-driven control flows for the selected Milestone 3 utilities.

@@ -58,11 +58,17 @@ Use this when you are actively changing Firefox behavior and need quick feedback
 
 The intended inner loop is:
 - make the behavior change in a separate Firefox source checkout
-- validate it there first
+- validate it there first, ideally inside the VM when the change is part of the browser surface you want to experience in-guest
 - once the behavior is correct, export or refresh the repo patch at `patches/firefox/0001-close-last-tab-to-localhost.patch`
 - rerun the reproducible packaged path above
 
 Until Milestone 4 is complete, that fast loop happens outside this repo's final Nix packaging path. Milestone 4 exists to make the fast loop practical inside the VM against a host-shared repo, while keeping this repo's packaged Nix build as the final verification gate.
+
+The next Firefox behavior target for this workflow is:
+- opening a new tab should load `https://localhost/`
+- closing the final tab must continue to reopen `https://localhost`
+
+The new-tab behavior is additive. It should not replace or weaken the existing last-tab reopen behavior.
 
 ### Updating the repo patch
 
