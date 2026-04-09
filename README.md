@@ -34,6 +34,24 @@ Run it with:
 
 Firefox in the guest is packaged from nixpkgs with a repo-local source patch. The patch currently forces the last-tab replacement path to reopen `https://localhost` so the browser always returns to the local control surface.
 
+## Milestone 3 Terminal Proof
+
+The next Milestone 3 proof is a browser terminal at `https://localhost/terminal`.
+
+Proof of success:
+- opening `https://localhost/terminal` shows a working terminal inside the guest browser
+- each fresh visit to `/terminal` creates a new terminal session
+- common full-screen terminal programs such as `vim`, `less`, and `top` behave correctly enough for normal use
+- the browser tab title follows the terminal title stream when the shell or running program emits one
+
+The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The SecureOS localhost HTTPS service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps short reconnect tolerance for transient browser disconnects.
+
+Session behavior for this proof:
+- `/terminal` always creates a fresh shell
+- reload creates a new shell instead of reattaching
+- there is no session id or persistence yet
+- the page title currently defaults to `SecureOS Terminal`; richer per-command title behavior can be added back after terminal I/O is stable
+
 ## Firefox Patch Workflow
 
 The repo has two distinct Firefox workflows. Use them for different purposes.
@@ -57,18 +75,42 @@ This is the authoritative packaging check, but it is intentionally not the main 
 Use this when you are actively changing Firefox behavior and need quick feedback.
 
 The intended inner loop is:
-- make the behavior change in a separate Firefox source checkout
-- validate it there first, ideally inside the VM when the change is part of the browser surface you want to experience in-guest
+- boot the VM into a terminal-oriented development session instead of directly into the graphical browser shell
+- work in a Firefox source checkout from inside the guest
+- validate the behavior change in that faster loop first
 - once the behavior is correct, export or refresh the repo patch at `patches/firefox/0001-close-last-tab-to-localhost.patch`
 - rerun the reproducible packaged path above
 
-Until Milestone 4 is complete, that fast loop happens outside this repo's final Nix packaging path. Milestone 4 exists to make the fast loop practical inside the VM against a host-shared repo, while keeping this repo's packaged Nix build as the final verification gate.
+The next Firefox packaging proof is no longer the immediate next milestone task. The current next milestone proof is the browser terminal at `https://localhost/terminal`. After that lands, the same split still applies: validate Firefox source changes in the fast loop first, then use the packaged build as the final gate.
 
-The next Firefox behavior target for this workflow is:
+The next Firefox behavior target after the terminal proof is:
 - opening a new tab should load `https://localhost/`
 - closing the final tab must continue to reopen `https://localhost`
 
 The new-tab behavior is additive. It should not replace or weaken the existing last-tab reopen behavior.
+
+## Planned Terminal Development Mode
+
+To make the fast loop practical in-guest, we will add a terminal-oriented VM launch mode to `./launch-vm`.
+
+This mode is intended for development, not for Milestone 2 proof. The graphical Firefox auto-launch path remains the proof path for the visible browser shell. The terminal mode exists so we can boot into a simpler guest session, work directly in the guest, and avoid paying the full packaged rebuild cost on every Firefox source edit.
+
+The planned behavior is:
+- boot the same guest image family under QEMU/KVM
+- start a development-friendly terminal session instead of automatically launching Firefox fullscreen
+- keep the guest suitable for editing, building, and running ad hoc Firefox validation commands from inside the VM
+- preserve the packaged `nix build .#firefox-localhost` path as the final reproducible verification step after the fast loop succeeds
+
+The planned workflow is:
+1. Launch the VM in terminal development mode.
+2. Open the Firefox source checkout inside the guest.
+3. Make and validate the source change there first.
+4. Refresh the repo-local patch artifact under `patches/firefox/`.
+5. Run `nix build .#firefox-localhost --print-build-logs`.
+6. Relaunch the normal graphical VM path with `./launch-vm --milestone milestone2`.
+7. Recheck the behavior in the packaged guest image.
+
+The first change we will use to validate this faster loop is the Firefox new-tab localhost behavior. That gives us a concrete proof that the terminal development mode is useful before we move on to broader browser-based system controls or the Milestone 4 shared-repo flow.
 
 ### Updating the repo patch
 

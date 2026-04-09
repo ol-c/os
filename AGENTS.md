@@ -85,7 +85,8 @@ Goal:
 Milestone 3 decisions:
 - Keep the browser as the primary control surface rather than introducing a separate native settings app.
 - Use `https://localhost` inside the guest as the initial Milestone 3 browser origin, served locally by a Node.js process on port `443`.
-- Package Firefox through repo-local source patches so Firefox keeps returning to `https://localhost`: closing the final tab must reopen `https://localhost`, and opening a new tab should also load `https://localhost`.
+- Use `https://localhost/terminal` as the next Milestone 3 proof surface: each access should create a fresh in-guest browser terminal session.
+- Keep the Firefox localhost patch work, including opening new tabs to `https://localhost`, as a deferred follow-on after the browser terminal proof.
 - Focus on the basic machine controls users expect immediately: Wi-Fi and general network state, battery and power status, volume, display brightness, appearance mode such as light mode and dark mode, and Bluetooth.
 - Prioritize proving visibility and control of live system state over polishing the final information architecture.
 - Prefer the minimum guest-side services and browser UI needed to demonstrate these controls end to end.
@@ -110,12 +111,14 @@ Milestone 4 decisions:
 - Mount the whole SecureOS repo into the guest, read-write.
 - Treat the shared host repo as the durable source of truth.
 - Allow in-guest Codex-assisted development against that mounted repo.
+- Add a terminal-oriented VM launch mode so development work can happen inside the guest without immediately starting the graphical browser shell.
 - Use the in-VM workflow to validate browser and Firefox-source changes before updating the repo's packaged patch file.
 - Keep final Nix packaging and VM-image integration as a separate explicit step after in-VM validation.
 
 Success criteria:
 - There is one documented host setup path for synced in-VM development.
 - There is one documented command to launch the VM with the shared repo mounted.
+- There is one documented command to launch the VM into a terminal-oriented development session.
 - The mounted repo is visible and writable inside the guest at a fixed path.
 - A developer can edit files inside the VM and see those changes immediately on the host.
 - A developer can validate a Firefox or browser-surface change inside the VM without rebuilding the full Nix-packaged Firefox on every source edit.
@@ -211,14 +214,10 @@ Milestones 1 and 2 are complete.
 We are currently focused on Milestone 3.
 
 Immediate next task:
-- Add Firefox behavior so opening a new tab loads `https://localhost/` in addition to the existing behavior where closing the final tab reopens `https://localhost`, and use that change as the next proof that the faster Firefox development loop can be validated inside the VM before the final packaged rebuild.
-- Use the Firefox workflow documented in `README.md` as the canonical reference for the current packaged validation path versus the faster source-iteration path.
-- First validate the Firefox source change inside the running VM with the fastest available loop.
-- After the behavior is correct, update `patches/firefox/0001-close-last-tab-to-localhost.patch` or add the next repo-local Firefox patch artifact as needed, then rerun the packaged validation path:
-  `git add patches/firefox/0001-close-last-tab-to-localhost.patch tests/test-build-vm.sh flake.nix README.md AGENTS.md`
-  `nix build .#firefox-localhost --print-build-logs`
-  `./launch-vm --milestone milestone2`
-  Then validate in the VM by opening a new tab and confirming it loads `https://localhost/`, and by rechecking that closing the final tab still reopens `https://localhost`.
+- Add a browser terminal surface at `https://localhost/terminal` where each visit creates a fresh terminal session inside the guest.
+- Use a battle-tested terminal stack for that proof, with terminal behavior that is robust enough for interactive full-screen terminal programs.
+- Make the browser tab title follow the terminal title stream when available, preferring current directory when idle and foreground command when the shell emits it.
+- Document the new terminal proof and keep the Firefox packaged-patch workflow documented as a follow-on after the terminal proof lands.
 
 Implementation status:
 - [x] Chose QEMU for the first development backend.
@@ -230,12 +229,18 @@ Implementation status:
 - [x] Added tests for the build and launch contract for both milestones.
 - [x] Verified the full Milestone 2 graphical boot and browser launch on an Ubuntu host with nix and QEMU/KVM installed.
 - [x] Proved the current Firefox source-patch flow end to end by building the patched browser, booting the guest with it, and verifying that closing the final tab reopens `https://localhost`.
+- [x] Add a browser terminal proof surface at `https://localhost/terminal` where each visit creates a fresh session.
+- [x] Use a browser terminal frontend and backend path that are robust enough for advanced interactive terminal programs.
+- [x] Make the terminal page title follow the shell title stream when available, with a fallback title when not available.
+- [ ] Investigate and fix the remaining extra line shown after terminal command output.
+- [ ] Replace the current 5 minute idle timeout with a more reliable terminal session cleanup strategy.
+- [ ] Add and document a terminal-oriented VM launch mode for in-guest development work before the graphical browser shell.
 - [ ] Extend the Firefox localhost shell behavior so opening a new tab also loads `https://localhost/` without regressing the final-tab reopen behavior.
 - [ ] Define the Milestone 3 browser-based system controls proof surface and test strategy.
 - [ ] Implement the first browser-visible system status surfaces for core device utilities.
 - [ ] Implement browser-driven control flows for the selected Milestone 3 utilities.
 - [ ] Add excellent automated coverage for the browser-to-system control contract.
-- [ ] Define the Milestone 4 synced in-VM development proof surface and test strategy.
+- [ ] Define the Milestone 4 synced in-VM development proof surface and test strategy, including the terminal-oriented VM development mode.
 - [ ] Add one supported host↔guest shared repo mount path using `virtiofs`.
 - [ ] Enable in-guest development against the shared tree with a fixed mount location.
 - [ ] Document the validate-inside-VM, then package-with-Nix workflow for Firefox and browser-surface changes.
