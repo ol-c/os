@@ -158,6 +158,8 @@ test_milestone2_runs_firefox_borderless_and_maximized() {
   [[ "$contents" == *"const backendIdleTimeoutMs = 300_000;"* ]] || fail "expected milestone2 terminal sessions to use an idle timeout instead of immediate exit"
   [[ "$contents" != *"'--once'"* ]] || fail "expected milestone2 ttyd backend to survive transient reconnects"
   [[ "$contents" != *"'--exit-no-conn'"* ]] || fail "expected milestone2 ttyd backend to avoid immediate exit on disconnect"
+  [[ "$contents" == *"programs.bash.promptInit = ''"* ]] || fail "expected milestone2 to override the default bash prompt init"
+  [[ "$contents" == *"PS1='[\\u@\\h:\\w]\\$ '"* ]] || fail "expected milestone2 to use a single-line bash prompt without the extra blank line"
   [[ "$contents" != *"PROMPT_COMMAND='secureos_precmd'"* ]] || fail "expected milestone2 terminal proof to avoid custom bash title hooks while input handling is stabilized"
   [[ "$contents" == *"user_pref(\"browser.tabs.inTitlebar\", 1);"* ]] || fail "expected milestone2 to keep Firefox tabs in the title bar"
   [[ "$contents" == *"user_pref(\"browser.tabs.drawInTitlebar\", true);"* ]] || fail "expected milestone2 to force Firefox titlebar drawing"
