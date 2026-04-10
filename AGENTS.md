@@ -111,7 +111,6 @@ Milestone 4 decisions:
 - Mount the whole SecureOS repo into the guest, read-write.
 - Treat the shared host repo as the durable source of truth.
 - Allow in-guest Codex-assisted development against that mounted repo.
-- Add a terminal-oriented VM launch mode so development work can happen inside the guest without immediately starting the graphical browser shell.
 - Use the in-VM workflow to validate browser and Firefox-source changes before updating the repo's packaged patch file.
 - Keep final Nix packaging and VM-image integration as a separate explicit step after in-VM validation.
 
@@ -234,13 +233,12 @@ Implementation status:
 - [x] Make the terminal page title follow the shell title stream when available, with a fallback title when not available.
 - [ ] Investigate and fix the remaining extra line shown after terminal command output.
 - [ ] Replace the current 5 minute idle timeout with a more reliable terminal session cleanup strategy.
-- [ ] Add and document a terminal-oriented VM launch mode for in-guest development work before the graphical browser shell.
 - [ ] Extend the Firefox localhost shell behavior so opening a new tab also loads `https://localhost/` without regressing the final-tab reopen behavior.
 - [ ] Define the Milestone 3 browser-based system controls proof surface and test strategy.
 - [ ] Implement the first browser-visible system status surfaces for core device utilities.
 - [ ] Implement browser-driven control flows for the selected Milestone 3 utilities.
 - [ ] Add excellent automated coverage for the browser-to-system control contract.
-- [ ] Define the Milestone 4 synced in-VM development proof surface and test strategy, including the terminal-oriented VM development mode.
+- [ ] Define the Milestone 4 synced in-VM development proof surface and test strategy.
 - [ ] Add one supported host↔guest shared repo mount path using `virtiofs`.
 - [ ] Enable in-guest development against the shared tree with a fixed mount location.
 - [ ] Document the validate-inside-VM, then package-with-Nix workflow for Firefox and browser-surface changes.
