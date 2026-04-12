@@ -246,6 +246,9 @@ Implementation status:
 - [ ] Enable in-guest development against the shared tree with a fixed mount location.
 - [ ] Document the validate-inside-VM, then package-with-Nix workflow for Firefox and browser-surface changes.
 
+Known bugs to track:
+- [ ] Firefox localhost replacement is too fragile: when the last terminal tab closes itself after root shell exit, Firefox does not open a replacement `https://localhost` tab. The terminal page should not own this; fix the browser shell patch so all last-tab closure paths get the localhost replacement behavior.
+
 # Deferred Decisions
 
 The following are intentionally not locked in yet:
