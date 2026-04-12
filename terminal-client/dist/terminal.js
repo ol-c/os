@@ -6123,6 +6123,41 @@ WARNING: This link could potentially be dangerous`)) {
   // src/index.js
   var import_xterm = __toESM(require_xterm());
   var import_addon_fit = __toESM(require_addon_fit());
+
+  // src/session-lifecycle.mjs
+  var defaultCloseFallbackDelayMs = 250;
+  function createSessionLifecycle({
+    windowRef,
+    terminalNode: terminalNode2 = null,
+    closeFallbackDelayMs = defaultCloseFallbackDelayMs,
+    onCloseBlocked = () => {
+    }
+  } = {}) {
+    if (!windowRef) {
+      throw new Error("createSessionLifecycle requires a windowRef");
+    }
+    let closeAttempted = false;
+    function closeRootSessionTab() {
+      if (closeAttempted) {
+        return;
+      }
+      closeAttempted = true;
+      if (terminalNode2) {
+        terminalNode2.dataset.rootSessionExited = "true";
+      }
+      windowRef.close();
+      windowRef.setTimeout(() => {
+        if (!windowRef.closed) {
+          onCloseBlocked();
+        }
+      }, closeFallbackDelayMs);
+    }
+    return {
+      closeRootSessionTab
+    };
+  }
+
+  // src/index.js
   var OUTPUT = "0";
   var SET_WINDOW_TITLE = "1";
   var SET_PREFERENCES = "2";
@@ -6146,6 +6181,16 @@ WARNING: This link could potentially be dangerous`)) {
     }
   });
   var fitAddon = new import_addon_fit.FitAddon();
+  var sessionLifecycle = createSessionLifecycle({
+    windowRef: window,
+    terminalNode,
+    onCloseBlocked: () => {
+      showStatus(
+        'The terminal session ended. This browser blocked closing the tab. <a href="/terminal">Open a fresh terminal</a>',
+        { sticky: true, html: true }
+      );
+    }
+  });
   var socket = null;
   var reconnectTimer = null;
   var terminated = false;
@@ -6252,6 +6297,19 @@ WARNING: This link could potentially be dangerous`)) {
       { sticky: true, html: true }
     );
   }
+  function closeRootSession() {
+    terminated = true;
+    if (socket) {
+      socket.onclose = null;
+      socket.close();
+      socket = null;
+    }
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    sessionLifecycle.closeRootSessionTab();
+  }
   async function connect() {
     try {
       const authToken = await fetchBackendToken();
@@ -6294,7 +6352,7 @@ WARNING: This link could potentially be dangerous`)) {
           return;
         }
         if (event.code === 1e3 || event.code === 1001) {
-          endSession("This terminal session has ended.");
+          closeRootSession();
           return;
         }
         scheduleReconnect();

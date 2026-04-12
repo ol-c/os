@@ -1,5 +1,6 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { createSessionLifecycle } from './session-lifecycle.mjs';
 
 const OUTPUT = '0';
 const SET_WINDOW_TITLE = '1';
@@ -26,6 +27,16 @@ const terminal = new Terminal({
   },
 });
 const fitAddon = new FitAddon();
+const sessionLifecycle = createSessionLifecycle({
+  windowRef: window,
+  terminalNode,
+  onCloseBlocked: () => {
+    showStatus(
+      'The terminal session ended. This browser blocked closing the tab. <a href="/terminal">Open a fresh terminal</a>',
+      { sticky: true, html: true }
+    );
+  },
+});
 
 let socket = null;
 let reconnectTimer = null;
@@ -156,6 +167,21 @@ function endSession(message) {
   );
 }
 
+function closeRootSession() {
+  terminated = true;
+  if (socket) {
+    socket.onclose = null;
+    socket.close();
+    socket = null;
+  }
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  sessionLifecycle.closeRootSessionTab();
+}
+
 async function connect() {
   try {
     const authToken = await fetchBackendToken();
@@ -203,7 +229,7 @@ async function connect() {
       }
 
       if (event.code === 1000 || event.code === 1001) {
-        endSession('This terminal session has ended.');
+        closeRootSession();
         return;
       }
 

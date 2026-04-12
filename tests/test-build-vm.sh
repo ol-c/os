@@ -11,6 +11,8 @@ NIX_LOCALHOST_UI="${ROOT_DIR}/nix/modules/localhost-ui.nix"
 NIX_PACKAGES="${ROOT_DIR}/nix/modules/packages.nix"
 NIX_USERS="${ROOT_DIR}/nix/modules/users.nix"
 LOCALHOST_UI_SERVER="${ROOT_DIR}/localhost-ui/server.mjs"
+TERMINAL_CLIENT_SOURCE="${ROOT_DIR}/terminal-client/src/index.js"
+TERMINAL_CLIENT_LIFECYCLE="${ROOT_DIR}/terminal-client/src/session-lifecycle.mjs"
 FIREFOX_PATCH="${ROOT_DIR}/patches/firefox/0001-close-last-tab-to-localhost.patch"
 TEST_TMP_ROOT="${ROOT_DIR}/.tmp-tests"
 CASE_TMP=""
@@ -146,7 +148,7 @@ EOF
 }
 
 test_vm_runs_firefox_borderless_and_maximized() {
-  local contents olc_nix
+  local contents olc_nix terminal_client
   contents="$(
     cat \
       "${NIX_BASE}" \
@@ -157,6 +159,7 @@ test_vm_runs_firefox_borderless_and_maximized() {
       "${LOCALHOST_UI_SERVER}"
   )"
   olc_nix="$(cat "${OLC_NIX}")"
+  terminal_client="$(cat "${TERMINAL_CLIENT_SOURCE}" "${TERMINAL_CLIENT_LIFECYCLE}")"
 
   [[ "$olc_nix" == *"./modules/base.nix"* ]] || fail "expected OL-C module to import base module"
   [[ "$olc_nix" == *"./modules/users.nix"* ]] || fail "expected OL-C module to import users module"
@@ -168,7 +171,8 @@ test_vm_runs_firefox_borderless_and_maximized() {
 
   [[ "$contents" == *"OLC_LOCALHOST_UI_OK"* ]] || fail "expected VM to define an OL-C localhost UI success marker"
   [[ "$contents" == *"server.listen(443, '127.0.0.1'"* ]] || fail "expected VM to serve the UI on localhost:443"
-  [[ "$contents" == *"The next proof surface is <a href=\"/terminal\"><code>/terminal</code></a>"* ]] || fail "expected VM localhost UI to link to the terminal proof surface"
+  [[ "$contents" == *"The next proof surface is <a href=\"/terminal\" onclick=\"window.open('/terminal', '_blank'); return false;\"><code>/terminal</code></a>"* ]] || fail "expected VM localhost UI to link to the terminal proof surface"
+  [[ "$contents" == *"window.open('/terminal', '_blank')"* ]] || fail "expected VM localhost UI to open terminal sessions in closable tabs"
   [[ "$contents" == *"if (reqUrl.pathname === '/terminal')"* ]] || fail "expected VM localhost UI to handle /terminal"
   [[ "$contents" == *"const backendBasePath = \`/terminal/backend/"* ]] || fail "expected VM /terminal page to mint a fresh backend path for each terminal page"
   [[ "$contents" == *"/terminal/assets/terminal.css"* ]] || fail "expected VM /terminal page to load first-party terminal styles"
@@ -185,6 +189,9 @@ test_vm_runs_firefox_borderless_and_maximized() {
   [[ "$contents" == *"recordSocketOpen(token);"* ]] || fail "expected VM terminal sessions to track active websocket clients"
   [[ "$contents" == *"recordSocketClose(token);"* ]] || fail "expected VM terminal sessions to tolerate disconnects before cleanup"
   [[ "$contents" == *"const backendIdleTimeoutMs = 300_000;"* ]] || fail "expected VM terminal sessions to use an idle timeout instead of immediate exit"
+  [[ "$terminal_client" == *"closeRootSessionTab"* ]] || fail "expected VM terminal client to close the tab when the root terminal session exits"
+  [[ "$terminal_client" == *"This browser blocked closing the tab"* ]] || fail "expected VM terminal client to keep root-exit fallback behavior explicit"
+  [[ "$terminal_client" == *"if (event.code === 1000 || event.code === 1001)"* ]] || fail "expected VM terminal client to treat normal websocket closure as root-session exit"
   [[ "$contents" != *"'--once'"* ]] || fail "expected VM ttyd backend to survive transient reconnects"
   [[ "$contents" != *"'--exit-no-conn'"* ]] || fail "expected VM ttyd backend to avoid immediate exit on disconnect"
   [[ "$contents" == *"programs.bash.promptInit = ''"* ]] || fail "expected VM to override the default bash prompt init"

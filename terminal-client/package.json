@@ -3,7 +3,8 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "node --test src/*.test.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

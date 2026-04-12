@@ -67,9 +67,10 @@ Session behavior for this proof:
 - `/terminal` always creates a fresh shell
 - reload creates a new shell instead of reattaching
 - there is no user-visible session picker or durable terminal persistence yet
+- when the root shell exits, the terminal page asks Firefox to close that tab instead of showing an ended-session interface
 - websocket disconnects are treated as transport interruptions, not terminal teardown
 - the page renews its terminal lease while open and sends a best-effort close signal when it leaves
-- the page title currently defaults to `OL-C Terminal`; richer per-command title behavior can be added back after terminal I/O is stable
+- the page title follows the terminal title stream when available and otherwise uses `OL-C Terminal`
 
 ## Firefox Patch Workflow
 

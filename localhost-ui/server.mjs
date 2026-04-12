@@ -103,7 +103,7 @@ function rootHtml() {
     <main>
       <h1>OL-C control surface</h1>
       <p>Firefox now boots to <code>https://localhost</code>, served inside the guest by a Node.js process on port <code>443</code>.</p>
-      <p>The next proof surface is <a href="/terminal"><code>/terminal</code></a>, which opens a fresh in-browser terminal session each time it is loaded.</p>
+      <p>The next proof surface is <a href="/terminal" onclick="window.open('/terminal', '_blank'); return false;"><code>/terminal</code></a>, which opens a fresh in-browser terminal session each time it is loaded.</p>
       <p id="proof">${marker}</p>
     </main>
   </body>

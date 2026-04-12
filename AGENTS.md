@@ -234,6 +234,7 @@ Implementation status:
 - [x] Use a browser terminal frontend and backend path that are robust enough for advanced interactive terminal programs.
 - [x] Make the terminal page title follow the shell title stream when available, with a fallback title when not available.
 - [x] Investigate and fix the remaining extra line shown after terminal command output.
+- [x] Keep terminal behavior modular enough to test independently, including closing the browser tab when the root terminal session exits instead of showing a dead terminal interface.
 - [ ] Replace the current 5 minute idle timeout with a more reliable terminal session cleanup strategy.
 - [ ] Extend the Firefox localhost shell behavior so opening a new tab also loads `https://localhost/` without regressing the final-tab reopen behavior.
 - [ ] Define the Milestone 3 browser-based system controls proof surface and test strategy.
