@@ -5,6 +5,12 @@ ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BUILD_VM="${ROOT_DIR}/build-vm"
 FLAKE_NIX="${ROOT_DIR}/flake.nix"
 OLC_NIX="${ROOT_DIR}/nix/ol-c.nix"
+NIX_BASE="${ROOT_DIR}/nix/modules/base.nix"
+NIX_GRAPHICAL_SESSION="${ROOT_DIR}/nix/modules/graphical-session.nix"
+NIX_LOCALHOST_UI="${ROOT_DIR}/nix/modules/localhost-ui.nix"
+NIX_PACKAGES="${ROOT_DIR}/nix/modules/packages.nix"
+NIX_USERS="${ROOT_DIR}/nix/modules/users.nix"
+LOCALHOST_UI_SERVER="${ROOT_DIR}/localhost-ui/server.mjs"
 FIREFOX_PATCH="${ROOT_DIR}/patches/firefox/0001-close-last-tab-to-localhost.patch"
 TEST_TMP_ROOT="${ROOT_DIR}/.tmp-tests"
 CASE_TMP=""
@@ -140,8 +146,25 @@ EOF
 }
 
 test_vm_runs_firefox_borderless_and_maximized() {
-  local contents
-  contents="$(cat "${OLC_NIX}")"
+  local contents olc_nix
+  contents="$(
+    cat \
+      "${NIX_BASE}" \
+      "${NIX_GRAPHICAL_SESSION}" \
+      "${NIX_LOCALHOST_UI}" \
+      "${NIX_PACKAGES}" \
+      "${NIX_USERS}" \
+      "${LOCALHOST_UI_SERVER}"
+  )"
+  olc_nix="$(cat "${OLC_NIX}")"
+
+  [[ "$olc_nix" == *"./modules/base.nix"* ]] || fail "expected OL-C module to import base module"
+  [[ "$olc_nix" == *"./modules/users.nix"* ]] || fail "expected OL-C module to import users module"
+  [[ "$olc_nix" == *"./modules/packages.nix"* ]] || fail "expected OL-C module to import packages module"
+  [[ "$olc_nix" == *"./modules/localhost-ui.nix"* ]] || fail "expected OL-C module to import localhost UI module"
+  [[ "$olc_nix" == *"./modules/graphical-session.nix"* ]] || fail "expected OL-C module to import graphical session module"
+  [[ "$olc_nix" != *"system.activationScripts.olcDemoSession"* ]] || fail "expected OL-C module to delegate graphical session setup"
+  [[ "$olc_nix" != *"systemd.services.ol-c-ui"* ]] || fail "expected OL-C module to delegate localhost UI setup"
 
   [[ "$contents" == *"OLC_LOCALHOST_UI_OK"* ]] || fail "expected VM to define an OL-C localhost UI success marker"
   [[ "$contents" == *"server.listen(443, '127.0.0.1'"* ]] || fail "expected VM to serve the UI on localhost:443"
@@ -151,9 +174,12 @@ test_vm_runs_firefox_borderless_and_maximized() {
   [[ "$contents" == *"/terminal/assets/terminal.css"* ]] || fail "expected VM /terminal page to load first-party terminal styles"
   [[ "$contents" == *"/terminal/assets/terminal.js"* ]] || fail "expected VM /terminal page to load the first-party terminal client"
   [[ "$contents" == *"window.OLC_TERMINAL_CONFIG"* ]] || fail "expected VM /terminal page to configure a first-party terminal client"
-  [[ "$contents" == *"const terminalClientJs = "* ]] || fail "expected VM localhost UI to embed the terminal client asset"
-  [[ "$contents" == *"const terminalClientCss = "* ]] || fail "expected VM localhost UI to embed the terminal stylesheet asset"
-  [[ "$contents" == *"const ttydBin = '"* ]] || fail "expected VM localhost UI to use ttyd for the terminal backend"
+  [[ "$contents" == *"OLC_TERMINAL_CLIENT_JS"* ]] || fail "expected VM localhost UI to receive the terminal client asset path"
+  [[ "$contents" == *"OLC_TERMINAL_CLIENT_CSS"* ]] || fail "expected VM localhost UI to receive the terminal stylesheet asset path"
+  [[ "$contents" == *"const terminalClientJs = readFileSync"* ]] || fail "expected VM localhost UI to read the terminal client asset"
+  [[ "$contents" == *"const terminalClientCss = readFileSync"* ]] || fail "expected VM localhost UI to read the terminal stylesheet asset"
+  [[ "$contents" == *"OLC_TTYD = \"\${pkgs.ttyd}/bin/ttyd\";"* ]] || fail "expected VM localhost UI service to provide ttyd for the terminal backend"
+  [[ "$contents" == *"const ttydBin = requireEnv('OLC_TTYD');"* ]] || fail "expected VM localhost UI to use configured ttyd for the terminal backend"
   [[ "$contents" == *"'--uid', demoUser.uid"* ]] || fail "expected VM ttyd backend to run as the demo user"
   [[ "$contents" == *"'--base-path', basePath"* ]] || fail "expected VM ttyd backend to stay behind the localhost reverse proxy"
   [[ "$contents" == *"recordSocketOpen(token);"* ]] || fail "expected VM terminal sessions to track active websocket clients"

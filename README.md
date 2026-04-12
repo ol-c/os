@@ -40,6 +40,17 @@ OLC_QEMU_GDK_SCALE=2 OLC_QEMU_GDK_DPI_SCALE=0.5 ./launch-vm
 
 Firefox in the guest is packaged from nixpkgs with a repo-local source patch. The patch currently forces the last-tab replacement path to reopen `https://localhost` so the browser always returns to the local control surface.
 
+## Nix Layout
+
+`nix/ol-c.nix` is the current guest entry point. It imports focused modules from `nix/modules/`:
+- `base.nix` owns boot, qemu guest support, serial console, hostname, and NixOS state version
+- `users.nix` owns root/demo users, autologin, demo home, and shell prompt
+- `packages.nix` owns the shared guest package list
+- `localhost-ui.nix` owns the generated localhost TLS material, trusted CA, and `ol-c-ui` service
+- `graphical-session.nix` owns X, matchbox, SPICE guest integration, Firefox profile setup, and browser launch
+
+The localhost HTTPS service source lives in `localhost-ui/server.mjs`. Nix wires it into the guest and provides the runtime paths for TLS material, terminal assets, `ttyd`, and bash.
+
 ## Milestone 3 Terminal Proof
 
 The next Milestone 3 proof is a browser terminal at `https://localhost/terminal`.
