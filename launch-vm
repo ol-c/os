@@ -6,10 +6,20 @@ usage() {
 Usage: launch-vm [options]
 
 Options:
-  --milestone NAME  Guest profile to boot: milestone1 or milestone2. Default: milestone1.
   --cpus N          Guest vCPU count. Default: 2.
   --memory MB       Guest memory in megabytes. Default: 2048.
   --help            Show this help text.
+
+Environment:
+  SECUREOS_QEMU_FRONTEND
+                          Graphical frontend: spice, sdl, or gtk. Default: spice.
+  SECUREOS_QEMU_DISPLAY  Direct QEMU display backend for debugging. Overrides frontend.
+  SECUREOS_QEMU_SDL_VIDEO_HIGHDPI_DISABLED
+                          SDL HiDPI mode for QEMU's own window. Default: 1.
+  SECUREOS_QEMU_GDK_SCALE
+                          GTK scale if using a GTK display backend. Default: 1.
+  SECUREOS_QEMU_GDK_DPI_SCALE
+                          GTK text DPI scale if using a GTK display backend. Default: 1.
 EOF
 }
 
@@ -24,21 +34,35 @@ require_command() {
   fi
 }
 
-PROFILE="milestone1"
+require_value() {
+  local option="$1"
+  local value="${2:-}"
+
+  if [[ -z "$value" || "$value" == --* ]]; then
+    fail "${option} requires a value"
+  fi
+}
+
 CPUS=2
 MEMORY_MB=2048
+QEMU_FRONTEND="${SECUREOS_QEMU_FRONTEND:-spice}"
+QEMU_DISPLAY="${SECUREOS_QEMU_DISPLAY:-}"
+QEMU_SDL_VIDEO_HIGHDPI_DISABLED="${SECUREOS_QEMU_SDL_VIDEO_HIGHDPI_DISABLED:-1}"
+QEMU_GDK_SCALE="${SECUREOS_QEMU_GDK_SCALE:-1}"
+QEMU_GDK_DPI_SCALE="${SECUREOS_QEMU_GDK_DPI_SCALE:-1}"
+SPICE_SOCKET_DIR=""
+QEMU_PID=""
+VIEWER_PID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --milestone)
-      PROFILE="$2"
-      shift 2
-      ;;
     --cpus)
+      require_value "$1" "${2:-}"
       CPUS="$2"
       shift 2
       ;;
     --memory)
+      require_value "$1" "${2:-}"
       MEMORY_MB="$2"
       shift 2
       ;;
@@ -52,51 +76,150 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$PROFILE" in
-  milestone1|milestone2)
+require_command qemu-system-x86_64
+
+case "$QEMU_FRONTEND" in
+  spice|sdl|gtk)
     ;;
   *)
-    fail "unsupported milestone: $PROFILE"
+    fail "unsupported QEMU frontend: $QEMU_FRONTEND"
     ;;
 esac
 
-require_command qemu-system-x86_64
+if [[ -n "$QEMU_DISPLAY" ]]; then
+  QEMU_FRONTEND="direct"
+elif [[ "$QEMU_FRONTEND" == "sdl" ]]; then
+  QEMU_DISPLAY="sdl,gl=off"
+elif [[ "$QEMU_FRONTEND" == "gtk" ]]; then
+  QEMU_DISPLAY="gtk,gl=off,zoom-to-fit=off"
+fi
+
+if [[ "$QEMU_FRONTEND" == "spice" ]]; then
+  require_command remote-viewer
+fi
 
 if [[ ! -e /dev/kvm && "${SECUREOS_SKIP_KVM_CHECK:-0}" != "1" ]]; then
-  fail "/dev/kvm is required for ${PROFILE}"
+  fail "/dev/kvm is required"
 fi
 
 BUILD_VM_BIN="${BUILD_VM_BIN:-./build-vm}"
-IMAGE_PATH="$("$BUILD_VM_BIN" "$PROFILE")"
+IMAGE_PATH="$("$BUILD_VM_BIN" milestone2)"
 [[ -f "$IMAGE_PATH" ]] || fail "built image not found: $IMAGE_PATH"
-
-if [[ "$PROFILE" == "milestone1" ]]; then
-  echo "booting image: $IMAGE_PATH"
-  echo "success marker: MILESTONE1_BOOT_OK"
-
-  exec qemu-system-x86_64 \
-    -enable-kvm \
-    -cpu host \
-    -smp "$CPUS" \
-    -m "$MEMORY_MB" \
-    -drive "if=virtio,format=qcow2,file=$IMAGE_PATH" \
-    -nographic \
-    -serial mon:stdio \
-    -snapshot \
-    -device virtio-rng-pci
-fi
 
 echo "booting image: $IMAGE_PATH"
 echo "graphical proof: Firefox launches as the in-guest UI shell"
 echo "serial output: terminal"
+echo "qemu frontend: $QEMU_FRONTEND"
+if [[ -n "$QEMU_DISPLAY" ]]; then
+  echo "display backend: $QEMU_DISPLAY"
+fi
+echo "sdl hidpi disabled: SDL_VIDEO_HIGHDPI_DISABLED=$QEMU_SDL_VIDEO_HIGHDPI_DISABLED"
+echo "gtk scale: GDK_SCALE=$QEMU_GDK_SCALE GDK_DPI_SCALE=$QEMU_GDK_DPI_SCALE"
 
-exec qemu-system-x86_64 \
-  -enable-kvm \
-  -cpu host \
-  -smp "$CPUS" \
-  -m "$MEMORY_MB" \
-  -drive "if=virtio,format=qcow2,file=$IMAGE_PATH" \
-  -snapshot \
-  -device virtio-rng-pci \
-  -device virtio-vga \
+export SDL_VIDEO_HIGHDPI_DISABLED="$QEMU_SDL_VIDEO_HIGHDPI_DISABLED"
+export GDK_SCALE="$QEMU_GDK_SCALE"
+export GDK_DPI_SCALE="$QEMU_GDK_DPI_SCALE"
+
+cleanup() {
+  trap - EXIT INT TERM
+
+  if [[ -n "$VIEWER_PID" ]] && kill -0 "$VIEWER_PID" >/dev/null 2>&1; then
+    kill "$VIEWER_PID" >/dev/null 2>&1 || true
+    wait "$VIEWER_PID" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -n "$QEMU_PID" ]] && kill -0 "$QEMU_PID" >/dev/null 2>&1; then
+    kill "$QEMU_PID" >/dev/null 2>&1 || true
+    wait "$QEMU_PID" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -n "$SPICE_SOCKET_DIR" ]]; then
+    rm -rf "$SPICE_SOCKET_DIR"
+  fi
+}
+
+trap cleanup EXIT INT TERM
+
+qemu_base_args=(
+  -enable-kvm
+  -cpu host
+  -smp "$CPUS"
+  -m "$MEMORY_MB"
+  -drive "if=virtio,format=qcow2,file=$IMAGE_PATH"
+  -snapshot
+  -device virtio-rng-pci
+  -device virtio-vga
+  -device qemu-xhci,id=secureos-usb
+  -device usb-tablet,bus=secureos-usb.0
   -serial mon:stdio
+)
+
+if [[ "$QEMU_FRONTEND" != "spice" ]]; then
+  exec qemu-system-x86_64 \
+    "${qemu_base_args[@]}" \
+    -display "$QEMU_DISPLAY"
+fi
+
+SPICE_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/secureos-spice.XXXXXX")"
+SPICE_SOCKET="${SPICE_SOCKET_DIR}/spice.sock"
+SPICE_URI="spice+unix://${SPICE_SOCKET}"
+
+echo "spice socket: $SPICE_SOCKET"
+
+qemu-system-x86_64 \
+  "${qemu_base_args[@]}" \
+  -display none \
+  -spice "unix=on,addr=${SPICE_SOCKET},disable-ticketing=on,agent-mouse=on,gl=off" \
+  -device virtio-serial-pci \
+  -chardev spicevmc,id=secureos-vdagent,name=vdagent \
+  -device virtserialport,chardev=secureos-vdagent,name=com.redhat.spice.0 &
+QEMU_PID="$!"
+
+for _ in $(seq 1 100); do
+  if [[ -S "$SPICE_SOCKET" || -e "$SPICE_SOCKET" ]]; then
+    break
+  fi
+
+  if ! kill -0 "$QEMU_PID" >/dev/null 2>&1; then
+    wait "$QEMU_PID" || true
+    fail "QEMU exited before creating the SPICE socket"
+  fi
+
+  sleep 0.1
+done
+
+[[ -S "$SPICE_SOCKET" || -e "$SPICE_SOCKET" ]] || fail "timed out waiting for SPICE socket: $SPICE_SOCKET"
+
+echo "viewer: remote-viewer $SPICE_URI"
+remote-viewer "$SPICE_URI" &
+VIEWER_PID="$!"
+
+while true; do
+  EXITED_PID=""
+  set +e
+  wait -n -p EXITED_PID "$QEMU_PID" "$VIEWER_PID"
+  EXITED_STATUS="$?"
+  set -e
+
+  if [[ "$EXITED_PID" == "$VIEWER_PID" ]]; then
+    VIEWER_PID=""
+    if kill -0 "$QEMU_PID" >/dev/null 2>&1; then
+      kill "$QEMU_PID" >/dev/null 2>&1 || true
+      wait "$QEMU_PID" >/dev/null 2>&1 || true
+      QEMU_PID=""
+    fi
+    exit 0
+  fi
+
+  if [[ "$EXITED_PID" == "$QEMU_PID" ]]; then
+    QEMU_PID=""
+    if kill -0 "$VIEWER_PID" >/dev/null 2>&1; then
+      kill "$VIEWER_PID" >/dev/null 2>&1 || true
+      wait "$VIEWER_PID" >/dev/null 2>&1 || true
+      VIEWER_PID=""
+    fi
+    exit "$EXITED_STATUS"
+  fi
+
+  exit "$EXITED_STATUS"
+done

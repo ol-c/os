@@ -117,7 +117,6 @@ Milestone 4 decisions:
 Success criteria:
 - There is one documented host setup path for synced in-VM development.
 - There is one documented command to launch the VM with the shared repo mounted.
-- There is one documented command to launch the VM into a terminal-oriented development session.
 - The mounted repo is visible and writable inside the guest at a fixed path.
 - A developer can edit files inside the VM and see those changes immediately on the host.
 - A developer can validate a Firefox or browser-surface change inside the VM without rebuilding the full Nix-packaged Firefox on every source edit.
@@ -227,11 +226,13 @@ Implementation status:
 - [x] Added a graphical Milestone 2 guest with autologin and Firefox.
 - [x] Added tests for the build and launch contract for both milestones.
 - [x] Verified the full Milestone 2 graphical boot and browser launch on an Ubuntu host with nix and QEMU/KVM installed.
+- [x] Simplified the normal VM launcher so `./launch-vm` always boots the current graphical Milestone 2 guest, with milestone validation handled by build and test scripts.
+- [x] Moved the normal graphical launch path to SPICE with `remote-viewer`, while keeping SDL and GTK as direct-display fallbacks for debugging.
 - [x] Proved the current Firefox source-patch flow end to end by building the patched browser, booting the guest with it, and verifying that closing the final tab reopens `https://localhost`.
 - [x] Add a browser terminal proof surface at `https://localhost/terminal` where each visit creates a fresh session.
 - [x] Use a browser terminal frontend and backend path that are robust enough for advanced interactive terminal programs.
 - [x] Make the terminal page title follow the shell title stream when available, with a fallback title when not available.
-- [ ] Investigate and fix the remaining extra line shown after terminal command output.
+- [x] Investigate and fix the remaining extra line shown after terminal command output.
 - [ ] Replace the current 5 minute idle timeout with a more reliable terminal session cleanup strategy.
 - [ ] Extend the Firefox localhost shell behavior so opening a new tab also loads `https://localhost/` without regressing the final-tab reopen behavior.
 - [ ] Define the Milestone 3 browser-based system controls proof surface and test strategy.

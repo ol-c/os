@@ -1,6 +1,6 @@
 # SecureOS Prototype
 
-This repo currently has two concrete milestones implemented as guest images for QEMU/KVM development on Ubuntu.
+This repo currently has a graphical QEMU/KVM development VM that boots through the completed Milestone 2 browser surface. Earlier milestone validation is kept in the build and test scripts instead of the main launcher.
 
 ## Milestone 1
 
@@ -9,10 +9,11 @@ Milestone 1 proves that we can repeatedly build and boot a minimal custom nixOS 
 Proof of success:
 - serial output includes `MILESTONE1_BOOT_OK`
 
-Run it with:
+Validate the milestone image contract with:
 
 ```sh
-./launch-vm --milestone milestone1
+./build-vm milestone1
+./tests/test-build-vm.sh
 ```
 
 ## Milestone 2
@@ -29,7 +30,22 @@ Proof of success:
 Run it with:
 
 ```sh
-./launch-vm --milestone milestone2
+./launch-vm
+```
+
+`launch-vm` uses QEMU's SPICE display path by default and opens it with `remote-viewer`. This avoids the host HiDPI cursor-coordinate issues seen with QEMU's GTK window and the cursor escape roughness seen with QEMU's SDL window. SDL and GTK remain available as direct QEMU display fallbacks:
+
+```sh
+SECUREOS_QEMU_FRONTEND=sdl ./launch-vm
+SECUREOS_QEMU_FRONTEND=gtk ./launch-vm
+SECUREOS_QEMU_DISPLAY='gtk,gl=off,zoom-to-fit=off' ./launch-vm
+```
+
+The SDL and GTK scaling knobs are also overrideable for direct-display debugging:
+
+```sh
+SECUREOS_QEMU_SDL_VIDEO_HIGHDPI_DISABLED=0 ./launch-vm
+SECUREOS_QEMU_GDK_SCALE=2 SECUREOS_QEMU_GDK_DPI_SCALE=0.5 ./launch-vm
 ```
 
 Firefox in the guest is packaged from nixpkgs with a repo-local source patch. The patch currently forces the last-tab replacement path to reopen `https://localhost` so the browser always returns to the local control surface.
@@ -44,12 +60,14 @@ Proof of success:
 - common full-screen terminal programs such as `vim`, `less`, and `top` behave correctly enough for normal use
 - the browser tab title follows the terminal title stream when the shell or running program emits one
 
-The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The SecureOS localhost HTTPS service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps short reconnect tolerance for transient browser disconnects.
+The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The SecureOS localhost HTTPS service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps the backend tied to a page-owned lease rather than raw websocket presence.
 
 Session behavior for this proof:
 - `/terminal` always creates a fresh shell
 - reload creates a new shell instead of reattaching
-- there is no session id or persistence yet
+- there is no user-visible session picker or durable terminal persistence yet
+- websocket disconnects are treated as transport interruptions, not terminal teardown
+- the page renews its terminal lease while open and sends a best-effort close signal when it leaves
 - the page title currently defaults to `SecureOS Terminal`; richer per-command title behavior can be added back after terminal I/O is stable
 
 ## Firefox Patch Workflow
@@ -63,7 +81,7 @@ Use this when you need to prove that the repo-local Firefox patch still builds t
 ```sh
 git add patches/firefox/0001-close-last-tab-to-localhost.patch tests/test-build-vm.sh flake.nix AGENTS.md
 nix build .#firefox-localhost --print-build-logs
-./launch-vm --milestone milestone2
+./launch-vm
 ```
 
 Then validate inside the VM by closing the final Firefox tab with the tab close button or `Ctrl+W` and confirming that Firefox stays open on `https://localhost`.
@@ -107,14 +125,17 @@ Ubuntu host prerequisites:
 
 ```sh
 sudo apt update
-sudo apt install -y qemu-system-x86 qemu-utils qemu-kvm
+sudo apt install -y qemu-system-x86 qemu-utils qemu-kvm virt-viewer
 ```
+
+`virt-viewer` provides the `remote-viewer` command used by `./launch-vm` to open the default SPICE VM display. Without it, the launcher will stop before booting the guest.
 
 Install Nix using the standard installer for your environment, then confirm the required tools exist:
 
 ```sh
 command -v nix
 command -v qemu-system-x86_64
+command -v remote-viewer
 test -e /dev/kvm && echo "/dev/kvm present"
 ```
 

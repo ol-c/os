@@ -642,12 +642,14 @@ in {
   services.xserver.videoDrivers = [ "modesetting" ];
   services.xserver.displayManager.startx.enable = true;
   services.xserver.desktopManager.xterm.enable = false;
+  services.spice-vdagentd.enable = true;
 
   environment.systemPackages = with pkgs; [
     curl
     firefox
     matchbox
     nodejs
+    spice-vdagent
     ttyd
     xorg.xinit
     xdotool
@@ -708,6 +710,7 @@ in {
     EOF
     cat > /home/demo/.xinitrc <<'EOF'
     xsetroot -solid "#0f172a"
+    ${pkgs.spice-vdagent}/bin/spice-vdagent &
     matchbox-window-manager -use_titlebar no -use_cursor yes &
     for _ in $(seq 1 40); do
       if curl --silent --fail --cacert ${secureosLocalhostTls}/ca.crt https://localhost/ >/dev/null; then
