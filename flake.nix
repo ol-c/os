@@ -1,5 +1,5 @@
 {
-  description = "Secure browser-first OS prototype";
+  description = "OL-C browser-first OS prototype";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
@@ -25,38 +25,24 @@
       overlayModule = {
         nixpkgs.overlays = [ firefoxOverlay ];
       };
-      milestone1Module = ./nix/milestone1.nix;
-      milestone2Module = ./nix/milestone2.nix;
+      olcModule = ./nix/ol-c.nix;
     in {
       overlays.default = firefoxOverlay;
 
-      nixosConfigurations.milestone1 = nixpkgs.lib.nixosSystem {
+      nixosConfigurations."ol-c" = nixpkgs.lib.nixosSystem {
         inherit system;
         specialArgs = { inherit inputs; };
-        modules = [ overlayModule milestone1Module ];
-      };
-
-      nixosConfigurations.milestone2 = nixpkgs.lib.nixosSystem {
-        inherit system;
-        specialArgs = { inherit inputs; };
-        modules = [ overlayModule milestone2Module ];
+        modules = [ overlayModule olcModule ];
       };
 
       packages.${system} = {
         firefox-localhost = firefoxPkgs.firefox;
 
-        milestone1-image = nixos-generators.nixosGenerate {
+        "ol-c-image" = nixos-generators.nixosGenerate {
           inherit system;
           format = "qcow";
           pkgs = firefoxPkgs;
-          modules = [ milestone1Module ];
-        };
-
-        milestone2-image = nixos-generators.nixosGenerate {
-          inherit system;
-          format = "qcow";
-          pkgs = firefoxPkgs;
-          modules = [ milestone2Module ];
+          modules = [ olcModule ];
         };
       };
     };

@@ -43,7 +43,7 @@ done
 if [[ -n "\$spice_socket" ]]; then
   mkdir -p "\$(dirname "\$spice_socket")"
   : > "\$spice_socket"
-  if [[ "\${SECUREOS_FAKE_QEMU_EXIT_EARLY:-0}" = "1" ]]; then
+  if [[ "\${OLC_FAKE_QEMU_EXIT_EARLY:-0}" = "1" ]]; then
     sleep 0.2
     exit 0
   fi
@@ -58,7 +58,7 @@ EOF
   cat >"${CASE_TMP}/fakebin/remote-viewer" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" > "${CASE_TMP}/remote-viewer.args"
-if [[ "\${SECUREOS_FAKE_VIEWER_WAIT:-0}" = "1" ]]; then
+if [[ "\${OLC_FAKE_VIEWER_WAIT:-0}" = "1" ]]; then
   trap 'printf "%s\n" terminated > "${CASE_TMP}/remote-viewer.terminated"; exit 0' TERM INT
   while true; do
     sleep 1
@@ -69,7 +69,7 @@ EOF
 
   cat >"${CASE_TMP}/fakebin/build-vm" <<EOF
 #!/usr/bin/env bash
-printf '%s\n' "\$1" > "${CASE_TMP}/build-vm.profile"
+printf '%s\n' "\$*" > "${CASE_TMP}/build-vm.args"
 printf '%s\n' "${CASE_TMP}/artifacts/guest.qcow2"
 EOF
 
@@ -93,7 +93,7 @@ test_requires_qemu() {
   output="$(
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
-      SECUREOS_SKIP_KVM_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       2>&1
   )"
@@ -114,7 +114,7 @@ test_requires_remote_viewer_for_spice() {
   output="$(
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
-      SECUREOS_SKIP_KVM_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       2>&1
   )"
@@ -146,13 +146,13 @@ test_requires_kvm_by_default() {
 }
 
 test_invokes_qemu_with_expected_spice_args() {
-  local output qemu_args viewer_args build_profile sdl_hidpi_disabled gdk_scale gdk_dpi_scale spice_socket
+  local output qemu_args viewer_args build_args sdl_hidpi_disabled gdk_scale gdk_dpi_scale spice_socket
   setup_case
 
   output="$(
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
-      SECUREOS_SKIP_KVM_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       --cpus 3 \
       --memory 3072
@@ -160,7 +160,7 @@ test_invokes_qemu_with_expected_spice_args() {
 
   qemu_args="$(cat "${CASE_TMP}/qemu.args")"
   viewer_args="$(cat "${CASE_TMP}/remote-viewer.args")"
-  build_profile="$(cat "${CASE_TMP}/build-vm.profile")"
+  build_args="$(cat "${CASE_TMP}/build-vm.args")"
   sdl_hidpi_disabled="$(cat "${CASE_TMP}/qemu.sdl-hidpi-disabled")"
   gdk_scale="$(cat "${CASE_TMP}/qemu.gdk-scale")"
   gdk_dpi_scale="$(cat "${CASE_TMP}/qemu.gdk-dpi-scale")"
@@ -177,19 +177,19 @@ test_invokes_qemu_with_expected_spice_args() {
   assert_contains "$qemu_args" "-m 3072"
   assert_contains "$qemu_args" "if=virtio,format=qcow2,file=${CASE_TMP}/artifacts/guest.qcow2"
   assert_contains "$qemu_args" "-device virtio-vga"
-  assert_contains "$qemu_args" "-device qemu-xhci,id=secureos-usb"
-  assert_contains "$qemu_args" "-device usb-tablet,bus=secureos-usb.0"
+  assert_contains "$qemu_args" "-device qemu-xhci,id=ol-c-usb"
+  assert_contains "$qemu_args" "-device usb-tablet,bus=ol-c-usb.0"
   assert_contains "$qemu_args" "-display none"
   assert_contains "$qemu_args" "unix=on,addr="
   assert_contains "$qemu_args" "disable-ticketing=on"
   assert_contains "$qemu_args" "agent-mouse=on"
   assert_contains "$qemu_args" "-device virtio-serial-pci"
-  assert_contains "$qemu_args" "-chardev spicevmc,id=secureos-vdagent,name=vdagent"
-  assert_contains "$qemu_args" "-device virtserialport,chardev=secureos-vdagent,name=com.redhat.spice.0"
+  assert_contains "$qemu_args" "-chardev spicevmc,id=ol-c-vdagent,name=vdagent"
+  assert_contains "$qemu_args" "-device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0"
   assert_contains "$qemu_args" "-serial mon:stdio"
   [[ "$qemu_args" != *"-nographic"* ]] || fail "milestone2 should use a graphical display"
   assert_contains "$viewer_args" "spice+unix://"
-  assert_contains "$build_profile" "milestone2"
+  [[ -z "$build_args" ]] || fail "expected launch-vm to call build-vm without arguments, got [$build_args]"
   [[ "$sdl_hidpi_disabled" == "1" ]] || fail "expected QEMU SDL HiDPI mode to default to disabled, got [$sdl_hidpi_disabled]"
   [[ "$gdk_scale" == "1" ]] || fail "expected QEMU GTK scale to default to 1, got [$gdk_scale]"
   [[ "$gdk_dpi_scale" == "1" ]] || fail "expected QEMU GTK DPI scale to default to 1, got [$gdk_dpi_scale]"
@@ -206,9 +206,9 @@ test_exits_when_qemu_exits_first() {
   output="$(
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
-      SECUREOS_SKIP_KVM_CHECK=1 \
-      SECUREOS_FAKE_QEMU_EXIT_EARLY=1 \
-      SECUREOS_FAKE_VIEWER_WAIT=1 \
+      OLC_SKIP_KVM_CHECK=1 \
+      OLC_FAKE_QEMU_EXIT_EARLY=1 \
+      OLC_FAKE_VIEWER_WAIT=1 \
       "${LAUNCH_VM}"
   )"
 
@@ -228,11 +228,11 @@ test_allows_direct_display_backend_override() {
   output="$(
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
-      SECUREOS_SKIP_KVM_CHECK=1 \
-      SECUREOS_QEMU_DISPLAY="gtk,gl=off,zoom-to-fit=off" \
-      SECUREOS_QEMU_SDL_VIDEO_HIGHDPI_DISABLED="0" \
-      SECUREOS_QEMU_GDK_SCALE="2" \
-      SECUREOS_QEMU_GDK_DPI_SCALE="0.5" \
+      OLC_SKIP_KVM_CHECK=1 \
+      OLC_QEMU_DISPLAY="gtk,gl=off,zoom-to-fit=off" \
+      OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED="0" \
+      OLC_QEMU_GDK_SCALE="2" \
+      OLC_QEMU_GDK_DPI_SCALE="0.5" \
       "${LAUNCH_VM}"
   )"
 
@@ -259,8 +259,8 @@ test_allows_sdl_frontend_override() {
   output="$(
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
-      SECUREOS_SKIP_KVM_CHECK=1 \
-      SECUREOS_QEMU_FRONTEND=sdl \
+      OLC_SKIP_KVM_CHECK=1 \
+      OLC_QEMU_FRONTEND=sdl \
       "${LAUNCH_VM}"
   )"
 
@@ -280,7 +280,7 @@ test_rejects_milestone_argument() {
   output="$(
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
-      SECUREOS_SKIP_KVM_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       --milestone milestone1 \
       2>&1
@@ -301,7 +301,7 @@ test_requires_option_values() {
   output="$(
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
-      SECUREOS_SKIP_KVM_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       --cpus \
       2>&1
@@ -320,7 +320,7 @@ test_fails_if_build_output_is_missing() {
 
   cat >"${CASE_TMP}/fakebin/build-vm" <<EOF
 #!/usr/bin/env bash
-printf '%s\n' "\$1" > "${CASE_TMP}/build-vm.profile"
+printf '%s\n' "\$*" > "${CASE_TMP}/build-vm.args"
 printf '%s\n' "${CASE_TMP}/artifacts/missing.qcow2"
 EOF
   chmod +x "${CASE_TMP}/fakebin/build-vm"
@@ -329,7 +329,7 @@ EOF
   output="$(
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
-      SECUREOS_SKIP_KVM_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       2>&1
   )"

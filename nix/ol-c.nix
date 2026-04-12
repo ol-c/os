@@ -1,10 +1,10 @@
-{ lib, pkgs, ... }:
+{ modulesPath, lib, pkgs, ... }:
 
 let
-  secureosTerminalClientJs = builtins.readFile ../terminal-client/dist/terminal.js;
-  secureosTerminalClientCss = builtins.readFile ../terminal-client/dist/terminal.css;
+  olcTerminalClientJs = builtins.readFile ../terminal-client/dist/terminal.js;
+  olcTerminalClientCss = builtins.readFile ../terminal-client/dist/terminal.css;
 
-  secureosLocalhostTls = pkgs.runCommand "secureos-localhost-tls" {
+  olcLocalhostTls = pkgs.runCommand "ol-c-localhost-tls" {
     nativeBuildInputs = [ pkgs.openssl ];
   } ''
     mkdir -p "$out"
@@ -16,7 +16,7 @@ let
     prompt = no
 
     [dn]
-    CN = SecureOS Local CA
+    CN = OL-C Local CA
 
     [v3_ca]
     basicConstraints = critical, CA:true
@@ -66,7 +66,7 @@ let
     rm -f ca.cnf server.cnf server.csr "$out/ca.key" "$out/ca.srl"
   '';
 
-  secureosUiServer = pkgs.writeText "secureos-ui-server.mjs" ''
+  olcUiServer = pkgs.writeText "ol-c-ui-server.mjs" ''
     import { randomUUID } from 'node:crypto';
     import { spawn } from 'node:child_process';
     import { readFileSync } from 'node:fs';
@@ -75,14 +75,14 @@ let
     import net from 'node:net';
     import { URL } from 'node:url';
 
-    const marker = 'MILESTONE3_LOCALHOST_UI_OK';
+    const marker = 'OLC_LOCALHOST_UI_OK';
     const ttydBin = '${pkgs.ttyd}/bin/ttyd';
     const bashBin = '${pkgs.bashInteractive}/bin/bash';
-    const fallbackTerminalTitle = 'SecureOS Terminal';
+    const fallbackTerminalTitle = 'OL-C Terminal';
     const backendStartupTimeoutMs = 30_000;
     const backendIdleTimeoutMs = 300_000;
-    const terminalClientJs = ${builtins.toJSON secureosTerminalClientJs};
-    const terminalClientCss = ${builtins.toJSON secureosTerminalClientCss};
+    const terminalClientJs = ${builtins.toJSON olcTerminalClientJs};
+    const terminalClientCss = ${builtins.toJSON olcTerminalClientCss};
     const demoUser = (() => {
       const entry = readFileSync('/etc/passwd', 'utf8')
         .split('\n')
@@ -106,7 +106,7 @@ let
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>SecureOS</title>
+        <title>OL-C</title>
         <style>
           :root {
             color-scheme: dark;
@@ -156,7 +156,7 @@ let
       </head>
       <body>
         <main>
-          <h1>SecureOS control surface</h1>
+          <h1>OL-C control surface</h1>
           <p>Firefox now boots to <code>https://localhost</code>, served inside the guest by a Node.js process on port <code>443</code>.</p>
           <p>The next proof surface is <a href="/terminal"><code>/terminal</code></a>, which opens a fresh in-browser terminal session each time it is loaded.</p>
           <p id="proof">''${marker}</p>
@@ -182,7 +182,7 @@ let
           <div id="terminal"></div>
         </div>
         <script>
-          window.SECUREOS_TERMINAL_CONFIG = {
+          window.OLC_TERMINAL_CONFIG = {
             tokenUrl: ''${JSON.stringify(`''${backendBasePath}/token`)},
             wsPath: ''${JSON.stringify(`''${backendBasePath}/ws`)},
           };
@@ -359,10 +359,10 @@ let
       });
 
       child.stdout.on('data', chunk => {
-        process.stdout.write(`[secureos-ui][ttyd:''${token}] ''${chunk}`);
+        process.stdout.write(`[ol-c-ui][ttyd:''${token}] ''${chunk}`);
       });
       child.stderr.on('data', chunk => {
-        process.stderr.write(`[secureos-ui][ttyd:''${token}] ''${chunk}`);
+        process.stderr.write(`[ol-c-ui][ttyd:''${token}] ''${chunk}`);
       });
       child.on('exit', () => {
         const current = terminalBackends.get(token);
@@ -546,8 +546,8 @@ let
     }
 
     const server = createServer({
-      key: readFileSync('${secureosLocalhostTls}/server.key'),
-      cert: readFileSync('${secureosLocalhostTls}/server.crt'),
+      key: readFileSync('${olcLocalhostTls}/server.key'),
+      cert: readFileSync('${olcLocalhostTls}/server.crt'),
     }, async (req, res) => {
       const reqUrl = new URL(req.url, 'https://localhost');
 
@@ -606,7 +606,7 @@ let
       res.writeHead(404, {
         'content-type': 'text/html; charset=utf-8',
       });
-      res.end(proxyErrorHtml('The requested SecureOS page was not found.'));
+      res.end(proxyErrorHtml('The requested OL-C page was not found.'));
     });
 
     server.on('upgrade', (req, socket, head) => {
@@ -622,15 +622,28 @@ let
     });
 
     server.listen(443, '127.0.0.1', () => {
-      console.log('SECUREOS_UI_SERVER_OK https://localhost');
+      console.log('OLC_UI_SERVER_OK https://localhost');
     });
   '';
 in {
   imports = [
-    ./milestone1.nix
+    "${modulesPath}/profiles/qemu-guest.nix"
   ];
 
-  networking.hostName = "secureos-browser";
+  system.stateVersion = "24.11";
+
+  boot.loader.grub = {
+    enable = true;
+    device = "/dev/vda";
+  };
+
+  boot.kernelParams = [
+    "console=ttyS0,115200n8"
+  ];
+
+  networking.hostName = "ol-c-browser";
+
+  users.users.root.initialPassword = "root";
 
   users.users.demo = {
     isNormalUser = true;
@@ -645,6 +658,8 @@ in {
   services.spice-vdagentd.enable = true;
 
   environment.systemPackages = with pkgs; [
+    bash
+    coreutils
     curl
     firefox
     matchbox
@@ -660,18 +675,18 @@ in {
   '';
 
   security.pki.certificates = [
-    (builtins.readFile "${secureosLocalhostTls}/ca.crt")
+    (builtins.readFile "${olcLocalhostTls}/ca.crt")
   ];
 
   services.getty.autologinUser = lib.mkForce "demo";
 
-  systemd.services.secureos-ui = {
-    description = "SecureOS local HTTPS UI";
+  systemd.services.ol-c-ui = {
+    description = "OL-C local HTTPS UI";
     after = [ "network.target" ];
     wantedBy = [ "multi-user.target" ];
 
     serviceConfig = {
-      ExecStart = "${pkgs.nodejs}/bin/node ${secureosUiServer}";
+      ExecStart = "${pkgs.nodejs}/bin/node ${olcUiServer}";
       Restart = "on-failure";
       RestartSec = "1s";
     };
@@ -685,21 +700,21 @@ in {
 
   users.users.demo.home = "/home/demo";
 
-  system.activationScripts.milestone2DemoSession = ''
+  system.activationScripts.olcDemoSession = ''
     mkdir -p /home/demo
-    mkdir -p /home/demo/.mozilla/firefox/secureos.default
+    mkdir -p /home/demo/.mozilla/firefox/ol-c.default
     cat > /home/demo/.mozilla/firefox/profiles.ini <<'EOF'
     [Profile0]
     Name=default
     IsRelative=1
-    Path=secureos.default
+    Path=ol-c.default
     Default=1
 
     [General]
     StartWithLastProfile=1
     Version=2
     EOF
-    cat > /home/demo/.mozilla/firefox/secureos.default/user.js <<'EOF'
+    cat > /home/demo/.mozilla/firefox/ol-c.default/user.js <<'EOF'
     user_pref("browser.tabs.inTitlebar", 1);
     user_pref("browser.tabs.drawInTitlebar", true);
     user_pref("browser.tabs.closeWindowWithLastTab", false);
@@ -713,12 +728,12 @@ in {
     ${pkgs.spice-vdagent}/bin/spice-vdagent &
     matchbox-window-manager -use_titlebar no -use_cursor yes &
     for _ in $(seq 1 40); do
-      if curl --silent --fail --cacert ${secureosLocalhostTls}/ca.crt https://localhost/ >/dev/null; then
+      if curl --silent --fail --cacert ${olcLocalhostTls}/ca.crt https://localhost/ >/dev/null; then
         break
       fi
       sleep 0.25
     done
-    firefox --no-remote --profile /home/demo/.mozilla/firefox/secureos.default --new-window https://localhost &
+    firefox --no-remote --profile /home/demo/.mozilla/firefox/ol-c.default --new-window https://localhost &
     for _ in $(seq 1 40); do
       window_id="$(xdotool search --onlyvisible --class firefox 2>/dev/null | head -n 1 || true)"
       if [ -n "$window_id" ]; then
@@ -733,9 +748,9 @@ in {
     EOF
     chown -R demo:users /home/demo/.mozilla
     chown demo:users /home/demo/.xinitrc
-    chmod 0755 /home/demo/.mozilla /home/demo/.mozilla/firefox /home/demo/.mozilla/firefox/secureos.default
+    chmod 0755 /home/demo/.mozilla /home/demo/.mozilla/firefox /home/demo/.mozilla/firefox/ol-c.default
     chmod 0644 /home/demo/.mozilla/firefox/profiles.ini
-    chmod 0644 /home/demo/.mozilla/firefox/secureos.default/user.js
+    chmod 0644 /home/demo/.mozilla/firefox/ol-c.default/user.js
     chmod 0644 /home/demo/.xinitrc
   '';
 }

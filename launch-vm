@@ -11,14 +11,14 @@ Options:
   --help            Show this help text.
 
 Environment:
-  SECUREOS_QEMU_FRONTEND
+  OLC_QEMU_FRONTEND
                           Graphical frontend: spice, sdl, or gtk. Default: spice.
-  SECUREOS_QEMU_DISPLAY  Direct QEMU display backend for debugging. Overrides frontend.
-  SECUREOS_QEMU_SDL_VIDEO_HIGHDPI_DISABLED
+  OLC_QEMU_DISPLAY  Direct QEMU display backend for debugging. Overrides frontend.
+  OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED
                           SDL HiDPI mode for QEMU's own window. Default: 1.
-  SECUREOS_QEMU_GDK_SCALE
+  OLC_QEMU_GDK_SCALE
                           GTK scale if using a GTK display backend. Default: 1.
-  SECUREOS_QEMU_GDK_DPI_SCALE
+  OLC_QEMU_GDK_DPI_SCALE
                           GTK text DPI scale if using a GTK display backend. Default: 1.
 EOF
 }
@@ -45,11 +45,11 @@ require_value() {
 
 CPUS=2
 MEMORY_MB=2048
-QEMU_FRONTEND="${SECUREOS_QEMU_FRONTEND:-spice}"
-QEMU_DISPLAY="${SECUREOS_QEMU_DISPLAY:-}"
-QEMU_SDL_VIDEO_HIGHDPI_DISABLED="${SECUREOS_QEMU_SDL_VIDEO_HIGHDPI_DISABLED:-1}"
-QEMU_GDK_SCALE="${SECUREOS_QEMU_GDK_SCALE:-1}"
-QEMU_GDK_DPI_SCALE="${SECUREOS_QEMU_GDK_DPI_SCALE:-1}"
+QEMU_FRONTEND="${OLC_QEMU_FRONTEND:-spice}"
+QEMU_DISPLAY="${OLC_QEMU_DISPLAY:-}"
+QEMU_SDL_VIDEO_HIGHDPI_DISABLED="${OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED:-1}"
+QEMU_GDK_SCALE="${OLC_QEMU_GDK_SCALE:-1}"
+QEMU_GDK_DPI_SCALE="${OLC_QEMU_GDK_DPI_SCALE:-1}"
 SPICE_SOCKET_DIR=""
 QEMU_PID=""
 VIEWER_PID=""
@@ -98,12 +98,12 @@ if [[ "$QEMU_FRONTEND" == "spice" ]]; then
   require_command remote-viewer
 fi
 
-if [[ ! -e /dev/kvm && "${SECUREOS_SKIP_KVM_CHECK:-0}" != "1" ]]; then
+if [[ ! -e /dev/kvm && "${OLC_SKIP_KVM_CHECK:-0}" != "1" ]]; then
   fail "/dev/kvm is required"
 fi
 
 BUILD_VM_BIN="${BUILD_VM_BIN:-./build-vm}"
-IMAGE_PATH="$("$BUILD_VM_BIN" milestone2)"
+IMAGE_PATH="$("$BUILD_VM_BIN")"
 [[ -f "$IMAGE_PATH" ]] || fail "built image not found: $IMAGE_PATH"
 
 echo "booting image: $IMAGE_PATH"
@@ -149,8 +149,8 @@ qemu_base_args=(
   -snapshot
   -device virtio-rng-pci
   -device virtio-vga
-  -device qemu-xhci,id=secureos-usb
-  -device usb-tablet,bus=secureos-usb.0
+  -device qemu-xhci,id=ol-c-usb
+  -device usb-tablet,bus=ol-c-usb.0
   -serial mon:stdio
 )
 
@@ -160,7 +160,7 @@ if [[ "$QEMU_FRONTEND" != "spice" ]]; then
     -display "$QEMU_DISPLAY"
 fi
 
-SPICE_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/secureos-spice.XXXXXX")"
+SPICE_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-spice.XXXXXX")"
 SPICE_SOCKET="${SPICE_SOCKET_DIR}/spice.sock"
 SPICE_URI="spice+unix://${SPICE_SOCKET}"
 
@@ -171,8 +171,8 @@ qemu-system-x86_64 \
   -display none \
   -spice "unix=on,addr=${SPICE_SOCKET},disable-ticketing=on,agent-mouse=on,gl=off" \
   -device virtio-serial-pci \
-  -chardev spicevmc,id=secureos-vdagent,name=vdagent \
-  -device virtserialport,chardev=secureos-vdagent,name=com.redhat.spice.0 &
+  -chardev spicevmc,id=ol-c-vdagent,name=vdagent \
+  -device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0 &
 QEMU_PID="$!"
 
 for _ in $(seq 1 100); do

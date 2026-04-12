@@ -9,8 +9,8 @@ const RESIZE_TERMINAL = '1';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const fallbackTitle = 'SecureOS Terminal';
-const appConfig = window.SECUREOS_TERMINAL_CONFIG;
+const fallbackTitle = 'OL-C Terminal';
+const appConfig = window.OLC_TERMINAL_CONFIG;
 
 const terminalNode = document.getElementById('terminal');
 const statusNode = document.getElementById('terminal-status');

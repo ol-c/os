@@ -104,11 +104,11 @@ Question this milestone answers:
 ## Milestone 4: Synced In-VM Development
 
 Goal:
-- Enable practical development from inside the guest against a host-shared SecureOS repo.
+- Enable practical development from inside the guest against a host-shared OL-C repo.
 
 Milestone 4 decisions:
 - Use QEMU `virtiofs` as the only supported first shared-directory path.
-- Mount the whole SecureOS repo into the guest, read-write.
+- Mount the whole OL-C repo into the guest, read-write.
 - Treat the shared host repo as the durable source of truth.
 - Allow in-guest Codex-assisted development against that mounted repo.
 - Use the in-VM workflow to validate browser and Firefox-source changes before updating the repo's packaged patch file.
@@ -228,6 +228,7 @@ Implementation status:
 - [x] Verified the full Milestone 2 graphical boot and browser launch on an Ubuntu host with nix and QEMU/KVM installed.
 - [x] Simplified the normal VM launcher so `./launch-vm` always boots the current graphical Milestone 2 guest, with milestone validation handled by build and test scripts.
 - [x] Moved the normal graphical launch path to SPICE with `remote-viewer`, while keeping SDL and GTK as direct-display fallbacks for debugging.
+- [x] Consolidated the historical milestone Nix modules into one canonical OL-C module at `nix/ol-c.nix`.
 - [x] Proved the current Firefox source-patch flow end to end by building the patched browser, booting the guest with it, and verifying that closing the final tab reopens `https://localhost`.
 - [x] Add a browser terminal proof surface at `https://localhost/terminal` where each visit creates a fresh session.
 - [x] Use a browser terminal frontend and backend path that are robust enough for advanced interactive terminal programs.

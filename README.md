@@ -1,24 +1,14 @@
-# SecureOS Prototype
+# OL-C Prototype
 
-This repo currently has a graphical QEMU/KVM development VM that boots through the completed Milestone 2 browser surface. Earlier milestone validation is kept in the build and test scripts instead of the main launcher.
+This repo currently has one graphical QEMU/KVM development VM that boots the current OL-C browser surface.
 
-## Milestone 1
+## Current VM
 
-Milestone 1 proves that we can repeatedly build and boot a minimal custom nixOS guest.
-
-Proof of success:
-- serial output includes `MILESTONE1_BOOT_OK`
-
-Validate the milestone image contract with:
+Build the current VM image with:
 
 ```sh
-./build-vm milestone1
-./tests/test-build-vm.sh
+./build-vm
 ```
-
-## Milestone 2
-
-Milestone 2 proves that we can boot a graphical VM session and use a real browser inside the guest as the visible UI shell.
 
 Proof of success:
 - QEMU opens a VM window
@@ -27,7 +17,7 @@ Proof of success:
 - the browser window is maximized to fill the VM display
 - Closing the final tab keeps the window open and reopens `https://localhost`
 
-Run it with:
+Build and launch it with:
 
 ```sh
 ./launch-vm
@@ -36,16 +26,16 @@ Run it with:
 `launch-vm` uses QEMU's SPICE display path by default and opens it with `remote-viewer`. This avoids the host HiDPI cursor-coordinate issues seen with QEMU's GTK window and the cursor escape roughness seen with QEMU's SDL window. SDL and GTK remain available as direct QEMU display fallbacks:
 
 ```sh
-SECUREOS_QEMU_FRONTEND=sdl ./launch-vm
-SECUREOS_QEMU_FRONTEND=gtk ./launch-vm
-SECUREOS_QEMU_DISPLAY='gtk,gl=off,zoom-to-fit=off' ./launch-vm
+OLC_QEMU_FRONTEND=sdl ./launch-vm
+OLC_QEMU_FRONTEND=gtk ./launch-vm
+OLC_QEMU_DISPLAY='gtk,gl=off,zoom-to-fit=off' ./launch-vm
 ```
 
 The SDL and GTK scaling knobs are also overrideable for direct-display debugging:
 
 ```sh
-SECUREOS_QEMU_SDL_VIDEO_HIGHDPI_DISABLED=0 ./launch-vm
-SECUREOS_QEMU_GDK_SCALE=2 SECUREOS_QEMU_GDK_DPI_SCALE=0.5 ./launch-vm
+OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED=0 ./launch-vm
+OLC_QEMU_GDK_SCALE=2 OLC_QEMU_GDK_DPI_SCALE=0.5 ./launch-vm
 ```
 
 Firefox in the guest is packaged from nixpkgs with a repo-local source patch. The patch currently forces the last-tab replacement path to reopen `https://localhost` so the browser always returns to the local control surface.
@@ -60,7 +50,7 @@ Proof of success:
 - common full-screen terminal programs such as `vim`, `less`, and `top` behave correctly enough for normal use
 - the browser tab title follows the terminal title stream when the shell or running program emits one
 
-The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The SecureOS localhost HTTPS service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps the backend tied to a page-owned lease rather than raw websocket presence.
+The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The OL-C localhost HTTPS service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps the backend tied to a page-owned lease rather than raw websocket presence.
 
 Session behavior for this proof:
 - `/terminal` always creates a fresh shell
@@ -68,7 +58,7 @@ Session behavior for this proof:
 - there is no user-visible session picker or durable terminal persistence yet
 - websocket disconnects are treated as transport interruptions, not terminal teardown
 - the page renews its terminal lease while open and sends a best-effort close signal when it leaves
-- the page title currently defaults to `SecureOS Terminal`; richer per-command title behavior can be added back after terminal I/O is stable
+- the page title currently defaults to `OL-C Terminal`; richer per-command title behavior can be added back after terminal I/O is stable
 
 ## Firefox Patch Workflow
 

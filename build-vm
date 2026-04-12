@@ -3,10 +3,9 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: build-vm [milestone1|milestone2]
+Usage: build-vm
 
-Builds the requested guest image and prints the image path.
-Default milestone: milestone1.
+Builds the current OL-C VM image and prints the image path.
 EOF
 }
 
@@ -35,23 +34,22 @@ resolve_image_path() {
     | sed -n '1p'
 }
 
-if [[ "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
-
-PROFILE="${1:-milestone1}"
-case "$PROFILE" in
-  milestone1)
-    BUILD_TARGET="${BUILD_TARGET:-.#milestone1-image}"
+case "${1:-}" in
+  "")
     ;;
-  milestone2)
-    BUILD_TARGET="${BUILD_TARGET:-.#milestone2-image}"
+  --help)
+    usage
+    exit 0
+    ;;
+  milestone1|milestone2)
+    fail "build-vm no longer accepts milestone arguments; use ./build-vm"
     ;;
   *)
-    fail "unsupported milestone: $PROFILE"
+    fail "unknown argument: $1"
     ;;
 esac
+
+BUILD_TARGET="${BUILD_TARGET:-.#ol-c-image}"
 
 require_command nix
 

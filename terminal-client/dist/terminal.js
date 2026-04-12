@@ -6130,8 +6130,8 @@ WARNING: This link could potentially be dangerous`)) {
   var RESIZE_TERMINAL = "1";
   var encoder = new TextEncoder();
   var decoder = new TextDecoder();
-  var fallbackTitle = "SecureOS Terminal";
-  var appConfig = window.SECUREOS_TERMINAL_CONFIG;
+  var fallbackTitle = "OL-C Terminal";
+  var appConfig = window.OLC_TERMINAL_CONFIG;
   var terminalNode = document.getElementById("terminal");
   var statusNode = document.getElementById("terminal-status");
   var terminal = new import_xterm.Terminal({
