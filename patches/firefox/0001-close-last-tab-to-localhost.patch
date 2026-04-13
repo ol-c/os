@@ -1,7 +1,30 @@
+diff --git a/browser/base/content/browser-commands.js b/browser/base/content/browser-commands.js
+index b0b2383..024b763 100644
+--- a/browser/base/content/browser-commands.js
++++ b/browser/base/content/browser-commands.js
+@@ -11,6 +11,8 @@ var kSkipCacheFlags =
+   Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_PROXY |
+   Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE;
+ 
++const SECUREOS_LOCALHOST_URL = "https://localhost";
++
+ var BrowserCommands = {
+   back(aEvent) {
+     const where = BrowserUtils.whereToOpenLink(aEvent, false, true);
+@@ -295,7 +297,7 @@ var BrowserCommands = {
+ 
+   openTab({ event, url } = {}) {
+     let werePassedURL = !!url;
+-    url ??= BROWSER_NEW_TAB_URL;
++    url ??= SECUREOS_LOCALHOST_URL;
+     let searchClipboard =
+       gMiddleClickNewTabUsesPasteboard && event?.button == 1;
+ 
 diff --git a/browser/base/content/test/general/browser.toml b/browser/base/content/test/general/browser.toml
+index 4b73986..88f1dfd 100644
 --- a/browser/base/content/test/general/browser.toml
 +++ b/browser/base/content/test/general/browser.toml
-@@ -296,6 +296,8 @@
+@@ -296,6 +296,8 @@ support-files = [
  # DO NOT ADD MORE TESTS HERE. USE A TOPICAL DIRECTORY INSTEAD.
  
  ["browser_hide_removing.js"]
@@ -12,9 +35,10 @@ diff --git a/browser/base/content/test/general/browser.toml b/browser/base/conte
  ["browser_homeDrop.js"]
 diff --git a/browser/base/content/test/general/browser_localhost_shell.js b/browser/base/content/test/general/browser_localhost_shell.js
 new file mode 100644
+index 0000000..00b1895
 --- /dev/null
 +++ b/browser/base/content/test/general/browser_localhost_shell.js
-@@ -0,0 +1,195 @@
+@@ -0,0 +1,199 @@
 +const SECUREOS_LOCALHOST_URL = "https://localhost";
 +
 +add_task(async function test_new_tab_uses_localhost_url() {
@@ -24,10 +48,14 @@ new file mode 100644
 +  let openedWhere = null;
 +
 +  try {
-+    is(
++    isnot(
 +      win.BROWSER_NEW_TAB_URL,
 +      SECUREOS_LOCALHOST_URL,
-+      "The browser new-tab URL should be the SecureOS localhost surface"
++      "The SecureOS localhost surface should not replace Firefox's internal new-tab URL"
++    );
++    ok(
++      !win.isBlankPageURL(SECUREOS_LOCALHOST_URL),
++      "The SecureOS localhost surface should keep normal page title handling"
 +    );
 +
 +    win.openTrustedLinkIn = function (url, where, options = {}) {
@@ -210,40 +238,29 @@ new file mode 100644
 +    await BrowserTestUtils.closeWindow(win);
 +  }
 +});
-diff --git a/browser/base/content/utilityOverlay.js b/browser/base/content/utilityOverlay.js
---- a/browser/base/content/utilityOverlay.js
-+++ b/browser/base/content/utilityOverlay.js
-@@ -32,6 +32,8 @@
-   )
- );
- 
-+const SECUREOS_LOCALHOST_URL = "https://localhost";
-+
- Object.defineProperty(this, "BROWSER_NEW_TAB_URL", {
-   enumerable: true,
-   get() {
-@@ -62,7 +64,7 @@
-         return "about:privatebrowsing";
-       }
-     }
--    return AboutNewTab.newTabURL;
-+    return SECUREOS_LOCALHOST_URL;
-   },
- });
- 
 diff --git a/browser/components/tabbrowser/content/tabbrowser.js b/browser/components/tabbrowser/content/tabbrowser.js
+index 37570c5..f72b232 100644
 --- a/browser/components/tabbrowser/content/tabbrowser.js
 +++ b/browser/components/tabbrowser/content/tabbrowser.js
-@@ -4899,7 +4899,7 @@
+@@ -19,6 +19,8 @@
+       "chrome://browser/skin/privatebrowsing/favicon.svg",
+   };
+ 
++  const SECUREOS_LOCALHOST_URL = "https://localhost";
++
+   const {
+     LOAD_FLAGS_NONE,
+     LOAD_FLAGS_FROM_EXTERNAL,
+@@ -4899,7 +4901,7 @@
        aTab._mouseleave();
  
        if (newTab) {
 -        this.addTrustedTab(BROWSER_NEW_TAB_URL, {
-+        this.addTrustedTab("https://localhost", {
++        this.addTrustedTab(SECUREOS_LOCALHOST_URL, {
            skipAnimation: true,
          });
        } else {
-@@ -7330,6 +7330,23 @@
+@@ -7330,6 +7332,23 @@
            // We already did PermitUnload in the content process
            // for this tab (the only one in the window). So we don't
            // need to do it again for any tabs.
@@ -252,7 +269,7 @@ diff --git a/browser/components/tabbrowser/content/tabbrowser.js b/browser/compo
 +          ) {
 +            let tab = this.getTabForBrowser(browser);
 +            if (tab) {
-+              this.addTrustedTab("https://localhost", {
++              this.addTrustedTab(SECUREOS_LOCALHOST_URL, {
 +                skipAnimation: true,
 +              });
 +              this.removeTab(tab, {

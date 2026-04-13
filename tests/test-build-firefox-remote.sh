@@ -32,7 +32,7 @@ if [[ "\$*" == "config get-value project" ]]; then
   if [[ "\${OLC_FAKE_NO_PROJECT:-0}" == "1" ]]; then
     exit 0
   fi
-  printf '%s\n' "olc-test-project"
+  printf '%s\n' "ol-c-test-project"
   exit 0
 fi
 
@@ -41,9 +41,20 @@ if [[ "\$1" == "config" && "\${2:-}" == "set" && "\${3:-}" == "project" ]]; then
   exit 0
 fi
 
+if [[ "\$1" == "config" && "\${2:-}" == "set" && "\${3:-}" == "account" ]]; then
+  printf '%s\n' "\${4:-}" > "${CASE_TMP}/selected-account"
+  exit 0
+fi
+
+if [[ "\$1" == "config" && "\${2:-}" == "configurations" && "\${3:-}" == "activate" ]]; then
+  printf '%s\n' "\${4:-}" > "${CASE_TMP}/selected-config"
+  exit 0
+fi
+
 if [[ "\$1" == "config" && "\${2:-}" == "configurations" && "\${3:-}" == "list" ]]; then
   printf '%s\n' "NAME IS_ACTIVE ACCOUNT PROJECT"
-  printf '%s\n' "default True dev@example.com olc-test-project"
+  printf '%s\n' "default True dev@example.com ol-c-test-project"
+  printf '%s\n' "other False other@example.com other-project"
   exit 0
 fi
 
@@ -57,6 +68,7 @@ if [[ "\$1" == "auth" && "\${2:-}" == "list" ]]; then
     printf '%s\n' "Credentialed Accounts"
     printf '%s\n' "ACTIVE  ACCOUNT"
     printf '%s\n' "*       dev@example.com"
+    printf '%s\n' "        other@example.com"
   fi
   exit 0
 fi
@@ -71,6 +83,32 @@ fi
 if [[ "\$1" == "projects" && "\${2:-}" == "list" ]]; then
   printf '%s\n' "PROJECT_ID NAME PROJECT_NUMBER"
   printf '%s\n' "chosen-project chosen 123"
+  exit 0
+fi
+
+if [[ "\$1" == "compute" && "\${2:-}" == "instances" && "\${3:-}" == "create" ]]; then
+  if [[ "\${OLC_FAKE_VM_CREATE_FAIL:-0}" == "1" ]]; then
+    exit 1
+  fi
+  exit 0
+fi
+
+if [[ "\$1" == "compute" && "\${2:-}" == "instances" && "\${3:-}" == "delete" ]]; then
+  exit 0
+fi
+
+if [[ "\$1" == "compute" && "\${2:-}" == "instances" && "\${3:-}" == "describe" ]]; then
+  if [[ "\$*" == *"value(status)"* ]]; then
+    printf '%s\n' "RUNNING"
+  else
+    printf '%s\n' "name: \${4:-}"
+    printf '%s\n' "status: RUNNING"
+  fi
+  exit 0
+fi
+
+if [[ "\$1" == "compute" && "\${2:-}" == "instances" && "\${3:-}" == "get-serial-port-output" ]]; then
+  printf '%s\n' "serial progress"
   exit 0
 fi
 
@@ -103,10 +141,13 @@ if [[ "\$1" == "--quiet" && "\${2:-}" == "storage" && "\${3:-}" == "cp" ]]; then
         */build.log)
           printf '%s\n' "remote log" > "\$dst"
           ;;
-        */olc-nix-cache.tar.gz)
+        */status.txt)
+          printf '%s\n' "0" > "\$dst"
+          ;;
+        */ol-c-nix-cache.tar.gz)
           tmp="\$(mktemp -d)"
-          mkdir -p "\${tmp}/olc-nix-cache"
-          tar -C "\$tmp" -czf "\$dst" olc-nix-cache
+          mkdir -p "\${tmp}/ol-c-nix-cache"
+          tar -C "\$tmp" -czf "\$dst" ol-c-nix-cache
           rm -rf "\$tmp"
           ;;
       esac
@@ -116,35 +157,6 @@ if [[ "\$1" == "--quiet" && "\${2:-}" == "storage" && "\${3:-}" == "cp" ]]; then
 fi
 
 if [[ "\$1" == "--quiet" && "\${2:-}" == "storage" && "\${3:-}" == "rm" ]]; then
-  exit 0
-fi
-
-if [[ "\$1" == "--quiet" && "\${2:-}" == "batch" && "\${3:-}" == "jobs" && "\${4:-}" == "delete" ]]; then
-  exit 0
-fi
-
-if [[ "\$1" == "batch" && "\${2:-}" == "jobs" && "\${3:-}" == "describe" ]]; then
-  if [[ "\$*" == *"value(status.state)"* ]]; then
-    printf '%s\n' "SUCCEEDED"
-  elif [[ "\$*" == *"value(uid)"* ]]; then
-    printf '%s\n' "fake-job-uid"
-  else
-    printf '%s\n' "status:"
-    printf '%s\n' "  state: SUCCEEDED"
-  fi
-  exit 0
-fi
-
-if [[ "\$1" == "batch" && "\${2:-}" == "jobs" && "\${3:-}" == "submit" ]]; then
-  exit 0
-fi
-
-if [[ "\$1" == "beta" && "\${2:-}" == "logging" && "\${3:-}" == "tail" ]]; then
-  exit 0
-fi
-
-if [[ "\$1" == "logging" && "\${2:-}" == "read" ]]; then
-  printf '%s\n' "remote progress"
   exit 0
 fi
 
@@ -196,16 +208,25 @@ test_dry_run_uses_safe_defaults() {
 
   assert_contains "$output" "Google Cloud configurations:"
   assert_contains "$output" "Google Cloud auth accounts:"
-  assert_contains "$output" "bucket:       gs://ol-c-os-dev-builds"
+  assert_contains "$output" "bucket:       gs://ol-c-test-project-ol-c-remote-builds"
   assert_contains "$output" "target:       .#firefox-localhost"
   assert_contains "$output" "machine:      h4d-standard-192"
-  assert_contains "$output" '"maxRunDuration": "10800s"'
-  assert_contains "$output" '"machineType": "h4d-standard-192"'
-  assert_contains "$output" '"type": "hyperdisk-balanced"'
-  assert_contains "$output" '"sizeGb": "300"'
-  assert_contains "$output" '"destination": "CLOUD_LOGGING"'
-  assert_contains "$output" 'zones/us-central1-a'
+  assert_contains "$output" "timeout:      1h"
+  assert_contains "$output" "Would create Compute Engine VM:"
+  assert_contains "$output" "gcloud compute instances create ol-c-firefox-"
+  assert_contains "$output" "--machine-type=h4d-standard-192"
+  assert_contains "$output" "--boot-disk-type=hyperdisk-balanced"
+  assert_contains "$output" "--boot-disk-size=300GB"
+  assert_contains "$output" "--image-family=ubuntu-2404-lts-amd64"
+  assert_contains "$output" "--image-project=ubuntu-os-cloud"
+  assert_contains "$output" "--scopes=https://www.googleapis.com/auth/cloud-platform"
+  assert_contains "$output" "--maintenance-policy=TERMINATE"
+  assert_contains "$output" "--max-run-duration=1h"
+  assert_contains "$output" "--instance-termination-action=DELETE"
+  assert_contains "$output" "--labels=ol-c-purpose=firefox-remote-build,ol-c-job=ol-c-firefox-"
   assert_contains "$output" '.#firefox-localhost'
+  assert_contains "$output" "/tmp/ol-c-build.log"
+  assert_contains "$output" "ol-c-nix-cache.tar.gz"
   cleanup_case
 }
 
@@ -223,7 +244,95 @@ test_dry_run_allows_target_override() {
   cleanup_case
 }
 
-test_bucket_create_and_batch_submit_contract() {
+test_bucket_override_still_wins() {
+  local output
+  setup_case
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+      OLC_GCP_BUCKET=custom-ol-c-builds \
+      "${REMOTE_BUILD}" --dry-run
+  )"
+
+  assert_contains "$output" "bucket:       gs://custom-ol-c-builds"
+  cleanup_case
+}
+
+test_interactive_identity_confirmation_can_continue() {
+  local output
+  setup_case
+
+  output="$(
+    printf '\n' | PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+      OLC_GCP_CONFIRM_IDENTITY=1 \
+      "${REMOTE_BUILD}" --dry-run
+  )"
+
+  assert_contains "$output" "Google Cloud launch identity:"
+  assert_contains "$output" "account:       dev@example.com"
+  assert_contains "$output" "project:       ol-c-test-project"
+  assert_contains "$output" "Dry run only"
+  cleanup_case
+}
+
+test_interactive_identity_confirmation_can_login() {
+  local output calls
+  setup_case
+
+  output="$(
+    printf '%s\n%s\n' "login" "yes" | PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+      OLC_GCP_CONFIRM_IDENTITY=1 \
+      OLC_FAKE_NO_ACTIVE_ACCOUNT=1 \
+      OLC_FAKE_LOGIN_SETS_ACCOUNT=1 \
+      "${REMOTE_BUILD}" --dry-run
+  )"
+  calls="$(cat "${CASE_TMP}/calls/gcloud")"
+
+  assert_contains "$output" "Google Cloud launch identity:"
+  assert_contains "$calls" "auth login --launch-browser"
+  assert_contains "$output" "Dry run only"
+  cleanup_case
+}
+
+test_interactive_identity_confirmation_can_switch_account() {
+  local output calls selected
+  setup_case
+
+  output="$(
+    printf '%s\n%s\n%s\n' "account" "other@example.com" "yes" | PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+      OLC_GCP_CONFIRM_IDENTITY=1 \
+      "${REMOTE_BUILD}" --dry-run
+  )"
+  calls="$(cat "${CASE_TMP}/calls/gcloud")"
+  selected="$(cat "${CASE_TMP}/selected-account")"
+
+  assert_contains "$output" "Credentialed Google Cloud accounts:"
+  assert_contains "$calls" "config set account other@example.com"
+  [[ "$selected" == "other@example.com" ]] || fail "expected selected account to be recorded"
+  assert_contains "$output" "Dry run only"
+  cleanup_case
+}
+
+test_interactive_identity_confirmation_can_switch_config() {
+  local output calls selected
+  setup_case
+
+  output="$(
+    printf '%s\n%s\n%s\n' "config" "other" "yes" | PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+      OLC_GCP_CONFIRM_IDENTITY=1 \
+      "${REMOTE_BUILD}" --dry-run
+  )"
+  calls="$(cat "${CASE_TMP}/calls/gcloud")"
+  selected="$(cat "${CASE_TMP}/selected-config")"
+
+  assert_contains "$output" "Available Google Cloud configurations:"
+  assert_contains "$calls" "config configurations activate other"
+  [[ "$selected" == "other" ]] || fail "expected selected config to be recorded"
+  assert_contains "$output" "Dry run only"
+  cleanup_case
+}
+
+test_bucket_create_and_vm_submit_contract() {
   local output calls
   setup_case
 
@@ -233,28 +342,33 @@ test_bucket_create_and_batch_submit_contract() {
   )"
   calls="$(cat "${CASE_TMP}/calls/gcloud")"
 
-  assert_contains "$output" "Creating staging bucket gs://ol-c-os-dev-builds"
-  assert_contains "$output" "Submitting Batch job"
-  assert_contains "$output" "Batch job "
-  assert_contains "$calls" "storage buckets describe gs://ol-c-os-dev-builds"
-  assert_contains "$calls" "--quiet storage buckets create gs://ol-c-os-dev-builds --location=us-central1 --uniform-bucket-level-access --public-access-prevention"
-  assert_contains "$calls" "batch jobs submit olc-firefox-"
-  assert_contains "$calls" "--config="
+  assert_contains "$output" "Creating staging bucket gs://ol-c-test-project-ol-c-remote-builds"
+  assert_contains "$output" "Creating Compute Engine VM"
+  assert_contains "$output" "VM submitted: ol-c-firefox-"
+  assert_contains "$output" "Compute Engine will delete it after 1h"
+  assert_contains "$calls" "storage buckets describe gs://ol-c-test-project-ol-c-remote-builds"
+  assert_contains "$calls" "--quiet storage buckets create gs://ol-c-test-project-ol-c-remote-builds --location=us-central1 --uniform-bucket-level-access --public-access-prevention"
+  assert_contains "$calls" "compute instances create ol-c-firefox-"
+  assert_contains "$calls" "--maintenance-policy=TERMINATE"
+  assert_contains "$calls" "--max-run-duration=1h"
+  assert_contains "$calls" "--instance-termination-action=DELETE"
+  assert_contains "$calls" "--labels=ol-c-purpose=firefox-remote-build,ol-c-job=ol-c-firefox-"
+  [[ "$calls" != *"batch jobs"* ]] || fail "expected direct VM flow not Batch"
   cleanup_case
 }
 
-test_kill_deletes_batch_job() {
+test_kill_deletes_compute_instance() {
   local output calls
   setup_case
 
   output="$(
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
-      "${REMOTE_BUILD}" --kill olc-firefox-test
+      "${REMOTE_BUILD}" --kill ol-c-firefox-test
   )"
   calls="$(cat "${CASE_TMP}/calls/gcloud")"
 
-  assert_contains "$output" "Deleting Batch job olc-firefox-test"
-  assert_contains "$calls" "--quiet batch jobs delete olc-firefox-test --project=olc-test-project --location=us-central1"
+  assert_contains "$output" "Deleting Compute Engine VM ol-c-firefox-test"
+  assert_contains "$calls" "--quiet compute instances delete ol-c-firefox-test --project=ol-c-test-project --zone=us-central1-a"
   cleanup_case
 }
 
@@ -264,16 +378,16 @@ test_fetch_imports_downloaded_cache() {
 
   output="$(
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
-      "${REMOTE_BUILD}" --fetch olc-firefox-test
+      "${REMOTE_BUILD}" --fetch ol-c-firefox-test
   )"
   nix_calls="$(cat "${CASE_TMP}/calls/nix")"
 
-  assert_contains "$output" "Downloading artifacts for olc-firefox-test"
+  assert_contains "$output" "Downloading artifacts for ol-c-firefox-test"
   assert_contains "$output" "Remote result: /nix/store/test-firefox"
-  assert_contains "$nix_calls" "copy --no-check-sigs --from file://${ROOT_DIR}/.gcp-builds/olc-firefox-test/olc-nix-cache /nix/store/test-firefox"
+  assert_contains "$nix_calls" "copy --no-check-sigs --from file://${ROOT_DIR}/.gcp-builds/ol-c-firefox-test/ol-c-nix-cache /nix/store/test-firefox"
   [[ -L "${ROOT_DIR}/result-gcp-firefox-localhost" ]] || fail "expected fetch to update result symlink"
   rm -f "${ROOT_DIR}/result-gcp-firefox-localhost"
-  rm -rf "${ROOT_DIR}/.gcp-builds/olc-firefox-test"
+  rm -rf "${ROOT_DIR}/.gcp-builds/ol-c-firefox-test"
   cleanup_case
 }
 
@@ -369,7 +483,7 @@ test_management_mode_does_not_launch_login() {
     PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
       OLC_FAKE_NO_ACTIVE_ACCOUNT=1 \
       OLC_FAKE_LOGIN_SETS_ACCOUNT=1 \
-      "${REMOTE_BUILD}" --kill olc-firefox-test \
+      "${REMOTE_BUILD}" --kill ol-c-firefox-test \
       2>&1
   )"
   status=$?
@@ -402,6 +516,28 @@ test_bucket_create_failure_recommends_unique_bucket() {
   cleanup_case
 }
 
+test_vm_create_failure_cleans_uploaded_source() {
+  local output status calls
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+      OLC_FAKE_VM_CREATE_FAIL=1 \
+      "${REMOTE_BUILD}" .#firefox-localhost \
+      2>&1
+  )"
+  status=$?
+  set -e
+  calls="$(cat "${CASE_TMP}/calls/gcloud")"
+
+  [[ $status -ne 0 ]] || fail "expected VM creation failure to fail"
+  assert_contains "$output" "VM creation failed"
+  assert_contains "$output" "Cleaning up uploaded source artifacts at gs://ol-c-test-project-ol-c-remote-builds/runs/ol-c-firefox-"
+  assert_contains "$calls" "--quiet storage rm --recursive gs://ol-c-test-project-ol-c-remote-builds/runs/ol-c-firefox-"
+  cleanup_case
+}
+
 test_script_documents_archive_excludes() {
   local contents
   contents="$(cat "${REMOTE_BUILD}")"
@@ -421,9 +557,15 @@ test_submit_fails_without_project_when_noninteractive
 test_management_mode_does_not_launch_login
 test_dry_run_uses_safe_defaults
 test_dry_run_allows_target_override
-test_bucket_create_and_batch_submit_contract
+test_bucket_override_still_wins
+test_interactive_identity_confirmation_can_continue
+test_interactive_identity_confirmation_can_login
+test_interactive_identity_confirmation_can_switch_account
+test_interactive_identity_confirmation_can_switch_config
+test_bucket_create_and_vm_submit_contract
 test_bucket_create_failure_recommends_unique_bucket
-test_kill_deletes_batch_job
+test_vm_create_failure_cleans_uploaded_source
+test_kill_deletes_compute_instance
 test_fetch_imports_downloaded_cache
 test_script_documents_archive_excludes
 

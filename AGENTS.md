@@ -234,7 +234,7 @@ Implementation status:
 - [x] Investigate and fix the remaining extra line shown after terminal command output.
 - [x] Keep terminal behavior modular enough to test independently, including closing the browser tab when the root terminal session exits instead of showing a dead terminal interface.
 - [x] Extend the Firefox localhost shell behavior so opening a new tab also loads `https://localhost/` without regressing the final-tab reopen behavior. (fix the fragile tab exit bug as well)
-- [x] Add a Google Cloud Batch helper for remote patched-Firefox builds with Cloud Storage result handoff and explicit kill/fetch/cleanup commands.
+- [x] Add a Google Compute Engine VM helper for remote patched-Firefox builds with Cloud Storage result handoff, provider-enforced timeout deletion, and explicit kill/fetch/cleanup commands.
 - [ ] Replace the current 5 minute idle timeout with a more reliable terminal session cleanup strategy.
 - [ ] Define the Milestone 3 browser-based system controls proof surface and test strategy.
 - [ ] Implement the first browser-visible system status surfaces for core device utilities.
