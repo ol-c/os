@@ -3,20 +3,12 @@
 final: prev:
 let
   firefoxUnwrappedName = prev.firefox-unwrapped.name or "firefox-unwrapped";
-  firefoxSource = (prev.firefox-unwrapped.overrideAttrs (old: {
-    passthru = (old.passthru or {}) // {
-      olcFirefoxSource = old.src;
-    };
-  })).olcFirefoxSource;
 in {
   firefox-unwrapped = prev.runCommand "${firefoxUnwrappedName}-ol-c-localhost-fast" {
     nativeBuildInputs = [
-      prev.gnutar
       prev.patch
       prev.patchutils
-      prev.python3
       prev.unzip
-      prev.xz
       prev.zip
     ];
     meta = prev.firefox-unwrapped.meta;
@@ -36,54 +28,89 @@ in {
     fi
 
     work_dir="$(mktemp -d)"
-    mkdir -p "$work_dir/firefox-source"
-    tar -xf ${firefoxSource} -C "$work_dir/firefox-source" --strip-components=1
+    mkdir -p "$work_dir/omni"
 
-    mkdir -p "$work_dir/optimized" "$work_dir/deoptimized" "$work_dir/omni"
-    cp "$browser_omni" "$work_dir/optimized/omni.ja"
-    python "$work_dir/firefox-source/config/optimizejars.py" \
-      --deoptimize \
-      "$work_dir/optimized" \
-      "$work_dir/deoptimized" \
-      "$work_dir/optimized"
-    unzip -q "$work_dir/deoptimized/omni.ja" -d "$work_dir/omni"
+    unzip_status=0
+    unzip -q "$browser_omni" -d "$work_dir/omni" || unzip_status="$?"
+    if [ "$unzip_status" -ne 0 ]; then
+      echo "warning: unzip reported status $unzip_status while reading optimized Firefox omni.ja; continuing if required files extracted" >&2
+    fi
 
-    for path in \
-      chrome/browser/content/browser/browser-commands.js \
-      chrome/browser/content/browser/tabbrowser.js
-    do
-      if [ ! -f "$work_dir/omni/$path" ]; then
-        echo "error: expected Firefox frontend asset missing from omni.ja: $path" >&2
+    apply_source_patch_to_runtime_asset() {
+      local source_path="$1"
+      local basename="$2"
+      local validation_pattern="$3"
+      local source_patch="$work_dir/''${basename}.source.patch"
+      local candidate_patch="$work_dir/''${basename}.candidate.patch"
+      local applied_path=""
+      local candidate_path
+
+      filterdiff \
+        -i "*/$source_path" \
+        ${firefoxLocalhostPatch} \
+        > "$source_patch"
+
+      if [ ! -s "$source_patch" ]; then
+        echo "error: Firefox localhost patch contains no runtime hunks for $source_path" >&2
         exit 1
       fi
-    done
 
-    filterdiff \
-      -i '*/browser/base/content/browser-commands.js' \
-      -i '*/browser/components/tabbrowser/content/tabbrowser.js' \
-      ${firefoxLocalhostPatch} \
-      > "$work_dir/runtime-source.patch"
+      while IFS= read -r candidate_path; do
+        sed "s#$source_path#$candidate_path#g" \
+          "$source_patch" \
+          > "$candidate_patch"
 
-    if [ ! -s "$work_dir/runtime-source.patch" ]; then
-      echo "error: Firefox localhost patch contains no runtime frontend hunks for the fast repack path" >&2
+        if patch -d "$work_dir/omni" -p1 --dry-run < "$candidate_patch" >/dev/null 2>&1; then
+          if [ -n "$applied_path" ]; then
+            echo "error: Firefox localhost patch matched multiple $basename runtime assets:" >&2
+            echo "  $applied_path" >&2
+            echo "  $candidate_path" >&2
+            exit 1
+          fi
+
+          patch -d "$work_dir/omni" -p1 < "$candidate_patch"
+          applied_path="$candidate_path"
+        fi
+      done < <(
+        find "$work_dir/omni" -type f -name "$basename" \
+          | sed "s#^$work_dir/omni/##" \
+          | LC_ALL=C sort
+      )
+
+      if [ -z "$applied_path" ]; then
+        echo "error: Firefox localhost patch did not match any extracted $basename runtime asset" >&2
+        echo "available $basename candidates:" >&2
+        find "$work_dir/omni" -type f -name "$basename" \
+          | sed "s#^$work_dir/omni/#  #" >&2 || true
+        exit 1
+      fi
+
+      if ! grep -Fq "$validation_pattern" "$work_dir/omni/$applied_path"; then
+        echo "error: patched Firefox runtime asset is missing expected localhost code: $applied_path" >&2
+        echo "missing pattern: $validation_pattern" >&2
+        exit 1
+      fi
+
+      printf '%s\n' "$applied_path" > "$work_dir/''${basename}.applied-path"
+    }
+
+    apply_source_patch_to_runtime_asset \
+      browser/base/content/browser-commands.js \
+      browser-commands.js \
+      'url ??= SECUREOS_LOCALHOST_URL'
+
+    apply_source_patch_to_runtime_asset \
+      browser/components/tabbrowser/content/tabbrowser.js \
+      tabbrowser.js \
+      'this.addTrustedTab(SECUREOS_LOCALHOST_URL'
+
+    tabbrowser_omni_path="$(cat "$work_dir/tabbrowser.js.applied-path")"
+    if ! grep -Fq 'DOMWindowClose' "$work_dir/omni/$tabbrowser_omni_path"; then
+      echo "error: patched Firefox tabbrowser runtime asset does not contain DOMWindowClose handling: $tabbrowser_omni_path" >&2
       exit 1
     fi
 
-    sed \
-      -e 's#browser/base/content/browser-commands.js#chrome/browser/content/browser/browser-commands.js#g' \
-      -e 's#browser/components/tabbrowser/content/tabbrowser.js#chrome/browser/content/browser/tabbrowser.js#g' \
-      "$work_dir/runtime-source.patch" \
-      > "$work_dir/runtime-omni.patch"
-
-    patch -d "$work_dir/omni" -p1 < "$work_dir/runtime-omni.patch"
-
     rm "$browser_omni"
-    (cd "$work_dir/omni" && zip -q -r -9 -X "$work_dir/deoptimized/omni.ja" .)
-    python "$work_dir/firefox-source/config/optimizejars.py" \
-      --optimize \
-      "$work_dir/optimized" \
-      "$work_dir/deoptimized" \
-      "$work_dir/optimized"
-    cp "$work_dir/optimized/omni.ja" "$browser_omni"
+    (cd "$work_dir/omni" && zip -q -r -9 -X "$browser_omni" .)
   '';
 }

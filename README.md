@@ -88,7 +88,7 @@ nix build .#firefox-localhost --print-build-logs
 
 Then validate inside the VM by closing the final Firefox tab with the tab close button or `Ctrl+W` and confirming that Firefox stays open on `https://localhost`.
 
-`.#firefox-localhost` is the default packaged target used by `.#ol-c-image`. It starts from pinned nixpkgs Firefox and applies the runtime browser chrome hunks from `patches/firefox/0001-close-last-tab-to-localhost.patch` into `browser/omni.ja`. It is intentionally limited to browser frontend assets such as `browser-commands.js` and `tabbrowser.js`.
+`.#firefox-localhost` is the default packaged target used by `.#ol-c-image`. It starts from pinned nixpkgs Firefox and applies the runtime browser chrome hunks from `patches/firefox/0001-close-last-tab-to-localhost.patch` into `browser/omni.ja`. The rewritten jar is a normal zip-format jar for fast local packaging; use the full source compatibility path when optimized Firefox packaging behavior itself matters. The fast path is intentionally limited to browser frontend assets such as `browser-commands.js` and `tabbrowser.js`.
 
 ### 2. Full source compatibility path
 
