@@ -1,21 +1,58 @@
 diff --git a/browser/base/content/test/general/browser.toml b/browser/base/content/test/general/browser.toml
 --- a/browser/base/content/test/general/browser.toml
 +++ b/browser/base/content/test/general/browser.toml
-@@ -323,6 +323,8 @@
+@@ -296,6 +296,8 @@
  # DO NOT ADD MORE TESTS HERE. USE A TOPICAL DIRECTORY INSTEAD.
  
  ["browser_hide_removing.js"]
-+["browser_closeLastTab_loads_localhost.js"]
++["browser_localhost_shell.js"]
 +
  # DO NOT ADD MORE TESTS HERE. USE A TOPICAL DIRECTORY INSTEAD.
  
  ["browser_homeDrop.js"]
-diff --git a/browser/base/content/test/general/browser_closeLastTab_loads_localhost.js b/browser/base/content/test/general/browser_closeLastTab_loads_localhost.js
+diff --git a/browser/base/content/test/general/browser_localhost_shell.js b/browser/base/content/test/general/browser_localhost_shell.js
 new file mode 100644
 --- /dev/null
-+++ b/browser/base/content/test/general/browser_closeLastTab_loads_localhost.js
-@@ -0,0 +1,106 @@
-+const SECUREOS_LAST_TAB_URL = "https://localhost";
++++ b/browser/base/content/test/general/browser_localhost_shell.js
+@@ -0,0 +1,195 @@
++const SECUREOS_LOCALHOST_URL = "https://localhost";
++
++add_task(async function test_new_tab_uses_localhost_url() {
++  let win = await BrowserTestUtils.openNewBrowserWindow();
++  let originalOpenTrustedLinkIn = win.openTrustedLinkIn;
++  let openedURL = null;
++  let openedWhere = null;
++
++  try {
++    is(
++      win.BROWSER_NEW_TAB_URL,
++      SECUREOS_LOCALHOST_URL,
++      "The browser new-tab URL should be the SecureOS localhost surface"
++    );
++
++    win.openTrustedLinkIn = function (url, where, options = {}) {
++      openedURL = url;
++      openedWhere = where;
++      options.resolveOnNewTabCreated?.(win.gBrowser.selectedBrowser);
++    };
++
++    win.BrowserCommands.openTab();
++
++    await TestUtils.waitForCondition(
++      () => openedURL !== null,
++      "Expected the browser new-tab command to open a URL"
++    );
++    is(
++      openedURL,
++      SECUREOS_LOCALHOST_URL,
++      "Opening a new tab should load the SecureOS localhost surface"
++    );
++    is(openedWhere, "tab", "The new-tab command should still open a tab");
++  } finally {
++    win.openTrustedLinkIn = originalOpenTrustedLinkIn;
++    await BrowserTestUtils.closeWindow(win);
++  }
++});
 +
 +add_task(async function test_close_last_tab_uses_localhost_replacement_url() {
 +  await SpecialPowers.pushPrefEnv({
@@ -54,8 +91,60 @@ new file mode 100644
 +    );
 +    is(
 +      replacementURL,
-+      SECUREOS_LAST_TAB_URL,
++      SECUREOS_LOCALHOST_URL,
 +      "Closing the final tab should reopen the SecureOS localhost surface"
++    );
++    is(win.gBrowser.tabs.length, 1, "The browser window should remain open");
++  } finally {
++    win.gBrowser.addTrustedTab = originalAddTrustedTab;
++    await BrowserTestUtils.closeWindow(win);
++  }
++});
++
++add_task(async function test_dom_window_close_last_tab_uses_localhost() {
++  await SpecialPowers.pushPrefEnv({
++    set: [["browser.tabs.closeWindowWithLastTab", false]],
++  });
++
++  let win = await BrowserTestUtils.openNewBrowserWindow();
++  let originalAddTrustedTab = win.gBrowser.addTrustedTab;
++  let replacementURL = null;
++
++  try {
++    let closingTab = win.gBrowser.selectedTab;
++    BrowserTestUtils.startLoadingURIString(
++      closingTab.linkedBrowser,
++      "https://example.com/"
++    );
++    await BrowserTestUtils.browserLoaded(
++      closingTab.linkedBrowser,
++      false,
++      "https://example.com/"
++    );
++
++    win.gBrowser.addTrustedTab = function (url, options) {
++      replacementURL = url;
++      return originalAddTrustedTab.call(this, "about:blank", options);
++    };
++
++    let closeEvent = new win.Event("DOMWindowClose", {
++      bubbles: true,
++      cancelable: true,
++    });
++    closingTab.linkedBrowser.dispatchEvent(closeEvent);
++
++    await TestUtils.waitForCondition(
++      () => replacementURL !== null && win.gBrowser.tabs.length === 1,
++      "Expected a content-requested final-tab close to create a replacement tab"
++    );
++    ok(
++      closeEvent.defaultPrevented,
++      "The browser should consume the content close request after replacing the tab"
++    );
++    is(
++      replacementURL,
++      SECUREOS_LOCALHOST_URL,
++      "A content-requested final-tab close should reopen localhost"
 +    );
 +    is(win.gBrowser.tabs.length, 1, "The browser window should remain open");
 +  } finally {
@@ -121,15 +210,60 @@ new file mode 100644
 +    await BrowserTestUtils.closeWindow(win);
 +  }
 +});
+diff --git a/browser/base/content/utilityOverlay.js b/browser/base/content/utilityOverlay.js
+--- a/browser/base/content/utilityOverlay.js
++++ b/browser/base/content/utilityOverlay.js
+@@ -32,6 +32,8 @@
+   )
+ );
+ 
++const SECUREOS_LOCALHOST_URL = "https://localhost";
++
+ Object.defineProperty(this, "BROWSER_NEW_TAB_URL", {
+   enumerable: true,
+   get() {
+@@ -62,7 +64,7 @@
+         return "about:privatebrowsing";
+       }
+     }
+-    return AboutNewTab.newTabURL;
++    return SECUREOS_LOCALHOST_URL;
+   },
+ });
+ 
 diff --git a/browser/components/tabbrowser/content/tabbrowser.js b/browser/components/tabbrowser/content/tabbrowser.js
 --- a/browser/components/tabbrowser/content/tabbrowser.js
 +++ b/browser/components/tabbrowser/content/tabbrowser.js
-@@ -5877,7 +5877,7 @@
+@@ -4899,7 +4899,7 @@
        aTab._mouseleave();
  
        if (newTab) {
 -        this.addTrustedTab(BROWSER_NEW_TAB_URL, {
 +        this.addTrustedTab("https://localhost", {
            skipAnimation: true,
-           // In the event that insertAfterCurrent is set and the current tab is
-           // inside a group that is being closed we want to avoid creating the
+         });
+       } else {
+@@ -7330,6 +7330,23 @@
+           // We already did PermitUnload in the content process
+           // for this tab (the only one in the window). So we don't
+           // need to do it again for any tabs.
++          if (
++            !Services.prefs.getBoolPref("browser.tabs.closeWindowWithLastTab")
++          ) {
++            let tab = this.getTabForBrowser(browser);
++            if (tab) {
++              this.addTrustedTab("https://localhost", {
++                skipAnimation: true,
++              });
++              this.removeTab(tab, {
++                animate: false,
++                skipPermitUnload: true,
++              });
++              event.preventDefault();
++              return;
++            }
++          }
++
+           window.skipNextCanClose = true;
+           // In the parent-process browser case, the nsCloseEvent will actually take
+           // care of tearing down the window, but we need to do this ourselves in the

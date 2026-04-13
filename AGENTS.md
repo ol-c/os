@@ -212,10 +212,8 @@ Milestones 1 and 2 are complete.
 We are currently focused on Milestone 3.
 
 Immediate next task:
-- Add a browser terminal surface at `https://localhost/terminal` where each visit creates a fresh terminal session inside the guest.
-- Use a battle-tested terminal stack for that proof, with terminal behavior that is robust enough for interactive full-screen terminal programs.
-- Make the browser tab title follow the terminal title stream when available, preferring current directory when idle and foreground command when the shell emits it.
-- Document the new terminal proof and keep the Firefox packaged-patch workflow documented as a follow-on after the terminal proof lands.
+- Replace the current 5 minute terminal idle timeout with a more reliable terminal session cleanup strategy.
+- Document the terminal cleanup behavior and keep the Firefox packaged-patch workflow documented as a follow-on after the terminal proof lands.
 
 Implementation status:
 - [x] Chose QEMU for the first development backend.
@@ -235,7 +233,8 @@ Implementation status:
 - [x] Make the terminal page title follow the shell title stream when available, with a fallback title when not available.
 - [x] Investigate and fix the remaining extra line shown after terminal command output.
 - [x] Keep terminal behavior modular enough to test independently, including closing the browser tab when the root terminal session exits instead of showing a dead terminal interface.
-- [ ] Extend the Firefox localhost shell behavior so opening a new tab also loads `https://localhost/` without regressing the final-tab reopen behavior. (fix the fragile tab exit bug as well)
+- [x] Extend the Firefox localhost shell behavior so opening a new tab also loads `https://localhost/` without regressing the final-tab reopen behavior. (fix the fragile tab exit bug as well)
+- [x] Add a Google Cloud Batch helper for remote patched-Firefox builds with Cloud Storage result handoff and explicit kill/fetch/cleanup commands.
 - [ ] Replace the current 5 minute idle timeout with a more reliable terminal session cleanup strategy.
 - [ ] Define the Milestone 3 browser-based system controls proof surface and test strategy.
 - [ ] Implement the first browser-visible system status surfaces for core device utilities.
@@ -247,7 +246,7 @@ Implementation status:
 - [ ] Document the validate-inside-VM, then package-with-Nix workflow for Firefox and browser-surface changes.
 
 Known bugs to track:
-- [ ] Firefox localhost replacement is too fragile: when the last terminal tab closes itself after root shell exit, Firefox does not open a replacement `https://localhost` tab. The terminal page should not own this; fix the browser shell patch so all last-tab closure paths get the localhost replacement behavior.
+- [x] Firefox localhost replacement is too fragile: when the last terminal tab closes itself after root shell exit, Firefox does not open a replacement `https://localhost` tab. The terminal page should not own this; fix the browser shell patch so all last-tab closure paths get the localhost replacement behavior.
 
 # Deferred Decisions
 

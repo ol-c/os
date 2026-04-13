@@ -234,8 +234,12 @@ test_packages_firefox_with_localhost_patch() {
   [[ "$flake_contents" != *"milestone2Module"* ]] || fail "expected flake to remove milestone2 module wiring"
   [[ "$flake_contents" != *"milestone1-image"* ]] || fail "expected flake to remove milestone1 image target"
   [[ "$flake_contents" != *"milestone2-image"* ]] || fail "expected flake to remove milestone2 image target"
-  [[ "$patch_contents" == *"+        this.addTrustedTab(\"https://localhost\", {"* ]] || fail "expected Firefox patch to replace the last closed tab with localhost"
-  [[ "$patch_contents" == *"browser_closeLastTab_loads_localhost.js"* ]] || fail "expected Firefox patch to add a browser regression test"
+  [[ "$patch_contents" == *"const SECUREOS_LOCALHOST_URL = \"https://localhost\";"* ]] || fail "expected Firefox patch to define the localhost shell URL"
+  [[ "$patch_contents" == *"+    return SECUREOS_LOCALHOST_URL;"* ]] || fail "expected Firefox patch to point new tabs at localhost"
+  [[ "$patch_contents" == *"+              this.addTrustedTab(\"https://localhost\", {"* ]] || fail "expected Firefox patch to replace self-closing final tabs with localhost"
+  [[ "$patch_contents" == *"browser_localhost_shell.js"* ]] || fail "expected Firefox patch to add browser regression tests"
+  [[ "$patch_contents" == *"test_new_tab_uses_localhost_url"* ]] || fail "expected Firefox patch to test new-tab localhost behavior"
+  [[ "$patch_contents" == *"test_dom_window_close_last_tab_uses_localhost"* ]] || fail "expected Firefox patch to test terminal-style final-tab closure"
 }
 
 test_requires_nix

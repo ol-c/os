@@ -1,0 +1,652 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_TARGET=".#firefox-localhost"
+DEFAULT_BUCKET="ol-c-os-dev-builds"
+DEFAULT_LOCATION="us-central1"
+DEFAULT_ZONE="us-central1-a"
+DEFAULT_MACHINE_TYPE="h4d-standard-192"
+DEFAULT_BOOT_DISK_TYPE="hyperdisk-balanced"
+DEFAULT_BOOT_DISK_SIZE="300GB"
+DEFAULT_TIMEOUT="3h"
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+LOCAL_BUILDS_DIR="${ROOT_DIR}/.gcp-builds"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  build-firefox-remote [TARGET]
+  build-firefox-remote --dry-run [TARGET]
+  build-firefox-remote --logs JOB_ID
+  build-firefox-remote --status JOB_ID
+  build-firefox-remote --fetch JOB_ID
+  build-firefox-remote --kill JOB_ID
+  build-firefox-remote --cleanup JOB_ID
+
+Builds the current repo on Google Cloud Batch and imports the resulting Nix
+closure locally. TARGET defaults to .#firefox-localhost.
+
+Environment overrides:
+  OLC_GCP_PROJECT
+  OLC_GCP_BUCKET            default: ol-c-os-dev-builds
+  OLC_GCP_LOCATION          default: us-central1
+  OLC_GCP_ZONE              default: us-central1-a
+  OLC_GCP_MACHINE_TYPE      default: h4d-standard-192
+  OLC_GCP_BOOT_DISK_TYPE    default: hyperdisk-balanced
+  OLC_GCP_BOOT_DISK_SIZE    default: 300GB
+  OLC_GCP_TIMEOUT           default: 3h
+EOF
+}
+
+fail() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    fail "required command not found: $1"
+  fi
+}
+
+gcloud_quiet() {
+  gcloud --quiet "$@"
+}
+
+config_value() {
+  gcloud config get-value "$1" 2>/dev/null || true
+}
+
+active_account() {
+  gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | sed -n '1p'
+}
+
+stdin_is_interactive() {
+  [[ -t 0 || "${OLC_GCP_ASSUME_INTERACTIVE:-0}" == "1" ]]
+}
+
+normalize_disk_size_gb() {
+  local size="$1"
+  case "$size" in
+    *GB)
+      printf '%s\n' "${size%GB}"
+      ;;
+    *G)
+      printf '%s\n' "${size%G}"
+      ;;
+    *)
+      printf '%s\n' "$size"
+      ;;
+  esac
+}
+
+timeout_to_seconds() {
+  local timeout="$1"
+  case "$timeout" in
+    *h)
+      printf '%s\n' "$((${timeout%h} * 3600))"
+      ;;
+    *m)
+      printf '%s\n' "$((${timeout%m} * 60))"
+      ;;
+    *s)
+      printf '%s\n' "${timeout%s}"
+      ;;
+    *)
+      printf '%s\n' "$timeout"
+      ;;
+  esac
+}
+
+json_escape() {
+  perl -0777 -pe 's/\\/\\\\/g; s/"/\\"/g; s/\n/\\n/g; s/\r/\\r/g; s/\t/\\t/g'
+}
+
+print_gcloud_context() {
+  local project="$1" location="$2" zone="$3" bucket="$4" target="$5" machine_type="$6" timeout="$7"
+
+  echo "Google Cloud configurations:"
+  gcloud config configurations list || true
+  echo
+  echo "Google Cloud auth accounts:"
+  gcloud auth list || true
+  echo
+  echo "Selected remote build settings:"
+  echo "  account:      $(active_account)"
+  echo "  project:      $project"
+  echo "  location:     $location"
+  echo "  zone:         $zone"
+  echo "  bucket:       gs://$bucket"
+  echo "  target:       $target"
+  echo "  machine:      $machine_type"
+  echo "  timeout:      $timeout"
+  echo
+}
+
+resolve_settings() {
+  local allow_guidance="${1:-0}" account selected_project
+
+  PROJECT="${OLC_GCP_PROJECT:-$(config_value project)}"
+  BUCKET="${OLC_GCP_BUCKET:-$DEFAULT_BUCKET}"
+  LOCATION="${OLC_GCP_LOCATION:-$DEFAULT_LOCATION}"
+  ZONE="${OLC_GCP_ZONE:-$DEFAULT_ZONE}"
+  MACHINE_TYPE="${OLC_GCP_MACHINE_TYPE:-$DEFAULT_MACHINE_TYPE}"
+  BOOT_DISK_TYPE="${OLC_GCP_BOOT_DISK_TYPE:-$DEFAULT_BOOT_DISK_TYPE}"
+  BOOT_DISK_SIZE="${OLC_GCP_BOOT_DISK_SIZE:-$DEFAULT_BOOT_DISK_SIZE}"
+  TIMEOUT="${OLC_GCP_TIMEOUT:-$DEFAULT_TIMEOUT}"
+  BOOT_DISK_SIZE_GB="$(normalize_disk_size_gb "$BOOT_DISK_SIZE")"
+  TIMEOUT_SECONDS="$(timeout_to_seconds "$TIMEOUT")"
+
+  account="$(active_account)"
+  if [[ -z "$account" ]]; then
+    if [[ "$allow_guidance" == "1" ]]; then
+      echo "No active Google Cloud account found. Launching browser login..."
+      gcloud auth login --launch-browser || true
+      account="$(active_account)"
+    fi
+    [[ -n "$account" ]] || fail "no active Google Cloud account; run: gcloud auth login --launch-browser"
+  fi
+
+  if [[ -z "$PROJECT" ]]; then
+    if [[ "$allow_guidance" == "1" ]]; then
+      echo "No Google Cloud project is selected."
+      echo "Available projects:"
+      gcloud projects list || true
+      echo
+      if stdin_is_interactive; then
+        read -r -p "Project ID to use: " selected_project
+        [[ -n "$selected_project" ]] || fail "project ID is required"
+        PROJECT="$selected_project"
+        if [[ -z "${OLC_GCP_PROJECT:-}" ]]; then
+          gcloud config set project "$PROJECT"
+        fi
+      else
+        fail "no Google Cloud project selected; run: gcloud config set project PROJECT_ID"
+      fi
+    else
+      fail "no Google Cloud project selected; run: gcloud config set project PROJECT_ID"
+    fi
+  fi
+}
+
+ensure_bucket() {
+  local bucket="$1" location="$2"
+
+  if gcloud storage buckets describe "gs://${bucket}" >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "Creating staging bucket gs://${bucket}"
+  if ! gcloud_quiet storage buckets create "gs://${bucket}" \
+    --location="$location" \
+    --uniform-bucket-level-access \
+    --public-access-prevention; then
+    fail "unable to create gs://${bucket}; bucket names are global, so try: OLC_GCP_BUCKET=<unique-name> $0"
+  fi
+}
+
+make_source_archive() {
+  local archive="$1"
+
+  tar -czf "$archive" \
+    --exclude='./.git' \
+    --exclude='./.codex-home' \
+    --exclude='./.tmp-tests' \
+    --exclude='./.gcp-builds' \
+    --exclude='./terminal-client/node_modules' \
+    --exclude='./result' \
+    --exclude='./result-*' \
+    -C "$ROOT_DIR" .
+}
+
+remote_script() {
+  cat <<'REMOTE'
+#!/usr/bin/env bash
+set -euo pipefail
+
+log() {
+  printf '[ol-c-remote] %s\n' "$*"
+}
+
+upload_if_exists() {
+  local path="$1" name="$2"
+  if [[ -e "$path" ]]; then
+    gcloud --quiet storage cp "$path" "${RUN_URI}/${name}" || true
+  fi
+}
+
+finish_failure() {
+  local status="$1"
+  printf '%s\n' "$status" >/tmp/olc-status.txt
+  upload_if_exists /tmp/olc-build.log build.log
+  upload_if_exists /tmp/olc-status.txt status.txt
+  exit "$status"
+}
+
+trap 'finish_failure $?' ERR
+
+export DEBIAN_FRONTEND=noninteractive
+
+log "installing host tools"
+apt-get update
+apt-get install -y ca-certificates curl gnupg tar gzip xz-utils
+
+log "installing Google Cloud CLI"
+install -d -m 0755 /usr/share/keyrings
+curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+  | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+printf 'deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main\n' \
+  >/etc/apt/sources.list.d/google-cloud-sdk.list
+apt-get update
+apt-get install -y google-cloud-cli
+
+log "installing Nix"
+mkdir -p /etc/nix
+cat >/etc/nix/nix.conf <<'NIXCONF'
+experimental-features = nix-command flakes
+trusted-users = root
+max-jobs = auto
+cores = 0
+NIXCONF
+curl -fsSL https://nixos.org/nix/install | sh -s -- --daemon --yes
+set +u
+. /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+set -u
+
+log "downloading source archive from ${SOURCE_URI}"
+mkdir -p /work/source
+gcloud --quiet storage cp "$SOURCE_URI" /tmp/olc-source.tar.gz
+tar -xzf /tmp/olc-source.tar.gz -C /work/source
+
+log "building ${BUILD_TARGET}"
+cd /work/source
+set +e
+nix build "$BUILD_TARGET" --print-build-logs --out-link /tmp/olc-result 2>&1 | tee /tmp/olc-build.log
+build_status="${PIPESTATUS[0]}"
+set -e
+if [[ "$build_status" -ne 0 ]]; then
+  log "build failed with status ${build_status}"
+  finish_failure "$build_status"
+fi
+
+remote_out="$(readlink -f /tmp/olc-result)"
+printf '%s\n' "$remote_out" >/tmp/olc-result-path.txt
+printf '%s\n' "$BUILD_TARGET" >/tmp/olc-target.txt
+printf '%s\n' 0 >/tmp/olc-status.txt
+
+log "exporting Nix closure ${remote_out}"
+nix copy --to file:///tmp/olc-nix-cache "$remote_out" 2>&1 | tee -a /tmp/olc-build.log
+tar -C /tmp -czf /tmp/olc-nix-cache.tar.gz olc-nix-cache
+
+log "uploading result artifacts to ${RUN_URI}"
+gcloud --quiet storage cp /tmp/olc-nix-cache.tar.gz "${RUN_URI}/olc-nix-cache.tar.gz"
+gcloud --quiet storage cp /tmp/olc-result-path.txt "${RUN_URI}/result-path.txt"
+gcloud --quiet storage cp /tmp/olc-target.txt "${RUN_URI}/target.txt"
+gcloud --quiet storage cp /tmp/olc-status.txt "${RUN_URI}/status.txt"
+gcloud --quiet storage cp /tmp/olc-build.log "${RUN_URI}/build.log"
+
+log "build complete: ${remote_out}"
+REMOTE
+}
+
+write_batch_config() {
+  local config_path="$1" job_id="$2" target="$3" source_uri="$4" run_uri="$5"
+  local script_text escaped_script
+
+  script_text="$(
+    cat <<EOF
+export BUILD_TARGET="$(printf '%s' "$target" | sed 's/"/\\"/g')"
+export SOURCE_URI="$(printf '%s' "$source_uri" | sed 's/"/\\"/g')"
+export RUN_URI="$(printf '%s' "$run_uri" | sed 's/"/\\"/g')"
+$(remote_script)
+EOF
+  )"
+  escaped_script="$(printf '%s' "$script_text" | json_escape)"
+
+  cat >"$config_path" <<EOF
+{
+  "taskGroups": [
+    {
+      "taskSpec": {
+        "runnables": [
+          {
+            "script": {
+              "text": "${escaped_script}"
+            }
+          }
+        ],
+        "maxRunDuration": "${TIMEOUT_SECONDS}s"
+      },
+      "taskCount": 1,
+      "parallelism": 1
+    }
+  ],
+  "allocationPolicy": {
+    "location": {
+      "allowedLocations": [
+        "zones/${ZONE}"
+      ]
+    },
+    "instances": [
+      {
+        "policy": {
+          "machineType": "${MACHINE_TYPE}",
+          "bootDisk": {
+            "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64",
+            "type": "${BOOT_DISK_TYPE}",
+            "sizeGb": "${BOOT_DISK_SIZE_GB}"
+          },
+          "provisioningModel": "STANDARD"
+        }
+      }
+    ]
+  },
+  "logsPolicy": {
+    "destination": "CLOUD_LOGGING"
+  },
+  "labels": {
+    "olc-purpose": "firefox-remote-build",
+    "olc-job": "${job_id}"
+  }
+}
+EOF
+}
+
+run_prefix() {
+  local job_id="$1"
+  printf 'gs://%s/runs/%s' "$BUCKET" "$job_id"
+}
+
+job_state() {
+  local job_id="$1"
+  gcloud batch jobs describe "$job_id" \
+    --project="$PROJECT" \
+    --location="$LOCATION" \
+    --format='value(status.state)' 2>/dev/null || true
+}
+
+job_uid() {
+  local job_id="$1"
+  gcloud batch jobs describe "$job_id" \
+    --project="$PROJECT" \
+    --location="$LOCATION" \
+    --format='value(uid)' 2>/dev/null || true
+}
+
+log_filter_for_job() {
+  local job_id="$1" uid
+  uid="$(job_uid "$job_id")"
+  if [[ -n "$uid" ]]; then
+    printf 'logName="projects/%s/logs/batch_task_logs" AND labels.job_uid="%s"' "$PROJECT" "$uid"
+  else
+    printf 'logName="projects/%s/logs/batch_task_logs" AND labels.job_id="%s"' "$PROJECT" "$job_id"
+  fi
+}
+
+tail_logs() {
+  local job_id="$1" filter
+  filter="$(log_filter_for_job "$job_id")"
+
+  echo "Tailing Cloud Logging for ${job_id}; rerun this command after any network drop:"
+  echo "  $0 --logs ${job_id}"
+  echo
+
+  if gcloud beta logging tail --help >/dev/null 2>&1; then
+    gcloud beta logging tail "$filter" \
+      --project="$PROJECT" \
+      --format='value(textPayload)'
+    return
+  fi
+
+  while true; do
+    gcloud logging read "$filter" \
+      --project="$PROJECT" \
+      --limit=100 \
+      --order=asc \
+      --format='value(textPayload)' || true
+    sleep 20
+  done
+}
+
+wait_for_job() {
+  local job_id="$1" state
+
+  while true; do
+    state="$(job_state "$job_id")"
+    case "$state" in
+      SUCCEEDED)
+        echo "Batch job ${job_id} succeeded"
+        return 0
+        ;;
+      FAILED|DELETION_IN_PROGRESS)
+        echo "Batch job ${job_id} ended with state ${state}" >&2
+        return 1
+        ;;
+      "")
+        echo "Waiting for Batch job ${job_id}; state not available yet"
+        ;;
+      *)
+        echo "Waiting for Batch job ${job_id}; state=${state}"
+        ;;
+    esac
+    sleep 30
+  done
+}
+
+fetch_result() {
+  local job_id="$1" dir cache_archive cache_dir remote_out target
+
+  mkdir -p "$LOCAL_BUILDS_DIR"
+  dir="${LOCAL_BUILDS_DIR}/${job_id}"
+  cache_archive="${dir}/olc-nix-cache.tar.gz"
+  cache_dir="${dir}/olc-nix-cache"
+  mkdir -p "$dir"
+
+  echo "Downloading artifacts for ${job_id}"
+  gcloud_quiet storage cp "$(run_prefix "$job_id")/result-path.txt" "${dir}/result-path.txt"
+  gcloud_quiet storage cp "$(run_prefix "$job_id")/target.txt" "${dir}/target.txt"
+  gcloud_quiet storage cp "$(run_prefix "$job_id")/build.log" "${dir}/build.log" || true
+  gcloud_quiet storage cp "$(run_prefix "$job_id")/olc-nix-cache.tar.gz" "$cache_archive"
+
+  rm -rf "$cache_dir"
+  tar -xzf "$cache_archive" -C "$dir"
+
+  remote_out="$(sed -n '1p' "${dir}/result-path.txt")"
+  target="$(sed -n '1p' "${dir}/target.txt")"
+
+  if command -v nix >/dev/null 2>&1; then
+    echo "Importing ${remote_out} into the local Nix store"
+    nix copy --no-check-sigs --from "file://${cache_dir}" "$remote_out"
+    if [[ "$target" == "$DEFAULT_TARGET" ]]; then
+      ln -sfn "$remote_out" "${ROOT_DIR}/result-gcp-firefox-localhost"
+    fi
+  else
+    echo "Local nix not found; downloaded cache archive but did not import it."
+    echo "After installing nix, run:"
+    echo "  nix copy --from file://${cache_dir} ${remote_out}"
+  fi
+
+  echo
+  echo "Remote result: ${remote_out}"
+  echo "Local artifacts: ${dir}"
+  echo "Cleanup GCS artifacts when done:"
+  echo "  $0 --cleanup ${job_id}"
+}
+
+submit_build() {
+  local target="$1" dry_run="$2"
+  local job_id tmpdir archive config source_uri run_uri tail_pid
+
+  job_id="olc-firefox-$(date -u +%Y%m%d-%H%M%S)-$$"
+  tmpdir="$(mktemp -d)"
+  archive="${tmpdir}/source.tar.gz"
+  config="${tmpdir}/batch-job.json"
+  run_uri="$(run_prefix "$job_id")"
+  source_uri="${run_uri}/source.tar.gz"
+
+  print_gcloud_context "$PROJECT" "$LOCATION" "$ZONE" "$BUCKET" "$target" "$MACHINE_TYPE" "$TIMEOUT"
+  if ! command -v nix >/dev/null 2>&1; then
+    echo "warning: local nix not found; the remote build can run, but automatic local import will be skipped during fetch" >&2
+    echo
+  fi
+
+  echo "Creating source archive"
+  make_source_archive "$archive"
+
+  write_batch_config "$config" "$job_id" "$target" "$source_uri" "$run_uri"
+
+  if [[ "$dry_run" == "1" ]]; then
+    echo "Dry run only. Would upload:"
+    echo "  $archive -> $source_uri"
+    echo "Would submit Batch job:"
+    echo "  gcloud batch jobs submit $job_id --project=$PROJECT --location=$LOCATION --config=$config"
+    echo
+    echo "Batch config:"
+    sed -n '1,260p' "$config"
+    rm -rf "$tmpdir"
+    return
+  fi
+
+  ensure_bucket "$BUCKET" "$LOCATION"
+
+  echo "Uploading source archive to ${source_uri}"
+  gcloud_quiet storage cp "$archive" "$source_uri"
+
+  echo "Submitting Batch job ${job_id}"
+  if ! gcloud batch jobs submit "$job_id" \
+    --project="$PROJECT" \
+    --location="$LOCATION" \
+    --config="$config"; then
+    cat >&2 <<EOF
+Batch submission failed. Common causes are H4D quota or zone availability.
+
+Try another H4D zone:
+  OLC_GCP_LOCATION=europe-west4 OLC_GCP_ZONE=europe-west4-b $0 ${target}
+
+Or use the smaller fallback:
+  OLC_GCP_MACHINE_TYPE=c2-standard-60 OLC_GCP_BOOT_DISK_TYPE=pd-ssd $0 ${target}
+EOF
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  rm -rf "$tmpdir"
+
+  echo
+  echo "Job submitted: ${job_id}"
+  echo "Kill it at any time with:"
+  echo "  $0 --kill ${job_id}"
+  echo
+
+  tail_logs "$job_id" &
+  tail_pid="$!"
+  if wait_for_job "$job_id"; then
+    kill "$tail_pid" >/dev/null 2>&1 || true
+    wait "$tail_pid" >/dev/null 2>&1 || true
+    fetch_result "$job_id"
+  else
+    kill "$tail_pid" >/dev/null 2>&1 || true
+    wait "$tail_pid" >/dev/null 2>&1 || true
+    echo "Build failed. Fetch logs with:"
+    echo "  gcloud storage cp $(run_prefix "$job_id")/build.log ."
+    echo "Compute should already be released by Batch. Delete job metadata with:"
+    echo "  gcloud batch jobs delete ${job_id} --location=${LOCATION} --project=${PROJECT} --quiet"
+    return 1
+  fi
+}
+
+show_status() {
+  local job_id="$1"
+  echo "Job: ${job_id}"
+  echo "State: $(job_state "$job_id")"
+  echo "Artifacts: $(run_prefix "$job_id")/"
+  echo
+  gcloud batch jobs describe "$job_id" \
+    --project="$PROJECT" \
+    --location="$LOCATION" \
+    --format='yaml(name,uid,status)'
+}
+
+kill_job() {
+  local job_id="$1"
+  echo "Deleting Batch job ${job_id}; this cancels running tasks and releases compute."
+  gcloud_quiet batch jobs delete "$job_id" \
+    --project="$PROJECT" \
+    --location="$LOCATION"
+}
+
+cleanup_run() {
+  local job_id="$1"
+  echo "Deleting GCS artifacts at $(run_prefix "$job_id")/"
+  gcloud_quiet storage rm --recursive "$(run_prefix "$job_id")"
+}
+
+main() {
+  local mode="submit" dry_run="0" target="$DEFAULT_TARGET" job_id=""
+
+  case "${1:-}" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --dry-run)
+      dry_run="1"
+      shift
+      target="${1:-$DEFAULT_TARGET}"
+      ;;
+    --logs|--status|--fetch|--kill|--cleanup)
+      mode="${1#--}"
+      shift
+      job_id="${1:-}"
+      [[ -n "$job_id" ]] || fail "--${mode} requires JOB_ID"
+      ;;
+    --*)
+      fail "unknown option: $1"
+      ;;
+    "")
+      ;;
+    *)
+      target="$1"
+      ;;
+  esac
+
+  require_command gcloud
+  case "$mode" in
+    submit)
+      resolve_settings 1
+      ;;
+    *)
+      resolve_settings 0
+      ;;
+  esac
+
+  case "$mode" in
+    submit)
+      require_command perl
+      require_command tar
+      submit_build "$target" "$dry_run"
+      ;;
+    logs)
+      tail_logs "$job_id"
+      ;;
+    status)
+      show_status "$job_id"
+      ;;
+    fetch)
+      require_command tar
+      fetch_result "$job_id"
+      ;;
+    kill)
+      kill_job "$job_id"
+      ;;
+    cleanup)
+      cleanup_run "$job_id"
+      ;;
+    *)
+      fail "unknown mode: $mode"
+      ;;
+  esac
+}
+
+main "$@"
