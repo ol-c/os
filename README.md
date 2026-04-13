@@ -38,7 +38,7 @@ OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED=0 ./launch-vm
 OLC_QEMU_GDK_SCALE=2 OLC_QEMU_GDK_DPI_SCALE=0.5 ./launch-vm
 ```
 
-Firefox in the guest is packaged from nixpkgs with a repo-local source patch. The patch currently forces the last-tab replacement path to reopen `https://localhost` so the browser always returns to the local control surface.
+Firefox in the guest is packaged from pinned nixpkgs with a repo-local browser frontend patch. The normal VM uses the fast packaged target, which repacks the pinned nixpkgs Firefox browser chrome assets instead of recompiling Firefox for every JavaScript-only OL-C shell edit.
 
 ## Nix Layout
 
@@ -74,11 +74,11 @@ Session behavior for this proof:
 
 ## Firefox Patch Workflow
 
-The repo has two distinct Firefox workflows. Use them for different purposes.
+The repo has three distinct Firefox gates. Use them for different purposes.
 
-### 1. Reproducible packaged path
+### 1. Fast packaged path
 
-Use this when you need to prove that the repo-local Firefox patch still builds through Nix and still works in the guest image.
+Use this when you need a deterministic Nix package and VM image for browser frontend edits without waiting for a full Firefox source compile.
 
 ```sh
 git add patches/firefox/0001-close-last-tab-to-localhost.patch tests/test-build-vm.sh flake.nix AGENTS.md
@@ -88,9 +88,19 @@ nix build .#firefox-localhost --print-build-logs
 
 Then validate inside the VM by closing the final Firefox tab with the tab close button or `Ctrl+W` and confirming that Firefox stays open on `https://localhost`.
 
-This is the authoritative packaging check, but it is intentionally not the main edit-test-edit loop because rebuilding packaged Firefox is slow.
+`.#firefox-localhost` is the default packaged target used by `.#ol-c-image`. It starts from pinned nixpkgs Firefox and applies the runtime browser chrome hunks from `patches/firefox/0001-close-last-tab-to-localhost.patch` into `browser/omni.ja`. It is intentionally limited to browser frontend assets such as `browser-commands.js` and `tabbrowser.js`.
 
-### 2. Fast Firefox source iteration
+### 2. Full source compatibility path
+
+Use this when you need to prove that the repo-local Firefox patch still applies through the nixpkgs Firefox source build pipeline.
+
+```sh
+nix build .#firefox-localhost-source --print-build-logs
+```
+
+This is slower because it appends the repo patch to `firefox-unwrapped` before Firefox is built. Keep it as the final compatibility gate for Firefox updates, source patch drift, and any patch that touches C++, Rust, WebIDL, build files, generated interfaces, preprocessing-sensitive files, or test registration.
+
+### 3. Fast Firefox source iteration
 
 Use this when you are actively changing Firefox behavior and need quick feedback.
 
@@ -99,7 +109,7 @@ The intended inner loop is:
 - work in a Firefox source checkout from inside the guest
 - validate the behavior change in that faster loop first
 - once the behavior is correct, export or refresh the repo patch at `patches/firefox/0001-close-last-tab-to-localhost.patch`
-- rerun the reproducible packaged path above
+- rerun the fast packaged path above, then use the full source compatibility path as the source-build gate
 
 The next Firefox packaging proof is no longer the immediate next milestone task. The current next milestone proof is the browser terminal at `https://localhost/terminal`. After that lands, the same split still applies: validate Firefox source changes in the fast loop first, then use the packaged build as the final gate.
 
@@ -116,10 +126,11 @@ The packaged Firefox change in this repo lives at:
 
 The Nix packaging entry point is:
 - `flake.nix` package `.#firefox-localhost`
+- `flake.nix` package `.#firefox-localhost-source`
 
-When the Firefox source change is validated, update the patch file, rerun the build and launch flow above, and keep `tests/test-build-vm.sh` aligned with the expected packaging contract.
+When the Firefox source change is validated, update the patch file, rerun the fast packaged build and launch flow above, run the full source compatibility path when the patch or Firefox version changes, and keep `tests/test-build-vm.sh` aligned with the expected packaging contract.
 
-Firefox updates should be handled by bumping the repo's pinned nixpkgs input, refreshing the patch if it drifts, and rerunning the repo tests plus a VM smoke boot.
+Firefox updates should be handled by bumping the repo's pinned nixpkgs input, refreshing the patch if it drifts, and rerunning the repo tests, the full source compatibility path, and a VM smoke boot.
 
 ## Host Setup
 

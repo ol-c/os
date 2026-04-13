@@ -13,21 +13,29 @@
     let
       system = "x86_64-linux";
       firefoxLocalhostPatch = ./patches/firefox/0001-close-last-tab-to-localhost.patch;
-      firefoxOverlay = final: prev: {
+      firefoxSourceOverlay = final: prev: {
         "firefox-unwrapped" = prev."firefox-unwrapped".overrideAttrs (old: {
           patches = (old.patches or []) ++ [ firefoxLocalhostPatch ];
         });
       };
+      firefoxFastOverlay = import ./nix/firefox-localhost-fast.nix {
+        inherit firefoxLocalhostPatch;
+      };
       firefoxPkgs = import nixpkgs {
         inherit system;
-        overlays = [ firefoxOverlay ];
+        overlays = [ firefoxFastOverlay ];
+      };
+      firefoxSourcePkgs = import nixpkgs {
+        inherit system;
+        overlays = [ firefoxSourceOverlay ];
       };
       overlayModule = {
-        nixpkgs.overlays = [ firefoxOverlay ];
+        nixpkgs.overlays = [ firefoxFastOverlay ];
       };
       olcModule = ./nix/ol-c.nix;
     in {
-      overlays.default = firefoxOverlay;
+      overlays.default = firefoxFastOverlay;
+      overlays.source = firefoxSourceOverlay;
 
       nixosConfigurations."ol-c" = nixpkgs.lib.nixosSystem {
         inherit system;
@@ -37,6 +45,7 @@
 
       packages.${system} = {
         firefox-localhost = firefoxPkgs.firefox;
+        firefox-localhost-source = firefoxSourcePkgs.firefox;
 
         "ol-c-image" = nixos-generators.nixosGenerate {
           inherit system;
