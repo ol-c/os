@@ -10,6 +10,7 @@ export function createDefaultSystemStatus() {
     network: {
       available: true,
       connected: true,
+      implementation: 'Fake backend: selectable wired or offline state for deterministic tests.',
       kind: 'ethernet',
       ssid: null,
       address: '10.0.2.15',
@@ -22,25 +23,30 @@ export function createDefaultSystemStatus() {
     power: {
       available: false,
       charging: null,
+      implementation: 'Fake backend: no battery is exposed in the default test state.',
       percent: null,
       timeRemainingSeconds: null,
     },
     volume: {
       available: true,
+      implementation: 'Fake backend: volume and mute changes are stored in memory.',
       muted: false,
       percent: 40,
     },
     brightness: {
       available: true,
+      implementation: 'Fake backend: brightness changes are stored in memory.',
       percent: 70,
     },
     appearance: {
       available: true,
+      implementation: 'Fake backend: mode changes are stored in memory and applied to this page.',
       mode: 'light',
     },
     bluetooth: {
       available: true,
       enabled: false,
+      implementation: 'Fake backend: Bluetooth power state is stored in memory.',
       discovering: false,
     },
   };
@@ -191,6 +197,7 @@ export function createRealSystemAdapter(options = {}) {
     return {
       available: names.length > 0,
       connected: Boolean(connected),
+      implementation: 'Real guest adapter: reads non-loopback VM interface state; picker refreshes status.',
       kind: connected ? 'ethernet' : null,
       ssid: null,
       address,
@@ -206,7 +213,13 @@ export function createRealSystemAdapter(options = {}) {
       const supplies = await readdir('/sys/class/power_supply');
       const battery = supplies.find(name => name.startsWith('BAT'));
       if (!battery) {
-        return { available: false, charging: null, percent: null, timeRemainingSeconds: null };
+        return {
+          available: false,
+          charging: null,
+          implementation: 'Real guest adapter: checks /sys/class/power_supply; no battery is exposed in this VM.',
+          percent: null,
+          timeRemainingSeconds: null,
+        };
       }
 
       const [capacity, status] = await Promise.all([
@@ -217,11 +230,18 @@ export function createRealSystemAdapter(options = {}) {
       return {
         available: true,
         charging: status ? status.trim().toLowerCase() === 'charging' : null,
+        implementation: 'Real guest adapter: reads battery state from /sys/class/power_supply; read-only.',
         percent: capacity ? Number.parseInt(capacity.trim(), 10) : null,
         timeRemainingSeconds: null,
       };
     } catch {
-      return { available: false, charging: null, percent: null, timeRemainingSeconds: null };
+      return {
+        available: false,
+        charging: null,
+        implementation: 'Real guest adapter: power status path is unavailable.',
+        percent: null,
+        timeRemainingSeconds: null,
+      };
     }
   }
 
@@ -230,22 +250,37 @@ export function createRealSystemAdapter(options = {}) {
     const mute = await safeExecFile(pactl, [ 'get-sink-mute', '@DEFAULT_SINK@' ], { env: commandEnv });
 
     if (!volume || !mute) {
-      return { available: false, muted: null, percent: null };
+      return {
+        available: false,
+        implementation: 'Real guest adapter: PipeWire/Pulse is configured, but no default sink is available.',
+        muted: null,
+        percent: null,
+      };
     }
 
     return {
       available: true,
+      implementation: 'Real guest adapter: controls the default PipeWire/Pulse sink with pactl.',
       muted: parsePactlMute(mute.stdout),
       percent: parsePactlPercent(volume.stdout),
     };
   }
 
   async function readBrightness() {
-    return { available: false, percent: null };
+    return {
+      available: false,
+      implementation: 'Real guest adapter: brightness control is not implemented for the QEMU display yet.',
+      percent: null,
+    };
   }
 
   async function readBluetooth() {
-    return { available: false, enabled: null, discovering: null };
+    return {
+      available: false,
+      enabled: null,
+      implementation: 'Real guest adapter: Bluetooth hardware is not exposed by the VM wrapper yet.',
+      discovering: null,
+    };
   }
 
   async function getStatus() {
@@ -264,6 +299,7 @@ export function createRealSystemAdapter(options = {}) {
       brightness,
       appearance: {
         available: true,
+        implementation: 'Real guest adapter: appearance is process-local and applied to this page.',
         mode: appearanceMode,
       },
       bluetooth,

@@ -174,11 +174,13 @@ export function rootHtml() {
           <span id="network-error" class="error" role="status"></span>
         </p>
         <p id="network-address" class="line"></p>
+        <p id="network-implementation" class="line"></p>
       </section>
 
       <section aria-labelledby="power-heading">
         <h2 id="power-heading">Power</h2>
         <p id="power-status">Power status is loading.</p>
+        <p id="power-implementation" class="line"></p>
       </section>
 
       <section aria-labelledby="sound-heading">
@@ -200,6 +202,7 @@ export function rootHtml() {
           </span>.
           <span id="volume-error" class="error" role="status"></span>
         </p>
+        <p id="volume-implementation" class="line"></p>
       </section>
 
       <section aria-labelledby="display-heading">
@@ -213,6 +216,7 @@ export function rootHtml() {
           </span>.
           <span id="brightness-error" class="error" role="status"></span>
         </p>
+        <p id="brightness-implementation" class="line"></p>
       </section>
 
       <section aria-labelledby="appearance-heading">
@@ -228,6 +232,7 @@ export function rootHtml() {
           </span>.
           <span id="appearance-error" class="error" role="status"></span>
         </p>
+        <p id="appearance-implementation" class="line"></p>
       </section>
 
       <section aria-labelledby="bluetooth-heading">
@@ -243,6 +248,7 @@ export function rootHtml() {
           </span>.
           <span id="bluetooth-error" class="error" role="status"></span>
         </p>
+        <p id="bluetooth-implementation" class="line"></p>
       </section>
 
       <p><a href="/terminal" onclick="window.open('/terminal', '_blank'); return false;">Open terminal</a></p>
@@ -256,20 +262,26 @@ export function rootHtml() {
         network: document.getElementById('network-control'),
         networkError: document.getElementById('network-error'),
         networkAddress: document.getElementById('network-address'),
+        networkImplementation: document.getElementById('network-implementation'),
         powerStatus: document.getElementById('power-status'),
+        powerImplementation: document.getElementById('power-implementation'),
         volume: document.getElementById('volume-control'),
         volumeValue: document.getElementById('volume-value'),
         mute: document.getElementById('mute-control'),
         volumeError: document.getElementById('volume-error'),
+        volumeImplementation: document.getElementById('volume-implementation'),
         brightnessStatus: document.getElementById('brightness-status'),
         brightness: document.getElementById('brightness-control'),
         brightnessValue: document.getElementById('brightness-value'),
         brightnessError: document.getElementById('brightness-error'),
+        brightnessImplementation: document.getElementById('brightness-implementation'),
         appearance: document.getElementById('appearance-control'),
         appearanceError: document.getElementById('appearance-error'),
+        appearanceImplementation: document.getElementById('appearance-implementation'),
         bluetoothStatus: document.getElementById('bluetooth-status'),
         bluetooth: document.getElementById('bluetooth-control'),
         bluetoothError: document.getElementById('bluetooth-error'),
+        bluetoothImplementation: document.getElementById('bluetooth-implementation'),
       };
 
       function boolText(value, trueText, falseText, unknownText = 'unknown') {
@@ -315,25 +327,30 @@ export function rootHtml() {
           controls.network.style.display = 'none';
           controls.networkAddress.textContent = '';
         }
+        controls.networkImplementation.textContent = 'Implementation: ' + status.network.implementation;
 
         if (status.power.available) {
           controls.powerStatus.textContent = 'Battery is at ' + percentText(status.power.percent) + ' and is ' + boolText(status.power.charging, 'charging', 'not charging') + '.';
         } else {
           controls.powerStatus.textContent = 'Battery is unavailable in this VM.';
         }
+        controls.powerImplementation.textContent = 'Implementation: ' + status.power.implementation;
 
         setControlEnabled(controls.volume, status.volume.available);
         setControlEnabled(controls.mute, status.volume.available);
         controls.volume.value = Number.isInteger(status.volume.percent) ? String(status.volume.percent) : '0';
         controls.volumeValue.textContent = percentText(status.volume.percent);
         controls.mute.value = status.volume.muted ? 'true' : 'false';
+        controls.volumeImplementation.textContent = 'Implementation: ' + status.volume.implementation;
 
         setControlEnabled(controls.brightness, status.brightness.available);
         controls.brightness.value = Number.isInteger(status.brightness.percent) ? String(status.brightness.percent) : '0';
         controls.brightnessValue.textContent = status.brightness.available ? percentText(status.brightness.percent) : 'unavailable';
+        controls.brightnessImplementation.textContent = 'Implementation: ' + status.brightness.implementation;
 
         setControlEnabled(controls.appearance, status.appearance.available);
         controls.appearance.value = status.appearance.mode;
+        controls.appearanceImplementation.textContent = 'Implementation: ' + status.appearance.implementation;
 
         setControlEnabled(controls.bluetooth, status.bluetooth.available);
         controls.bluetooth.value = status.bluetooth.enabled ? 'true' : 'false';
@@ -344,6 +361,7 @@ export function rootHtml() {
           controls.bluetoothStatus.firstChild.textContent = 'Bluetooth is ';
           controls.bluetooth.style.display = '';
         }
+        controls.bluetoothImplementation.textContent = 'Implementation: ' + status.bluetooth.implementation;
       }
 
       async function postCommand(path, body, errorElement, control) {

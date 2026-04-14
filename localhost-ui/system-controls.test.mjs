@@ -15,8 +15,11 @@ test('fake adapter returns a complete initial status', async () => {
     'bluetooth',
   ]);
   assert.equal(status.network.connected, true);
+  assert.match(status.network.implementation, /Fake backend/);
   assert.equal(status.volume.percent, 40);
+  assert.match(status.volume.implementation, /Fake backend/);
   assert.equal(status.appearance.mode, 'light');
+  assert.match(status.appearance.implementation, /Fake backend/);
 });
 
 test('fake adapter updates mutable controls', async () => {

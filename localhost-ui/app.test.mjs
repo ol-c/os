@@ -73,6 +73,12 @@ test('root page exposes the system document and inline controls', async () => {
     assert.match(html, /id="bluetooth-heading">Bluetooth/);
     assert.match(html, /new EventSource\('\/api\/system\/events'\)/);
     assert.match(html, /id="network-control"/);
+    assert.match(html, /id="network-implementation"/);
+    assert.match(html, /id="power-implementation"/);
+    assert.match(html, /id="volume-implementation"/);
+    assert.match(html, /id="brightness-implementation"/);
+    assert.match(html, /id="appearance-implementation"/);
+    assert.match(html, /id="bluetooth-implementation"/);
     assert.match(html, /id="volume-control" type="range"/);
     assert.match(html, /id="appearance-control"/);
   });
