@@ -88,7 +88,7 @@ nix build .#firefox-localhost --print-build-logs
 
 Then validate inside the VM by closing the final Firefox tab with the tab close button or `Ctrl+W` and confirming that Firefox stays open on `https://localhost`.
 
-`.#firefox-localhost` is the default packaged target used by `.#ol-c-image`. It starts from pinned nixpkgs Firefox and applies the runtime browser chrome hunks from `patches/firefox/0001-close-last-tab-to-localhost.patch` into the Firefox `omni.ja` archives that contain the matching runtime assets. The rewritten jars are normal zip-format jars for fast local packaging. The fast package removes packaged startup/script caches, writes Firefox `.purgecaches` markers, and the VM launches Firefox with `MOZ_PURGE_CACHES=1` so patched chrome JavaScript is loaded instead of stale bytecode. Use the full source compatibility path when optimized Firefox packaging behavior itself matters. The fast path is intentionally limited to browser frontend assets such as `utilityOverlay.js`, `browser-commands.js`, `browser.js`, and `tabbrowser.js`.
+`.#firefox-localhost` is the default packaged target used by `.#ol-c-image`. It starts from pinned nixpkgs Firefox and applies the runtime browser chrome hunks from `patches/firefox/0001-close-last-tab-to-localhost.patch` into the Firefox `omni.ja` archives that contain the matching runtime assets. The rewritten jars are normal zip-format jars for fast local packaging. The fast package removes packaged startup/script caches, writes Firefox `.purgecaches` markers, and the VM launches Firefox with `MOZ_PURGE_CACHES=1` so patched chrome JavaScript is loaded instead of stale bytecode. Use the full source compatibility path when optimized Firefox packaging behavior itself matters. The fast path is intentionally limited to browser frontend assets such as `browser-commands.js`, `browser.js`, and `tabbrowser.js`.
 
 The overlay rebuilds both `firefox-unwrapped` and the `firefox` wrapper. This matters because the wrapper records the unwrapped store path it launches; overriding only `firefox-unwrapped` can leave the visible browser process running the original unwrapped Firefox.
 
@@ -100,7 +100,7 @@ Inside the guest, confirm the running package was built by this fast path with:
 cat /run/current-system/sw/lib/firefox/ol-c-localhost-patch.txt
 ```
 
-`Ctrl+N`, `Ctrl+T`, the toolbar new-tab controls, and closing the final tab should all land on `https://localhost`. The fast package rewrites Firefox's global `BROWSER_NEW_TAB_URL` getter in `utilityOverlay.js` plus the remaining browser chrome stock new-tab URL references in `browser-commands.js`, `browser.js`, and `tabbrowser.js` so those paths cannot silently fall back to Firefox's stock new-tab page.
+`Ctrl+N`, `Ctrl+T`, the toolbar new-tab controls, and closing the final tab should all land on `https://localhost`. The fast package rewrites the browser chrome call sites in `browser-commands.js`, `browser.js`, and `tabbrowser.js` while leaving Firefox's global `BROWSER_NEW_TAB_URL` getter intact, so `https://localhost` keeps normal page title handling instead of being treated as Firefox's built-in new-tab page.
 
 ### 2. Full source compatibility path
 

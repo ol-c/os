@@ -8,7 +8,6 @@ in {
     nativeBuildInputs = [
       prev.patch
       prev.patchutils
-      prev.nodejs
       prev.unzip
       prev.zip
     ];
@@ -148,60 +147,6 @@ in {
       browser-commands.js \
       'url ??= SECUREOS_LOCALHOST_URL'
 
-    utility_overlay_omni=""
-    utility_overlay_extract_dir=""
-    utility_overlay_path=""
-    for entry in "''${extracted_omnis[@]}"; do
-      omni="''${entry%%:*}"
-      extract_dir="''${entry#*:}"
-      while IFS= read -r candidate_path; do
-        if grep -Fq 'Object.defineProperty(this, "BROWSER_NEW_TAB_URL"' "$extract_dir/$candidate_path"; then
-          if [ -n "$utility_overlay_path" ]; then
-            echo "error: Firefox utilityOverlay.js localhost rewrite matched multiple runtime assets:" >&2
-            echo "  $utility_overlay_omni:$utility_overlay_path" >&2
-            echo "  $omni:$candidate_path" >&2
-            exit 1
-          fi
-          utility_overlay_omni="$omni"
-          utility_overlay_extract_dir="$extract_dir"
-          utility_overlay_path="$candidate_path"
-        fi
-      done < <(
-        find "$extract_dir" -type f -name utilityOverlay.js \
-          | sed "s#^$extract_dir/##" \
-          | LC_ALL=C sort
-      )
-    done
-    if [ -z "$utility_overlay_path" ]; then
-      echo "error: Firefox utilityOverlay.js localhost rewrite did not match any runtime asset" >&2
-      exit 1
-    fi
-    OLC_UTILITY_OVERLAY_PATH="$utility_overlay_extract_dir/$utility_overlay_path" node <<'NODE'
-const fs = require("fs");
-const path = process.env.OLC_UTILITY_OVERLAY_PATH;
-let text = fs.readFileSync(path, "utf8");
-const pattern = /Object\.defineProperty\(this, "BROWSER_NEW_TAB_URL", \{\n  enumerable: true,\n  get\(\) \{\n[\s\S]*?\n  \},\n\}\);/;
-const replacement = `Object.defineProperty(this, "BROWSER_NEW_TAB_URL", {
-  enumerable: true,
-  get() {
-    return "https://localhost";
-  },
-});`;
-if (!pattern.test(text)) {
-  throw new Error("unable to locate BROWSER_NEW_TAB_URL definition");
-}
-text = text.replace(pattern, replacement);
-fs.writeFileSync(path, text);
-NODE
-    if ! grep -Fq 'return "https://localhost";' "$utility_overlay_extract_dir/$utility_overlay_path"; then
-      echo "error: patched Firefox utilityOverlay.js runtime asset is missing localhost new-tab URL getter: $utility_overlay_omni:$utility_overlay_path" >&2
-      exit 1
-    fi
-    if grep -Fq 'return AboutNewTab.newTabURL;' "$utility_overlay_extract_dir/$utility_overlay_path"; then
-      echo "error: patched Firefox utilityOverlay.js runtime asset can still return Firefox's stock new-tab URL: $utility_overlay_omni:$utility_overlay_path" >&2
-      exit 1
-    fi
-
     browser_commands_omni_path="$(cat "$work_dir/browser-commands.js.applied-path")"
     browser_commands_omni="$(cat "$work_dir/browser-commands.js.applied-omni")"
     browser_commands_extract_dir=""
@@ -215,11 +160,8 @@ NODE
       echo "error: patched Firefox browser-commands runtime asset lost its extracted omni directory: $browser_commands_omni:$browser_commands_omni_path" >&2
       exit 1
     fi
-    sed -i \
-      's#BROWSER_NEW_TAB_URL#SECUREOS_LOCALHOST_URL#g' \
-      "$browser_commands_extract_dir/$browser_commands_omni_path"
-    if grep -Fq 'BROWSER_NEW_TAB_URL' "$browser_commands_extract_dir/$browser_commands_omni_path"; then
-      echo "error: patched Firefox browser commands runtime asset still contains stock new-tab URL references: $browser_commands_omni:$browser_commands_omni_path" >&2
+    if grep -Fq 'url ??= BROWSER_NEW_TAB_URL;' "$browser_commands_extract_dir/$browser_commands_omni_path"; then
+      echo "error: patched Firefox browser commands runtime asset can still default new tabs to Firefox's stock new-tab URL: $browser_commands_omni:$browser_commands_omni_path" >&2
       exit 1
     fi
 
@@ -282,10 +224,18 @@ NODE
       exit 1
     fi
     sed -i \
-      's#BROWSER_NEW_TAB_URL#"https://localhost"#g' \
+      's#openTrustedLinkIn(BROWSER_NEW_TAB_URL,#openTrustedLinkIn("https://localhost",#g' \
       "$browser_js_extract_dir/$browser_js_path"
-    if grep -Fq 'BROWSER_NEW_TAB_URL' "$browser_js_extract_dir/$browser_js_path"; then
-      echo "error: patched Firefox browser.js runtime asset still contains stock new-tab URL references: $browser_js_omni:$browser_js_path" >&2
+    sed -i \
+      '/window.openDialog(/,/);/ s#BROWSER_NEW_TAB_URL#"https://localhost"#g' \
+      "$browser_js_extract_dir/$browser_js_path"
+    if grep -Fq 'openTrustedLinkIn(BROWSER_NEW_TAB_URL,' "$browser_js_extract_dir/$browser_js_path"; then
+      echo "error: patched Firefox browser.js runtime asset can still open trusted tabs with Firefox's stock new-tab URL: $browser_js_omni:$browser_js_path" >&2
+      exit 1
+    fi
+    if sed -n '/window.openDialog(/,/);/p' "$browser_js_extract_dir/$browser_js_path" \
+      | grep -Fq 'BROWSER_NEW_TAB_URL'; then
+      echo "error: patched Firefox browser.js runtime asset can still open windows with Firefox's stock new-tab URL: $browser_js_omni:$browser_js_path" >&2
       exit 1
     fi
 
@@ -300,8 +250,6 @@ NODE
       echo "OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1"
       printf 'browser_commands_omni=%s\n' "$browser_commands_omni"
       printf 'browser_commands_path=%s\n' "$browser_commands_omni_path"
-      printf 'utility_overlay_omni=%s\n' "$utility_overlay_omni"
-      printf 'utility_overlay_path=%s\n' "$utility_overlay_path"
       printf 'browser_js_omni=%s\n' "$browser_js_omni"
       printf 'browser_js_path=%s\n' "$browser_js_path"
       printf 'tabbrowser_omni=%s\n' "$tabbrowser_omni"
