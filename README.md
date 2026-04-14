@@ -73,6 +73,19 @@ Session behavior for this proof:
 - the page sends a best-effort close signal when it leaves so clean tab closure can terminate the backend immediately
 - the page title shows the current directory at the shell prompt, the executing command while Bash starts a command, program-emitted titles while foreground programs run, and otherwise uses `ol-c terminal`
 
+## Milestone 3 System Controls Proof
+
+The next Milestone 3 browser controls proof is defined in `docs/milestone-3-system-controls.md`. The page style is defined in `docs/milestone-3-status-page-style.md`: a live Markdown-like status document with inline controls for values such as volume, appearance, Bluetooth, and network choice.
+
+Proof of success:
+- `https://localhost/` opens a system controls dashboard inside the guest browser
+- the dashboard renders network, power, volume, brightness, appearance, and Bluetooth state from the localhost service
+- browser actions can drive supported control changes through the same localhost API contract
+- deterministic fake adapters cover hardware-dependent controls in automated tests
+- real guest adapters are added where QEMU exposes reliable system state
+
+The first controls implementation should keep the HTTP/browser contract separate from the guest system adapter, and should make `OLC_SYSTEM_CONTROLS_BACKEND=fake` select the deterministic fake backend for tests.
+
 ## Firefox Patch Workflow
 
 The repo has three distinct Firefox gates. Use them for different purposes.

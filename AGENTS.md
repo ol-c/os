@@ -212,7 +212,7 @@ Milestones 1 and 2 are complete.
 We are currently focused on Milestone 3.
 
 Immediate next task:
-- Define the Milestone 3 browser-based system controls proof surface and test strategy.
+- Implement the first browser-visible system status surfaces for core device utilities using the proof surface and test strategy in `docs/milestone-3-system-controls.md`.
 - Keep the Firefox packaged-patch workflow documented as a follow-on after the terminal proof lands.
 
 Implementation status:
@@ -237,7 +237,7 @@ Implementation status:
 - [x] Add a Google Compute Engine VM helper for remote patched-Firefox builds with Cloud Storage result handoff, provider-enforced timeout deletion, and explicit kill/fetch/cleanup commands.
 - [x] Split the Firefox packaged workflow into a fast browser-frontend repack target and a full source-build compatibility target.
 - [x] Replace the current 5 minute idle timeout with a more reliable terminal session cleanup strategy.
-- [ ] Define the Milestone 3 browser-based system controls proof surface and test strategy.
+- [x] Define the Milestone 3 browser-based system controls proof surface and test strategy.
 - [ ] Implement the first browser-visible system status surfaces for core device utilities.
 - [ ] Implement browser-driven control flows for the selected Milestone 3 utilities.
 - [ ] Add excellent automated coverage for the browser-to-system control contract.
