@@ -33,10 +33,19 @@ in {
     user_pref("browser.tabs.inTitlebar", 1);
     user_pref("browser.tabs.drawInTitlebar", true);
     user_pref("browser.tabs.closeWindowWithLastTab", false);
+    user_pref("browser.aboutwelcome.enabled", false);
+    user_pref("browser.shell.checkDefaultBrowser", false);
     user_pref("browser.startup.homepage", "https://localhost");
+    user_pref("browser.startup.homepage_override.mstone", "ignore");
     user_pref("browser.startup.page", 1);
     user_pref("browser.toolbars.bookmarks.visibility", "never");
+    user_pref("datareporting.policy.dataSubmissionEnabled", false);
+    user_pref("datareporting.policy.firstRunURL", "");
     user_pref("security.enterprise_roots.enabled", true);
+    user_pref("startup.homepage_override_url", "");
+    user_pref("startup.homepage_welcome_url", "");
+    user_pref("startup.homepage_welcome_url.additional", "");
+    user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
     EOF
     rm -rf /home/demo/.cache/mozilla/firefox/ol-c.default/startupCache
     cat > /home/demo/.xinitrc <<'EOF'

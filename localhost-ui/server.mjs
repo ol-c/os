@@ -19,7 +19,7 @@ function requireEnv(name) {
 const marker = 'OLC_LOCALHOST_UI_OK';
 const ttydBin = requireEnv('OLC_TTYD');
 const bashBin = requireEnv('OLC_BASH');
-const fallbackTerminalTitle = 'OL-C Terminal';
+const fallbackTerminalTitle = 'ol-c terminal';
 const backendStartupTimeoutMs = 30_000;
 const reconnectGraceTimeoutMs = 60_000;
 const tlsKeyPath = requireEnv('OLC_TLS_KEY');
@@ -51,7 +51,7 @@ function rootHtml() {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OL-C</title>
+    <title>ol-c</title>
     <style>
       :root {
         color-scheme: dark;
@@ -101,7 +101,7 @@ function rootHtml() {
   </head>
   <body>
     <main>
-      <h1>OL-C control surface</h1>
+      <h1>ol-c control surface</h1>
       <p>Firefox now boots to <code>https://localhost</code>, served inside the guest by a Node.js process on port <code>443</code>.</p>
       <p>The next proof surface is <a href="/terminal" onclick="window.open('/terminal', '_blank'); return false;"><code>/terminal</code></a>, which opens a fresh in-browser terminal session each time it is loaded.</p>
       <p id="proof">${marker}</p>
@@ -577,7 +577,7 @@ const server = createServer({
   res.writeHead(404, {
     'content-type': 'text/html; charset=utf-8',
   });
-  res.end(proxyErrorHtml('The requested OL-C page was not found.'));
+  res.end(proxyErrorHtml('The requested ol-c page was not found.'));
 });
 
 server.on('upgrade', (req, socket, head) => {

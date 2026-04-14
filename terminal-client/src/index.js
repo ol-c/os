@@ -10,7 +10,7 @@ const RESIZE_TERMINAL = '1';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const fallbackTitle = 'OL-C Terminal';
+const fallbackTitle = 'ol-c terminal';
 const appConfig = window.OLC_TERMINAL_CONFIG;
 
 const terminalNode = document.getElementById('terminal');
