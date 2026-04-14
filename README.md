@@ -61,15 +61,16 @@ Proof of success:
 - common full-screen terminal programs such as `vim`, `less`, and `top` behave correctly enough for normal use
 - the browser tab title follows the terminal title stream when the shell or running program emits one
 
-The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The OL-C localhost HTTPS service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps the backend tied to a page-owned lease rather than raw websocket presence.
+The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The OL-C localhost HTTPS service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps the backend alive while the browser terminal websocket is connected.
 
 Session behavior for this proof:
 - `/terminal` always creates a fresh shell
 - reload creates a new shell instead of reattaching
 - there is no user-visible session picker or durable terminal persistence yet
 - when the root shell exits, the terminal page asks Firefox to close that tab instead of showing an ended-session interface
-- websocket disconnects are treated as transport interruptions, not terminal teardown
-- the page renews its terminal lease while open and sends a best-effort close signal when it leaves
+- connected terminal websockets keep their backend alive indefinitely, including when the tab is unfocused
+- unexpected websocket disconnects are treated as transport interruptions and get a bounded reconnect grace period before cleanup
+- the page sends a best-effort close signal when it leaves so clean tab closure can terminate the backend immediately
 - the page title follows the terminal title stream when available and otherwise uses `OL-C Terminal`
 
 ## Firefox Patch Workflow

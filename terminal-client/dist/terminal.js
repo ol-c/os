@@ -6194,6 +6194,7 @@ WARNING: This link could potentially be dangerous`)) {
   var socket = null;
   var reconnectTimer = null;
   var terminated = false;
+  var closeSignalSent = false;
   var pageTitle = fallbackTitle;
   var reconnectDelayMs = 1e3;
   terminal.loadAddon(fitAddon);
@@ -6297,6 +6298,25 @@ WARNING: This link could potentially be dangerous`)) {
       { sticky: true, html: true }
     );
   }
+  function sendCloseSignal() {
+    if (closeSignalSent || !appConfig.closeUrl) {
+      return;
+    }
+    closeSignalSent = true;
+    if (navigator.sendBeacon) {
+      const sent = navigator.sendBeacon(appConfig.closeUrl, new Blob([], { type: "text/plain" }));
+      if (sent) {
+        return;
+      }
+    }
+    void fetch(appConfig.closeUrl, {
+      method: "POST",
+      cache: "no-store",
+      credentials: "same-origin",
+      keepalive: true
+    }).catch(() => {
+    });
+  }
   function closeRootSession() {
     terminated = true;
     if (socket) {
@@ -6386,6 +6406,9 @@ WARNING: This link could potentially be dangerous`)) {
   window.addEventListener("resize", () => {
     fitAddon.fit();
     sendResize();
+  });
+  window.addEventListener("pagehide", () => {
+    sendCloseSignal();
   });
   void connect();
 })();

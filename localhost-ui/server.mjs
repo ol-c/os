@@ -21,7 +21,7 @@ const ttydBin = requireEnv('OLC_TTYD');
 const bashBin = requireEnv('OLC_BASH');
 const fallbackTerminalTitle = 'OL-C Terminal';
 const backendStartupTimeoutMs = 30_000;
-const backendIdleTimeoutMs = 300_000;
+const reconnectGraceTimeoutMs = 60_000;
 const tlsKeyPath = requireEnv('OLC_TLS_KEY');
 const tlsCertPath = requireEnv('OLC_TLS_CERT');
 const terminalClientJsPath = requireEnv('OLC_TERMINAL_CLIENT_JS');
@@ -128,6 +128,7 @@ function terminalHtml(token) {
     </div>
     <script>
       window.OLC_TERMINAL_CONFIG = {
+        closeUrl: ${JSON.stringify(`${backendBasePath}/close`)},
         tokenUrl: ${JSON.stringify(`${backendBasePath}/token`)},
         wsPath: ${JSON.stringify(`${backendBasePath}/ws`)},
       };
@@ -209,7 +210,7 @@ function terminateBackend(token) {
   }
 
   backend.startupTimer = cancelTimer(backend.startupTimer);
-  backend.idleTimer = cancelTimer(backend.idleTimer);
+  backend.reconnectGraceTimer = cancelTimer(backend.reconnectGraceTimer);
   terminalBackends.delete(token);
 
   if (!backend.child.killed) {
@@ -223,10 +224,10 @@ function scheduleStartupTimeout(token) {
   }, backendStartupTimeoutMs);
 }
 
-function scheduleIdleTimeout(token) {
+function scheduleReconnectGraceTimeout(token) {
   return setTimeout(() => {
     terminateBackend(token);
-  }, backendIdleTimeoutMs);
+  }, reconnectGraceTimeoutMs);
 }
 
 async function reservePort() {
@@ -316,15 +317,16 @@ async function spawnTerminalBackend() {
       return;
     }
 
-    clearTimeout(current.startupTimer);
+    current.startupTimer = cancelTimer(current.startupTimer);
+    current.reconnectGraceTimer = cancelTimer(current.reconnectGraceTimer);
     terminalBackends.delete(token);
   });
 
   terminalBackends.set(token, {
     activeSockets: 0,
     child,
-    idleTimer: null,
     port,
+    reconnectGraceTimer: null,
     startupTimer: scheduleStartupTimeout(token),
   });
 
@@ -351,7 +353,6 @@ function markBackendActive(token) {
     return null;
   }
 
-  backend.idleTimer = cancelTimer(backend.idleTimer);
   return backend;
 }
 
@@ -363,7 +364,7 @@ function recordSocketOpen(token) {
   }
 
   backend.startupTimer = cancelTimer(backend.startupTimer);
-  backend.idleTimer = cancelTimer(backend.idleTimer);
+  backend.reconnectGraceTimer = cancelTimer(backend.reconnectGraceTimer);
   backend.activeSockets += 1;
   return backend;
 }
@@ -377,9 +378,29 @@ function recordSocketClose(token) {
 
   backend.activeSockets = Math.max(backend.activeSockets - 1, 0);
   if (backend.activeSockets === 0) {
-    backend.idleTimer = cancelTimer(backend.idleTimer);
-    backend.idleTimer = scheduleIdleTimeout(token);
+    backend.reconnectGraceTimer = cancelTimer(backend.reconnectGraceTimer);
+    backend.reconnectGraceTimer = scheduleReconnectGraceTimeout(token);
   }
+}
+
+function closeTerminalBackend(req, res, token) {
+  if (req.method !== 'POST') {
+    setNoStore(res);
+    res.writeHead(405, {
+      'allow': 'POST',
+      'content-type': 'application/json; charset=utf-8',
+    });
+    res.end(JSON.stringify({ ok: false, error: 'method not allowed' }));
+    return;
+  }
+
+  if (token) {
+    terminateBackend(token);
+  }
+
+  setNoStore(res);
+  res.writeHead(204);
+  res.end();
 }
 
 function proxyRequest(req, res, token) {
@@ -539,6 +560,11 @@ const server = createServer({
       });
       res.end(proxyErrorHtml(`Unable to start a fresh terminal: ${error.message}`));
     }
+    return;
+  }
+
+  if (reqUrl.pathname.match(/^\/terminal\/backend\/[^/]+\/close$/)) {
+    closeTerminalBackend(req, res, getBackendToken(req.url));
     return;
   }
 

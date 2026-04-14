@@ -41,6 +41,7 @@ const sessionLifecycle = createSessionLifecycle({
 let socket = null;
 let reconnectTimer = null;
 let terminated = false;
+let closeSignalSent = false;
 let pageTitle = fallbackTitle;
 let reconnectDelayMs = 1000;
 
@@ -167,6 +168,27 @@ function endSession(message) {
   );
 }
 
+function sendCloseSignal() {
+  if (closeSignalSent || !appConfig.closeUrl) {
+    return;
+  }
+  closeSignalSent = true;
+
+  if (navigator.sendBeacon) {
+    const sent = navigator.sendBeacon(appConfig.closeUrl, new Blob([], { type: 'text/plain' }));
+    if (sent) {
+      return;
+    }
+  }
+
+  void fetch(appConfig.closeUrl, {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    keepalive: true,
+  }).catch(() => {});
+}
+
 function closeRootSession() {
   terminated = true;
   if (socket) {
@@ -271,6 +293,10 @@ terminal.onTitleChange(title => {
 window.addEventListener('resize', () => {
   fitAddon.fit();
   sendResize();
+});
+
+window.addEventListener('pagehide', () => {
+  sendCloseSignal();
 });
 
 void connect();
