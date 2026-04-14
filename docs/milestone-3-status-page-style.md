@@ -140,8 +140,9 @@ Flow:
 
 1. User changes an inline control.
 2. Browser sends the relevant `POST /api/system/...` request.
-3. Backend returns the full updated status document.
-4. Page re-renders all live values from that returned document.
+3. Backend publishes the full updated status document to `GET /api/system/events`.
+4. Backend also returns the full updated status document to the command request.
+5. Page re-renders all live values from the returned document or the pushed event, whichever arrives first.
 
 During a pending update:
 
@@ -187,7 +188,7 @@ Browser tests should assert document behavior, not pixel-perfect layout.
 Minimum checks:
 
 - The page exposes a top-level `System` heading.
-- Initial status text is derived from `GET /api/system/status`.
+- Initial status text is derived from the first `status` event on `GET /api/system/events`.
 - Each utility section appears in heading order.
 - Volume and appearance controls are reachable by label.
 - Changing an inline control sends the expected API request.

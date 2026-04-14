@@ -79,12 +79,25 @@ The next Milestone 3 browser controls proof is defined in `docs/milestone-3-syst
 
 Proof of success:
 - `https://localhost/` opens a system controls dashboard inside the guest browser
-- the dashboard renders network, power, volume, brightness, appearance, and Bluetooth state from the localhost service
+- the dashboard renders network, power, volume, brightness, appearance, and Bluetooth state from the localhost service's live event stream
 - browser actions can drive supported control changes through the same localhost API contract
 - deterministic fake adapters cover hardware-dependent controls in automated tests
 - real guest adapters are added where QEMU exposes reliable system state
 
-The first controls implementation should keep the HTTP/browser contract separate from the guest system adapter, and should make `OLC_SYSTEM_CONTROLS_BACKEND=fake` select the deterministic fake backend for tests.
+The first controls implementation should keep the browser contract separate from the guest system adapter, should use server-sent events for pushed status updates, and should make `OLC_SYSTEM_CONTROLS_BACKEND=fake` select the deterministic fake backend for tests.
+
+Run the system controls service tests with:
+
+```sh
+node --test localhost-ui/*.test.mjs
+```
+
+Run the current shell contract tests with:
+
+```sh
+bash tests/test-build-vm.sh
+bash tests/test-launch-vm.sh
+```
 
 ## Firefox Patch Workflow
 

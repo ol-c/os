@@ -147,10 +147,15 @@ qemu_base_args=(
   -m "$MEMORY_MB"
   -drive "if=virtio,format=qcow2,file=$IMAGE_PATH"
   -snapshot
+  -netdev user,id=olc-net
+  -device virtio-net-pci,netdev=olc-net
   -device virtio-rng-pci
   -device virtio-vga
   -device qemu-xhci,id=ol-c-usb
   -device usb-tablet,bus=ol-c-usb.0
+  -audiodev none,id=olc-audio
+  -device intel-hda
+  -device hda-duplex,audiodev=olc-audio
   -serial mon:stdio
 )
 

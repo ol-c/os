@@ -84,6 +84,8 @@ in {
 
       environment = {
         OLC_BASH = "${pkgs.bashInteractive}/bin/bash";
+        OLC_PACTL = "${pkgs.pulseaudio}/bin/pactl";
+        OLC_PULSE_SERVER = "unix:/run/user/1000/pulse/native";
         OLC_TLS_CERT = "${localhostTls}/server.crt";
         OLC_TLS_KEY = "${localhostTls}/server.key";
         OLC_TERMINAL_CLIENT_CSS = "${../../terminal-client/dist/terminal.css}";
@@ -92,10 +94,19 @@ in {
       };
 
       serviceConfig = {
-        ExecStart = "${pkgs.nodejs}/bin/node ${../../localhost-ui/server.mjs}";
+        ExecStart = "${pkgs.nodejs}/bin/node ${../../localhost-ui}/server.mjs";
         Restart = "on-failure";
         RestartSec = "1s";
       };
     };
+
+    services.pipewire = {
+      enable = true;
+      alsa.enable = true;
+      pulse.enable = true;
+      wireplumber.enable = true;
+    };
+
+    security.rtkit.enable = true;
   };
 }

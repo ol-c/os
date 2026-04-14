@@ -212,7 +212,7 @@ Milestones 1 and 2 are complete.
 We are currently focused on Milestone 3.
 
 Immediate next task:
-- Implement the first browser-visible system status surfaces for core device utilities using the proof surface and test strategy in `docs/milestone-3-system-controls.md`.
+- Harden the real guest adapters for browser-driven system controls beyond the fake-backed proof, starting with QEMU-backed network and audio behavior.
 - Keep the Firefox packaged-patch workflow documented as a follow-on after the terminal proof lands.
 
 Implementation status:
@@ -238,9 +238,9 @@ Implementation status:
 - [x] Split the Firefox packaged workflow into a fast browser-frontend repack target and a full source-build compatibility target.
 - [x] Replace the current 5 minute idle timeout with a more reliable terminal session cleanup strategy.
 - [x] Define the Milestone 3 browser-based system controls proof surface and test strategy.
-- [ ] Implement the first browser-visible system status surfaces for core device utilities.
-- [ ] Implement browser-driven control flows for the selected Milestone 3 utilities.
-- [ ] Add excellent automated coverage for the browser-to-system control contract.
+- [x] Implement the first browser-visible system status surfaces for core device utilities.
+- [x] Implement browser-driven control flows for the selected Milestone 3 utilities.
+- [x] Add excellent automated coverage for the browser-to-system control contract.
 - [ ] Define the Milestone 4 synced in-VM development proof surface and test strategy.
 - [ ] Add one supported host↔guest shared repo mount path using `virtiofs`.
 - [ ] Enable in-guest development against the shared tree with a fixed mount location.

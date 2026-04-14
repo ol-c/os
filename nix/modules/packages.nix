@@ -8,8 +8,10 @@
     firefox
     matchbox
     nodejs
+    pulseaudio
     spice-vdagent
     ttyd
+    wireplumber
     xorg.xinit
     xdotool
   ];

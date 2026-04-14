@@ -29,14 +29,16 @@ The first implementation should use one local HTTPS service contract owned by `l
 
 Recommended endpoints:
 
-- `GET /api/system/status`
+- `GET /api/system/events`
 - `POST /api/system/network`
 - `POST /api/system/volume`
 - `POST /api/system/brightness`
 - `POST /api/system/appearance`
 - `POST /api/system/bluetooth`
 
-`GET /api/system/status` returns the complete state needed to render the dashboard. Mutating endpoints accept a small JSON request, apply or record the requested change, and return the updated complete status document. Returning the full state after every mutation keeps the browser simple and makes tests deterministic.
+`GET /api/system/events` opens a server-sent event stream. The server immediately sends a `status` event containing the complete state needed to render the dashboard, then sends another complete `status` event whenever observed or controlled state changes. The first implementation can observe non-command state changes by polling the selected system adapter and publishing a new event when the full status snapshot changes.
+
+Mutating endpoints accept a small JSON request, apply or record the requested change, publish the updated state to connected event-stream clients, and return the updated complete status document. Returning full state snapshots keeps the browser simple and makes tests deterministic.
 
 The first status document should use explicit unavailable states instead of omitting hardware-dependent fields:
 
@@ -141,10 +143,10 @@ The milestone needs deterministic automated coverage for the browser-to-system c
 
 Minimum automated coverage:
 
-- HTTP contract tests for `GET /api/system/status`.
+- HTTP/SSE contract tests for `GET /api/system/events`.
 - HTTP contract tests for every mutating endpoint using the fake adapter.
 - Validation tests for malformed JSON, unknown actions, out-of-range percentages, and unsupported controls.
-- Browser-level tests that load the dashboard against the fake adapter, verify initial state, trigger at least one control update, and verify the rendered state updates.
+- Browser-level tests that load the dashboard against the fake adapter, verify initial event-stream state, trigger at least one control update, and verify the rendered state updates.
 - Packaging/build tests that ensure the dashboard assets and backend adapter files are included in the guest service.
 
 The fake-adapter contract tests should be the main gate for Milestone 3 behavior. VM smoke tests should prove integration, not carry all edge cases.
@@ -152,7 +154,7 @@ The fake-adapter contract tests should be the main gate for Milestone 3 behavior
 Recommended test layers:
 
 - Node unit tests for adapter state transitions and request validation.
-- Node HTTP tests for the local service API.
+- Node HTTP/SSE tests for the local service API.
 - Browser tests, preferably Playwright, against the local service in fake mode.
 - Existing shell tests for Nix build and launch contracts updated only where packaging changes require it.
 
@@ -161,7 +163,7 @@ Recommended test layers:
 The Milestone 3 system controls proof is complete when:
 
 - `https://localhost/` opens a dashboard in the guest browser.
-- The dashboard renders network, power, volume, brightness, appearance, and Bluetooth status from `GET /api/system/status`.
+- The dashboard renders network, power, volume, brightness, appearance, and Bluetooth status from `GET /api/system/events`.
 - The dashboard visibly distinguishes available, unavailable, enabled, disabled, and unknown states.
 - At least volume, brightness, appearance, and Bluetooth have working browser-driven mutation flows in fake mode.
 - Any real guest controls implemented for the VM are observable through the same API and dashboard paths as fake mode.
