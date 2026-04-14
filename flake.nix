@@ -17,6 +17,7 @@
         "firefox-unwrapped" = prev."firefox-unwrapped".overrideAttrs (old: {
           patches = (old.patches or []) ++ [ firefoxLocalhostPatch ];
         });
+        firefox = final.wrapFirefox final.firefox-unwrapped { };
       };
       firefoxFastOverlay = import ./nix/firefox-localhost-fast.nix {
         inherit firefoxLocalhostPatch;

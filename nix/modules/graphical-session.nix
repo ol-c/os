@@ -38,6 +38,7 @@ in {
     user_pref("browser.toolbars.bookmarks.visibility", "never");
     user_pref("security.enterprise_roots.enabled", true);
     EOF
+    rm -rf /home/demo/.cache/mozilla/firefox/ol-c.default/startupCache
     cat > /home/demo/.xinitrc <<'EOF'
     xsetroot -solid "#0f172a"
     ${pkgs.spice-vdagent}/bin/spice-vdagent &
@@ -48,7 +49,25 @@ in {
       fi
       sleep 0.25
     done
-    firefox --no-remote --profile /home/demo/.mozilla/firefox/ol-c.default --new-window https://localhost &
+    {
+      printf 'expected_unwrapped=%s\n' '${pkgs.firefox-unwrapped}/lib/firefox/firefox'
+      printf 'firefox_launcher=%s\n' '${pkgs.firefox-unwrapped}/lib/firefox/firefox'
+      printf 'moz_purge_caches=%s\n' '1'
+      printf 'profile=%s\n' '/home/demo/.mozilla/firefox/ol-c.default'
+    } > /home/demo/ol-c-firefox-launch.txt
+    MOZ_PURGE_CACHES=1 ${pkgs.firefox-unwrapped}/lib/firefox/firefox --no-remote --profile /home/demo/.mozilla/firefox/ol-c.default --new-window https://localhost &
+    firefox_pid="$!"
+    for _ in $(seq 1 40); do
+      running_firefox="$(${pkgs.coreutils}/bin/readlink -f "/proc/$firefox_pid/exe" 2>/dev/null || true)"
+      if [ -n "$running_firefox" ]; then
+        printf 'running_firefox_exe=%s\n' "$running_firefox" >> /home/demo/ol-c-firefox-launch.txt
+        if [ "$running_firefox" != '${pkgs.firefox-unwrapped}/lib/firefox/firefox' ]; then
+          printf 'unexpected_firefox_exe=1\n' >> /home/demo/ol-c-firefox-launch.txt
+        fi
+        break
+      fi
+      sleep 0.1
+    done
     for _ in $(seq 1 40); do
       window_id="$(xdotool search --onlyvisible --class firefox 2>/dev/null | head -n 1 || true)"
       if [ -n "$window_id" ]; then
