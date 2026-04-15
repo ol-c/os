@@ -195,32 +195,34 @@ in {
       exit 1
     fi
 
-    browser_js_omni=""
+    apply_source_patch_to_runtime_asset \
+      browser/base/content/browser.js \
+      browser.js \
+      'gSecureOSAppearanceBridge.init()'
+
+    browser_js_path="$(cat "$work_dir/browser.js.applied-path")"
+    browser_js_omni="$(cat "$work_dir/browser.js.applied-omni")"
     browser_js_extract_dir=""
-    browser_js_path=""
     for entry in "''${extracted_omnis[@]}"; do
       omni="''${entry%%:*}"
-      extract_dir="''${entry#*:}"
-      while IFS= read -r candidate_path; do
-        if grep -Fq 'openTrustedLinkIn(BROWSER_NEW_TAB_URL' "$extract_dir/$candidate_path"; then
-          if [ -n "$browser_js_path" ]; then
-            echo "error: Firefox browser.js localhost rewrite matched multiple runtime assets:" >&2
-            echo "  $browser_js_omni:$browser_js_path" >&2
-            echo "  $omni:$candidate_path" >&2
-            exit 1
-          fi
-          browser_js_omni="$omni"
-          browser_js_extract_dir="$extract_dir"
-          browser_js_path="$candidate_path"
-        fi
-      done < <(
-        find "$extract_dir" -type f -name browser.js \
-          | sed "s#^$extract_dir/##" \
-          | LC_ALL=C sort
-      )
+      if [ "$omni" = "$browser_js_omni" ]; then
+        browser_js_extract_dir="''${entry#*:}"
+      fi
     done
-    if [ -z "$browser_js_path" ]; then
-      echo "error: Firefox browser.js localhost rewrite did not match any runtime asset" >&2
+    if [ -z "$browser_js_extract_dir" ]; then
+      echo "error: patched Firefox browser.js runtime asset lost its extracted omni directory: $browser_js_omni:$browser_js_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'new WebChannel(' "$browser_js_extract_dir/$browser_js_path"; then
+      echo "error: patched Firefox browser.js runtime asset is missing the localhost WebChannel bridge: $browser_js_omni:$browser_js_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'firefox-compact-dark@mozilla.org' "$browser_js_extract_dir/$browser_js_path"; then
+      echo "error: patched Firefox browser.js runtime asset is missing built-in dark theme activation: $browser_js_omni:$browser_js_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'openTrustedLinkIn(BROWSER_NEW_TAB_URL' "$browser_js_extract_dir/$browser_js_path"; then
+      echo "error: Firefox browser.js localhost rewrite did not match the expected runtime asset" >&2
       exit 1
     fi
     sed -i \

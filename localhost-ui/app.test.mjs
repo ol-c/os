@@ -102,6 +102,9 @@ test('root page exposes the system document and inline controls', async () => {
     assert.match(html, /id="bluetooth-implementation"/);
     assert.match(html, /id="volume-control" type="range"/);
     assert.match(html, /id="appearance-control"/);
+    assert.match(html, /WebChannelMessageToChrome/);
+    assert.match(html, /olc-appearance/);
+    assert.match(html, /setAppearance/);
   });
 });
 

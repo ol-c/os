@@ -318,6 +318,61 @@ export function rootHtml() {
         control.disabled = !enabled;
       }
 
+      const appearanceBridge = (() => {
+        const channelId = 'olc-appearance';
+        const pending = new Map();
+        let nextMessageId = 1;
+
+        window.addEventListener('WebChannelMessageToContent', event => {
+          const detail = event.detail || {};
+          if (detail.id !== channelId || !detail.message) {
+            return;
+          }
+
+          const message = detail.message;
+          const deferred = pending.get(message.messageId);
+          if (!deferred) {
+            return;
+          }
+
+          pending.delete(message.messageId);
+          clearTimeout(deferred.timer);
+          if (message.data && message.data.error) {
+            deferred.reject(new Error(message.data.error));
+            return;
+          }
+          deferred.resolve(message.data || {});
+        });
+
+        function send(command, data = {}) {
+          if (typeof window.CustomEvent !== 'function') {
+            return Promise.reject(new Error('appearance bridge is unavailable'));
+          }
+
+          const messageId = String(nextMessageId++);
+          const payload = { id: channelId, message: { command, messageId, data } };
+          return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              pending.delete(messageId);
+              reject(new Error('appearance bridge is unavailable'));
+            }, 700);
+            pending.set(messageId, { resolve, reject, timer });
+            window.dispatchEvent(new CustomEvent('WebChannelMessageToChrome', {
+              detail: JSON.stringify(payload),
+            }));
+          });
+        }
+
+        return {
+          get() {
+            return send('getAppearance');
+          },
+          set(mode) {
+            return send('setAppearance', { mode });
+          },
+        };
+      })();
+
       function renderStatus(status) {
         document.documentElement.dataset.appearance = status.appearance.mode;
         controls.summary.textContent = [
@@ -399,9 +454,24 @@ export function rootHtml() {
             throw new Error(payload.error || 'command failed');
           }
           renderStatus(payload);
+          return payload;
         } catch (error) {
           errorElement.textContent = ' ' + error.message;
           control.disabled = wasDisabled;
+          throw error;
+        }
+      }
+
+      async function syncBrowserAppearanceStatus() {
+        try {
+          const result = await appearanceBridge.get();
+          if (result.mode === 'light' || result.mode === 'dark') {
+            document.documentElement.dataset.appearance = result.mode;
+            controls.appearance.value = result.mode;
+            await postCommand('/api/system/appearance', { mode: result.mode }, controls.appearanceError, controls.appearance);
+          }
+        } catch {
+          // Non-Firefox localhost development keeps the existing API-only behavior.
         }
       }
 
@@ -418,7 +488,18 @@ export function rootHtml() {
         postCommand('/api/system/brightness', { percent: Number(controls.brightness.value) }, controls.brightnessError, controls.brightness);
       });
       controls.appearance.addEventListener('change', () => {
-        postCommand('/api/system/appearance', { mode: controls.appearance.value }, controls.appearanceError, controls.appearance);
+        const mode = controls.appearance.value;
+        controls.appearanceError.textContent = '';
+        controls.appearance.disabled = true;
+        appearanceBridge.set(mode)
+          .catch(() => ({ mode }))
+          .then(result => {
+            controls.appearance.disabled = false;
+            return postCommand('/api/system/appearance', { mode: result.mode || mode }, controls.appearanceError, controls.appearance);
+          })
+          .catch(() => {
+            controls.appearance.disabled = false;
+          });
       });
       controls.bluetooth.addEventListener('change', () => {
         postCommand('/api/system/bluetooth', { enabled: controls.bluetooth.value === 'true' }, controls.bluetoothError, controls.bluetooth);
@@ -431,6 +512,7 @@ export function rootHtml() {
       events.addEventListener('error', () => {
         controls.summary.textContent = 'Live system status is reconnecting.';
       });
+      syncBrowserAppearanceStatus();
     </script>
   </body>
 </html>`;
