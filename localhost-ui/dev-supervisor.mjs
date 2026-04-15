@@ -1,9 +1,10 @@
-import { existsSync, watch } from 'node:fs';
+import { existsSync, readdirSync, statSync, watch } from 'node:fs';
 import { dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const defaultRestartDelayMs = 150;
+const defaultPollIntervalMs = 1000;
 const defaultSourceRoot = '/source';
 const storeRoot = dirname(fileURLToPath(import.meta.url));
 
@@ -19,6 +20,39 @@ function sourcePath(sourceRoot, path) {
   return `${sourceRoot}${path}`;
 }
 
+function scanWatchStamp(path) {
+  let stamp = '';
+
+  function scan(currentPath) {
+    let stats;
+    try {
+      stats = statSync(currentPath);
+    } catch {
+      stamp += `${currentPath}:missing;`;
+      return;
+    }
+
+    stamp += `${currentPath}:${stats.mtimeMs}:${stats.size};`;
+    if (!stats.isDirectory()) {
+      return;
+    }
+
+    let entries;
+    try {
+      entries = readdirSync(currentPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    entries
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .forEach(entry => scan(`${currentPath}/${entry.name}`));
+  }
+
+  scan(path);
+  return stamp;
+}
+
 export function selectRuntimePaths(env = process.env) {
   const sourceRoot = env.OLC_SOURCE_ROOT || defaultSourceRoot;
   const sourceServer = sourcePath(sourceRoot, '/localhost-ui/server.mjs');
@@ -27,8 +61,6 @@ export function selectRuntimePaths(env = process.env) {
     return {
       mode: 'store',
       serverPath: `${storeRoot}/server.mjs`,
-      terminalClientCss: env.OLC_TERMINAL_CLIENT_CSS,
-      terminalClientJs: env.OLC_TERMINAL_CLIENT_JS,
       watchPaths: [],
     };
   }
@@ -36,11 +68,8 @@ export function selectRuntimePaths(env = process.env) {
   return {
     mode: 'source',
     serverPath: sourceServer,
-    terminalClientCss: sourcePath(sourceRoot, '/terminal-client/dist/terminal.css'),
-    terminalClientJs: sourcePath(sourceRoot, '/terminal-client/dist/terminal.js'),
     watchPaths: [
       sourcePath(sourceRoot, '/localhost-ui'),
-      sourcePath(sourceRoot, '/terminal-client/dist'),
     ],
   };
 }
@@ -50,19 +79,23 @@ export function createSourcePreviewSupervisor(options = {}) {
     env = process.env,
     nodeBin = process.execPath,
     restartDelayMs = defaultRestartDelayMs,
+    pollIntervalMs = defaultPollIntervalMs,
     selectPaths = selectRuntimePaths,
     spawnProcess = spawn,
     watchPath = watch,
+    scanPath = scanWatchStamp,
+    setWatchInterval = setInterval,
+    clearWatchInterval = clearInterval,
     log = console,
   } = options;
 
   const runtimePaths = selectPaths(env);
   const childEnv = {
     ...env,
-    OLC_TERMINAL_CLIENT_CSS: runtimePaths.terminalClientCss,
-    OLC_TERMINAL_CLIENT_JS: runtimePaths.terminalClientJs,
   };
   const watchers = [];
+  const pollers = [];
+  const watchStamps = new Map();
   let child = null;
   let restartTimer = null;
   let restarting = false;
@@ -130,6 +163,17 @@ export function createSourcePreviewSupervisor(options = {}) {
         scheduleRestart();
       });
       watchers.push(watcher);
+
+      watchStamps.set(path, scanPath(path));
+      pollers.push(setWatchInterval(() => {
+        const nextStamp = scanPath(path);
+        if (nextStamp === watchStamps.get(path)) {
+          return;
+        }
+
+        watchStamps.set(path, nextStamp);
+        scheduleRestart();
+      }, pollIntervalMs));
     }
   }
 
@@ -145,6 +189,9 @@ export function createSourcePreviewSupervisor(options = {}) {
     clearRestartTimer();
     for (const watcher of watchers.splice(0)) {
       watcher.close();
+    }
+    for (const poller of pollers.splice(0)) {
+      clearWatchInterval(poller);
     }
     stopChild();
   }

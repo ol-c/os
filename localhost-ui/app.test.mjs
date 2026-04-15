@@ -4,17 +4,13 @@ import test from 'node:test';
 import { createOlcApp } from './app.mjs';
 import { createDefaultSystemStatus, createFakeSystemAdapter, createSystemControls } from './system-controls.mjs';
 
-async function withServer(fn, hardwareTest = undefined) {
+async function withServer(fn, hardwareTest = undefined, options = {}) {
   const app = createOlcApp({
-    bashBin: '/bin/bash',
-    demoUser: { uid: '1000', gid: '100' },
     systemControls: createSystemControls(
       createFakeSystemAdapter(createDefaultSystemStatus(hardwareTest)),
       { pollIntervalMs: 0 },
     ),
-    terminalClientCss: '',
-    terminalClientJs: '',
-    ttydBin: '/bin/false',
+    ...options,
   });
   const server = http.createServer(app.handleRequest);
 
@@ -25,6 +21,28 @@ async function withServer(fn, hardwareTest = undefined) {
     await fn(`http://127.0.0.1:${port}`);
   } finally {
     await new Promise(resolve => server.close(resolve));
+  }
+}
+
+async function withTerminalUpstream(fn) {
+  const seenPaths = [];
+  const upstream = http.createServer((req, res) => {
+    seenPaths.push(req.url);
+    res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end(`terminal upstream ${req.url}`);
+  });
+
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const { port } = upstream.address();
+
+  try {
+    await withServer(
+      baseUrl => fn(baseUrl, seenPaths),
+      undefined,
+      { terminalUpstreamUrl: `http://127.0.0.1:${port}` },
+    );
+  } finally {
+    await new Promise(resolve => upstream.close(resolve));
   }
 }
 
@@ -167,4 +185,26 @@ test('command endpoint rejects disabled hardware capabilities', async () => {
     assert.equal(response.status, 409);
     assert.match(body.error, /volume control is unavailable/);
   }, 'none');
+});
+
+test('/terminal is proxied to the stable terminal service', async () => {
+  await withTerminalUpstream(async (baseUrl, seenPaths) => {
+    const response = await fetch(`${baseUrl}/terminal`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.equal(body, 'terminal upstream /terminal');
+    assert.deepEqual(seenPaths, [ '/terminal' ]);
+  });
+});
+
+test('/terminal backend paths are proxied without requiring visible session URLs', async () => {
+  await withTerminalUpstream(async (baseUrl, seenPaths) => {
+    const response = await fetch(`${baseUrl}/terminal/backend/session-token/token`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.equal(body, 'terminal upstream /terminal/backend/session-token/token');
+    assert.deepEqual(seenPaths, [ '/terminal/backend/session-token/token' ]);
+  });
 });

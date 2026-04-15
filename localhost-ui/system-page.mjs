@@ -94,6 +94,18 @@ export function rootHtml() {
         vertical-align: baseline;
       }
 
+      .range-interactor {
+        vertical-align: middle;
+      }
+
+      .interactor-value {
+        display: inline-flex;
+        align-items: center;
+        min-width: 4.5ch;
+        min-height: 2rem;
+        line-height: 1;
+      }
+
       input,
       select,
       button {
@@ -107,6 +119,14 @@ export function rootHtml() {
 
       input[type="range"] {
         width: 10rem;
+        min-height: 2rem;
+        height: 2rem;
+        margin: 0 0.1rem;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        accent-color: var(--accent);
         vertical-align: middle;
       }
 
@@ -187,10 +207,10 @@ export function rootHtml() {
         <h2 id="sound-heading">Sound</h2>
         <p>
           Volume is
-          <span class="interactor">
+          <span class="interactor range-interactor">
             <label class="proof" for="volume-control">Volume</label>
             <input id="volume-control" type="range" min="0" max="100" step="1" disabled />
-            <span id="volume-value">unknown</span>
+            <span id="volume-value" class="interactor-value">unknown</span>
           </span>
           and mute is
           <span class="interactor">
@@ -209,10 +229,10 @@ export function rootHtml() {
         <h2 id="display-heading">Display</h2>
         <p id="brightness-status">
           Brightness is
-          <span class="interactor">
+          <span class="interactor range-interactor">
             <label class="proof" for="brightness-control">Brightness</label>
             <input id="brightness-control" type="range" min="0" max="100" step="1" disabled />
-            <span id="brightness-value">unknown</span>
+            <span id="brightness-value" class="interactor-value">unknown</span>
           </span>.
           <span id="brightness-error" class="error" role="status"></span>
         </p>

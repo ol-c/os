@@ -246,7 +246,7 @@ Implementation status:
 - [x] Define the Milestone 4 synced in-VM development proof surface and test strategy.
 - [x] Add one supported host↔guest shared repo mount path using `virtiofs`.
 - [x] Enable in-guest development against the shared tree with a fixed mount location.
-- [x] Add source-backed preview for localhost UI and terminal client assets from `/source`.
+- [x] Add source-backed preview for localhost UI from `/source`, with terminal sessions owned by a stable service so Codex-driven edits do not kill the active terminal.
 - [x] Document the validate-inside-VM, then package-with-Nix workflow for browser-surface changes.
 - [ ] Add a later development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
 

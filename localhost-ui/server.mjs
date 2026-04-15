@@ -13,31 +13,11 @@ function requireEnv(name) {
   return value;
 }
 
-function getDemoUser() {
-  const entry = readFileSync('/etc/passwd', 'utf8')
-    .split('\n')
-    .find(line => line.startsWith('demo:'));
-
-  if (!entry) {
-    throw new Error('Unable to resolve demo user from /etc/passwd');
-  }
-
-  const fields = entry.split(':');
-  return {
-    uid: fields[2],
-    gid: fields[3],
-  };
-}
-
 const tlsKeyPath = requireEnv('OLC_TLS_KEY');
 const tlsCertPath = requireEnv('OLC_TLS_CERT');
 const app = createOlcApp({
-  bashBin: requireEnv('OLC_BASH'),
-  demoUser: getDemoUser(),
   systemControls: createSelectedSystemControls(),
-  terminalClientCss: readFileSync(requireEnv('OLC_TERMINAL_CLIENT_CSS'), 'utf8'),
-  terminalClientJs: readFileSync(requireEnv('OLC_TERMINAL_CLIENT_JS'), 'utf8'),
-  ttydBin: requireEnv('OLC_TTYD'),
+  terminalUpstreamUrl: process.env.OLC_TERMINAL_UPSTREAM || 'http://127.0.0.1:9444',
 });
 
 const server = createServer({

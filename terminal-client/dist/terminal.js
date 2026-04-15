@@ -6167,6 +6167,7 @@ WARNING: This link could potentially be dangerous`)) {
   var decoder = new TextDecoder();
   var fallbackTitle = "ol-c terminal";
   var appConfig = window.OLC_TERMINAL_CONFIG;
+  var reconnectFailureWindowMs = 1e4;
   var terminalNode = document.getElementById("terminal");
   var statusNode = document.getElementById("terminal-status");
   var terminal = new import_xterm.Terminal({
@@ -6194,9 +6195,9 @@ WARNING: This link could potentially be dangerous`)) {
   var socket = null;
   var reconnectTimer = null;
   var terminated = false;
-  var closeSignalSent = false;
   var pageTitle = fallbackTitle;
   var reconnectDelayMs = 1e3;
+  var firstReconnectFailureAt = null;
   terminal.loadAddon(fitAddon);
   terminal.open(terminalNode);
   fitAddon.fit();
@@ -6298,25 +6299,6 @@ WARNING: This link could potentially be dangerous`)) {
       { sticky: true, html: true }
     );
   }
-  function sendCloseSignal() {
-    if (closeSignalSent || !appConfig.closeUrl) {
-      return;
-    }
-    closeSignalSent = true;
-    if (navigator.sendBeacon) {
-      const sent = navigator.sendBeacon(appConfig.closeUrl, new Blob([], { type: "text/plain" }));
-      if (sent) {
-        return;
-      }
-    }
-    void fetch(appConfig.closeUrl, {
-      method: "POST",
-      cache: "no-store",
-      credentials: "same-origin",
-      keepalive: true
-    }).catch(() => {
-    });
-  }
   function closeRootSession() {
     terminated = true;
     if (socket) {
@@ -6333,6 +6315,7 @@ WARNING: This link could potentially be dangerous`)) {
   async function connect() {
     try {
       const authToken = await fetchBackendToken();
+      firstReconnectFailureAt = null;
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${window.location.host}${appConfig.wsPath}`;
       const ws = new WebSocket(wsUrl, ["tty"]);
@@ -6383,6 +6366,13 @@ WARNING: This link could potentially be dangerous`)) {
         }
       };
     } catch (error) {
+      const now = Date.now();
+      firstReconnectFailureAt ??= now;
+      if (now - firstReconnectFailureAt < reconnectFailureWindowMs) {
+        showStatus(`Reconnecting: ${error.message}...`, { sticky: true });
+        scheduleReconnect();
+        return;
+      }
       endSession(`Unable to reconnect: ${error.message}.`);
     }
   }
@@ -6406,9 +6396,6 @@ WARNING: This link could potentially be dangerous`)) {
   window.addEventListener("resize", () => {
     fitAddon.fit();
     sendResize();
-  });
-  window.addEventListener("pagehide", () => {
-    sendCloseSignal();
   });
   void connect();
 })();

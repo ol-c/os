@@ -50,7 +50,7 @@ Firefox in the guest is packaged from pinned nixpkgs with a repo-local browser f
 
 The mount is read-write. The `demo` user is pinned to UID `1000`, which matches the normal first-user UID on Ubuntu hosts and keeps host-owned repo files writable from the guest in the common development setup. If the host repo owner is not UID `1000`, writes from inside the guest may need host-side ownership or permission adjustment.
 
-The localhost UI service uses the packaged Nix store source by default, but when `/source/localhost-ui/server.mjs` exists it runs the service from `/source` instead. The source preview supervisor watches `/source/localhost-ui` and `/source/terminal-client/dist`; when those files change it restarts the HTTPS service. Refresh `https://localhost/` in Firefox to see server-side UI updates.
+The localhost UI service uses the packaged Nix store source by default, but when `/source/localhost-ui/server.mjs` exists it runs the service from `/source` instead. The source preview supervisor watches `/source/localhost-ui`; when those files change it restarts the HTTPS UI service. Refresh `https://localhost/` in Firefox to see server-side UI updates.
 
 For terminal client changes, run this inside `/source/terminal-client`:
 
@@ -58,9 +58,9 @@ For terminal client changes, run this inside `/source/terminal-client`:
 npm run watch
 ```
 
-That rebuilds `dist/terminal.js` as `src` changes. The localhost UI service then restarts from the changed `dist` assets.
+That rebuilds `dist/terminal.js` as `src` changes. The rebuilt assets are used by the stable terminal service after the VM image or service is refreshed.
 
-This source preview loop is for the Node localhost UI and built terminal client assets. Firefox binary and browser chrome package changes still use the intentional packaged workflow below.
+The terminal service is intentionally stable and separate from the reloadable UI preview service. Existing terminal tabs keep running while `ol-c-ui` restarts. Rebuilt terminal client assets apply to newly opened `/terminal` tabs after the VM image or stable terminal service is updated. Firefox binary and browser chrome package changes still use the intentional packaged workflow below.
 
 The guest includes a `codex` command for in-VM development. From `https://localhost/terminal`, run:
 
@@ -77,10 +77,10 @@ The wrapper uses `npx` to run the pinned `@openai/codex` CLI, defaults to `CODEX
 - `base.nix` owns boot, qemu guest support, serial console, hostname, and NixOS state version
 - `users.nix` owns root/demo users, autologin, demo home, and shell prompt
 - `packages.nix` owns the shared guest package list
-- `localhost-ui.nix` owns the generated localhost TLS material, trusted CA, and `ol-c-ui` service
+- `localhost-ui.nix` owns the generated localhost TLS material, trusted CA, stable `ol-c-terminal` service, and reloadable `ol-c-ui` service
 - `graphical-session.nix` owns X, matchbox, SPICE guest integration, Firefox profile setup, and browser launch
 
-The localhost HTTPS service source lives in `localhost-ui/server.mjs`. Nix wires it into the guest and provides the runtime paths for TLS material, terminal assets, `ttyd`, and bash.
+The localhost HTTPS service source lives in `localhost-ui/server.mjs`. The stable terminal service source lives in `localhost-ui/terminal-server.mjs`. Nix wires both into the guest and provides the runtime paths for TLS material, terminal assets, `ttyd`, and bash.
 
 ## Milestone 3 Terminal Proof
 
@@ -92,7 +92,7 @@ Proof of success:
 - common full-screen terminal programs such as `vim`, `less`, and `top` behave correctly enough for normal use
 - the browser tab title shows the executing shell command while a command runs, shows the current directory at an idle shell prompt, and follows title updates from running programs when they emit them
 
-The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The OL-C localhost HTTPS service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps the backend alive while the browser terminal websocket is connected.
+The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The stable OL-C terminal service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps the backend alive while the browser terminal websocket is connected. The reloadable localhost HTTPS UI service proxies `/terminal*` to that stable terminal service.
 
 Session behavior for this proof:
 - `/terminal` always creates a fresh shell
@@ -101,7 +101,7 @@ Session behavior for this proof:
 - when the root shell exits, the terminal page asks Firefox to close that tab instead of showing an ended-session interface
 - connected terminal websockets keep their backend alive indefinitely, including when the tab is unfocused
 - unexpected websocket disconnects are treated as transport interruptions and get a bounded reconnect grace period before cleanup
-- the page sends a best-effort close signal when it leaves so clean tab closure can terminate the backend immediately
+- transient token fetch failures during service restarts are retried briefly before the tab is treated as unrecoverable
 - the page title shows the current directory at the shell prompt, the executing command while Bash starts a command, program-emitted titles while foreground programs run, and otherwise uses `ol-c terminal`
 
 ## Milestone 3 System Controls Proof

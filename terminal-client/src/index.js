@@ -12,6 +12,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const fallbackTitle = 'ol-c terminal';
 const appConfig = window.OLC_TERMINAL_CONFIG;
+const reconnectFailureWindowMs = 10_000;
 
 const terminalNode = document.getElementById('terminal');
 const statusNode = document.getElementById('terminal-status');
@@ -41,9 +42,9 @@ const sessionLifecycle = createSessionLifecycle({
 let socket = null;
 let reconnectTimer = null;
 let terminated = false;
-let closeSignalSent = false;
 let pageTitle = fallbackTitle;
 let reconnectDelayMs = 1000;
+let firstReconnectFailureAt = null;
 
 terminal.loadAddon(fitAddon);
 terminal.open(terminalNode);
@@ -168,27 +169,6 @@ function endSession(message) {
   );
 }
 
-function sendCloseSignal() {
-  if (closeSignalSent || !appConfig.closeUrl) {
-    return;
-  }
-  closeSignalSent = true;
-
-  if (navigator.sendBeacon) {
-    const sent = navigator.sendBeacon(appConfig.closeUrl, new Blob([], { type: 'text/plain' }));
-    if (sent) {
-      return;
-    }
-  }
-
-  void fetch(appConfig.closeUrl, {
-    method: 'POST',
-    cache: 'no-store',
-    credentials: 'same-origin',
-    keepalive: true,
-  }).catch(() => {});
-}
-
 function closeRootSession() {
   terminated = true;
   if (socket) {
@@ -207,6 +187,7 @@ function closeRootSession() {
 async function connect() {
   try {
     const authToken = await fetchBackendToken();
+    firstReconnectFailureAt = null;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}${appConfig.wsPath}`;
     const ws = new WebSocket(wsUrl, ['tty']);
@@ -264,6 +245,15 @@ async function connect() {
       }
     };
   } catch (error) {
+    const now = Date.now();
+    firstReconnectFailureAt ??= now;
+
+    if (now - firstReconnectFailureAt < reconnectFailureWindowMs) {
+      showStatus(`Reconnecting: ${error.message}...`, { sticky: true });
+      scheduleReconnect();
+      return;
+    }
+
     endSession(`Unable to reconnect: ${error.message}.`);
   }
 }
@@ -293,10 +283,6 @@ terminal.onTitleChange(title => {
 window.addEventListener('resize', () => {
   fitAddon.fit();
   sendResize();
-});
-
-window.addEventListener('pagehide', () => {
-  sendCloseSignal();
 });
 
 void connect();

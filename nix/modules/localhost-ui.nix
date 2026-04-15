@@ -77,20 +77,38 @@ in {
       (builtins.readFile "${localhostTls}/ca.crt")
     ];
 
-    systemd.services.ol-c-ui = {
-      description = "OL-C local HTTPS UI";
+    systemd.services.ol-c-terminal = {
+      description = "OL-C stable browser terminal service";
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
 
       environment = {
         OLC_BASH = "${pkgs.bashInteractive}/bin/bash";
-        OLC_PACTL = "${pkgs.pulseaudio}/bin/pactl";
-        OLC_PULSE_SERVER = "unix:/run/user/1000/pulse/native";
-        OLC_TLS_CERT = "${localhostTls}/server.crt";
-        OLC_TLS_KEY = "${localhostTls}/server.key";
         OLC_TERMINAL_CLIENT_CSS = "${../../terminal-client/dist/terminal.css}";
         OLC_TERMINAL_CLIENT_JS = "${../../terminal-client/dist/terminal.js}";
+        OLC_TERMINAL_PORT = "9444";
         OLC_TTYD = "${pkgs.ttyd}/bin/ttyd";
+      };
+
+      serviceConfig = {
+        ExecStart = "${pkgs.nodejs}/bin/node ${../../localhost-ui}/terminal-server.mjs";
+        Restart = "on-failure";
+        RestartSec = "1s";
+      };
+    };
+
+    systemd.services.ol-c-ui = {
+      description = "OL-C local HTTPS UI";
+      after = [ "network.target" "ol-c-terminal.service" ];
+      wants = [ "ol-c-terminal.service" ];
+      wantedBy = [ "multi-user.target" ];
+
+      environment = {
+        OLC_PACTL = "${pkgs.pulseaudio}/bin/pactl";
+        OLC_PULSE_SERVER = "unix:/run/user/1000/pulse/native";
+        OLC_TERMINAL_UPSTREAM = "http://127.0.0.1:9444";
+        OLC_TLS_CERT = "${localhostTls}/server.crt";
+        OLC_TLS_KEY = "${localhostTls}/server.key";
       };
 
       serviceConfig = {
