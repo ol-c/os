@@ -20,6 +20,9 @@ Environment:
                           GTK scale if using a GTK display backend. Default: 1.
   OLC_QEMU_GDK_DPI_SCALE
                           GTK text DPI scale if using a GTK display backend. Default: 1.
+  OLC_SOURCE_DIR          Host source tree to mount at /source. Default: this repo.
+  OLC_VIRTIOFSD           virtiofsd executable path. Default: first virtiofsd in PATH.
+  OLC_VIRTIOFSD_SANDBOX   virtiofsd sandbox mode. Default: none.
 EOF
 }
 
@@ -28,10 +31,47 @@ fail() {
   exit 1
 }
 
+fail_missing_virtiofsd() {
+  cat >&2 <<'EOF'
+error: required command not found: virtiofsd
+
+Install the host virtiofs daemon, then rerun ./launch-vm.
+
+Ubuntu:
+  sudo apt update
+  sudo apt install -y virtiofsd
+
+If virtiofsd is installed in a non-standard location, set:
+  OLC_VIRTIOFSD=/path/to/virtiofsd ./launch-vm
+EOF
+  exit 1
+}
+
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     fail "required command not found: $1"
   fi
+}
+
+resolve_command() {
+  command -v "$1" 2>/dev/null || true
+}
+
+resolve_virtiofsd() {
+  local candidate
+
+  candidate="$(resolve_command virtiofsd)"
+  if [[ -n "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return
+  fi
+
+  for candidate in /usr/lib/qemu/virtiofsd /usr/libexec/virtiofsd; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
 }
 
 require_value() {
@@ -50,7 +90,11 @@ QEMU_DISPLAY="${OLC_QEMU_DISPLAY:-}"
 QEMU_SDL_VIDEO_HIGHDPI_DISABLED="${OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED:-1}"
 QEMU_GDK_SCALE="${OLC_QEMU_GDK_SCALE:-1}"
 QEMU_GDK_DPI_SCALE="${OLC_QEMU_GDK_DPI_SCALE:-1}"
+SOURCE_DIR="${OLC_SOURCE_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
+VIRTIOFSD_SANDBOX="${OLC_VIRTIOFSD_SANDBOX:-none}"
 SPICE_SOCKET_DIR=""
+VIRTIOFS_SOCKET_DIR=""
+VIRTIOFSD_PID=""
 QEMU_PID=""
 VIEWER_PID=""
 
@@ -77,6 +121,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 require_command qemu-system-x86_64
+VIRTIOFSD="${OLC_VIRTIOFSD:-$(resolve_virtiofsd)}"
+[[ -n "$VIRTIOFSD" ]] || fail_missing_virtiofsd
+[[ -d "$SOURCE_DIR" ]] || fail "source directory not found: $SOURCE_DIR"
 
 case "$QEMU_FRONTEND" in
   spice|sdl|gtk)
@@ -110,6 +157,8 @@ echo "booting image: $IMAGE_PATH"
 echo "graphical proof: Firefox launches as the in-guest UI shell"
 echo "serial output: terminal"
 echo "qemu frontend: $QEMU_FRONTEND"
+echo "source mount: $SOURCE_DIR -> /source"
+echo "virtiofsd sandbox: $VIRTIOFSD_SANDBOX"
 if [[ -n "$QEMU_DISPLAY" ]]; then
   echo "display backend: $QEMU_DISPLAY"
 fi
@@ -136,19 +185,57 @@ cleanup() {
   if [[ -n "$SPICE_SOCKET_DIR" ]]; then
     rm -rf "$SPICE_SOCKET_DIR"
   fi
+
+  if [[ -n "$VIRTIOFSD_PID" ]] && kill -0 "$VIRTIOFSD_PID" >/dev/null 2>&1; then
+    kill "$VIRTIOFSD_PID" >/dev/null 2>&1 || true
+    wait "$VIRTIOFSD_PID" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -n "$VIRTIOFS_SOCKET_DIR" ]]; then
+    rm -rf "$VIRTIOFS_SOCKET_DIR"
+  fi
 }
 
 trap cleanup EXIT INT TERM
+
+VIRTIOFS_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-virtiofs.XXXXXX")"
+VIRTIOFS_SOCKET="${VIRTIOFS_SOCKET_DIR}/source.sock"
+
+"$VIRTIOFSD" \
+  --socket-path="$VIRTIOFS_SOCKET" \
+  --shared-dir="$SOURCE_DIR" \
+  --sandbox="$VIRTIOFSD_SANDBOX" \
+  --cache=auto &
+VIRTIOFSD_PID="$!"
+
+for _ in $(seq 1 100); do
+  if [[ -S "$VIRTIOFS_SOCKET" || -e "$VIRTIOFS_SOCKET" ]]; then
+    break
+  fi
+
+  if ! kill -0 "$VIRTIOFSD_PID" >/dev/null 2>&1; then
+    wait "$VIRTIOFSD_PID" || true
+    fail "virtiofsd exited before creating the source socket"
+  fi
+
+  sleep 0.1
+done
+
+[[ -S "$VIRTIOFS_SOCKET" || -e "$VIRTIOFS_SOCKET" ]] || fail "timed out waiting for virtiofsd socket: $VIRTIOFS_SOCKET"
 
 qemu_base_args=(
   -enable-kvm
   -cpu host
   -smp "$CPUS"
   -m "$MEMORY_MB"
+  -object "memory-backend-memfd,id=olc-mem,size=${MEMORY_MB}M,share=on"
+  -numa "node,memdev=olc-mem"
   -drive "if=virtio,format=qcow2,file=$IMAGE_PATH"
   -snapshot
   -netdev user,id=olc-net
   -device virtio-net-pci,netdev=olc-net
+  -chardev "socket,id=ol-c-source,path=${VIRTIOFS_SOCKET}"
+  -device "vhost-user-fs-pci,chardev=ol-c-source,tag=ol-c-source"
   -device virtio-rng-pci
   -device virtio-vga
   -device qemu-xhci,id=ol-c-usb
@@ -160,9 +247,13 @@ qemu_base_args=(
 )
 
 if [[ "$QEMU_FRONTEND" != "spice" ]]; then
-  exec qemu-system-x86_64 \
+  qemu-system-x86_64 \
     "${qemu_base_args[@]}" \
-    -display "$QEMU_DISPLAY"
+    -display "$QEMU_DISPLAY" &
+  QEMU_PID="$!"
+  wait "$QEMU_PID"
+  QEMU_PID=""
+  exit 0
 fi
 
 SPICE_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-spice.XXXXXX")"

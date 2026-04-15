@@ -111,7 +111,8 @@ Milestone 4 decisions:
 - Mount the whole OL-C repo into the guest, read-write.
 - Treat the shared host repo as the durable source of truth.
 - Allow in-guest Codex-assisted development against that mounted repo.
-- Use the in-VM workflow to validate browser and Firefox-source changes before updating the repo's packaged patch file.
+- Use the in-VM workflow to validate browser-surface changes before updating packaged artifacts.
+- Defer efficient Firefox source-tree launch and patch validation from inside the VM to a later development-loop milestone.
 - Keep final Nix packaging and VM-image integration as a separate explicit step after in-VM validation.
 
 Success criteria:
@@ -119,7 +120,7 @@ Success criteria:
 - There is one documented command to launch the VM with the shared repo mounted.
 - The mounted repo is visible and writable inside the guest at a fixed path.
 - A developer can edit files inside the VM and see those changes immediately on the host.
-- A developer can validate a Firefox or browser-surface change inside the VM without rebuilding the full Nix-packaged Firefox on every source edit.
+- A developer can validate a browser-surface change inside the VM without rebuilding the full Nix-packaged image on every source edit.
 - After validation, the developer can update the repo patch artifact and run the final packaged build path intentionally.
 
 Out of scope:
@@ -161,6 +162,7 @@ Examples of things that may belong here:
 - Artifact manifests
 - Overlays or snapshots
 - Better launch scripts
+- Efficiently launching a Firefox source-tree build from inside the VM to test patch edits before refreshing `patches/firefox/0001-close-last-tab-to-localhost.patch`
 
 Question this milestone answers:
 - Do we have a development workflow that is practical and repeatable?
@@ -207,13 +209,13 @@ Question this milestone answers:
 
 # Current Focus
 
-Milestones 1 and 2 are complete.
+Milestones 1, 2, and 3 are complete.
 
-We are currently focused on Milestone 3.
+We are currently focused on Milestone 4.
 
 Immediate next task:
-- Harden the real guest adapters for browser-driven system controls beyond the fake-backed proof, starting with QEMU-backed network and audio behavior.
-- Keep the Firefox packaged-patch workflow documented as a follow-on after the terminal proof lands.
+- Prove synced in-VM development against the host OL-C repo mounted at `/source`.
+- Keep efficient Firefox source-tree launch from inside the VM as a later development-loop milestone after the shared repo preview loop is stable.
 
 Implementation status:
 - [x] Chose QEMU for the first development backend.
@@ -241,10 +243,12 @@ Implementation status:
 - [x] Implement the first browser-visible system status surfaces for core device utilities.
 - [x] Implement browser-driven control flows for the selected Milestone 3 utilities.
 - [x] Add excellent automated coverage for the browser-to-system control contract.
-- [ ] Define the Milestone 4 synced in-VM development proof surface and test strategy.
-- [ ] Add one supported host↔guest shared repo mount path using `virtiofs`.
-- [ ] Enable in-guest development against the shared tree with a fixed mount location.
-- [ ] Document the validate-inside-VM, then package-with-Nix workflow for Firefox and browser-surface changes.
+- [x] Define the Milestone 4 synced in-VM development proof surface and test strategy.
+- [x] Add one supported host↔guest shared repo mount path using `virtiofs`.
+- [x] Enable in-guest development against the shared tree with a fixed mount location.
+- [x] Add source-backed preview for localhost UI and terminal client assets from `/source`.
+- [x] Document the validate-inside-VM, then package-with-Nix workflow for browser-surface changes.
+- [ ] Add a later development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
 
 Known bugs to track:
 - [x] Firefox localhost replacement is too fragile: when the last terminal tab closes itself after root shell exit, Firefox does not open a replacement `https://localhost` tab. The terminal page should not own this; fix the browser shell patch so all last-tab closure paths get the localhost replacement behavior.

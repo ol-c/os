@@ -6,9 +6,12 @@
     coreutils
     curl
     firefox
+    git
     matchbox
     nodejs
+    openssh
     pulseaudio
+    ripgrep
     spice-vdagent
     ttyd
     wireplumber

@@ -5,6 +5,7 @@
 
   users.users.demo = {
     isNormalUser = true;
+    uid = 1000;
     initialPassword = "demo";
     extraGroups = [ "wheel" ];
     home = "/home/demo";

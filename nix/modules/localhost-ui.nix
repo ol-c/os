@@ -94,7 +94,7 @@ in {
       };
 
       serviceConfig = {
-        ExecStart = "${pkgs.nodejs}/bin/node ${../../localhost-ui}/server.mjs";
+        ExecStart = "${pkgs.nodejs}/bin/node ${../../localhost-ui}/dev-supervisor.mjs";
         Restart = "on-failure";
         RestartSec = "1s";
       };

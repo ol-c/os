@@ -23,7 +23,7 @@ Build and launch it with:
 ./launch-vm
 ```
 
-`launch-vm` uses QEMU's SPICE display path by default and opens it with `remote-viewer`. This avoids the host HiDPI cursor-coordinate issues seen with QEMU's GTK window and the cursor escape roughness seen with QEMU's SDL window. SDL and GTK remain available as direct QEMU display fallbacks:
+`launch-vm` uses QEMU's SPICE display path by default and opens it with `remote-viewer`. It also mounts this repo read-write inside the guest at `/source` using QEMU virtiofs, so the in-browser terminal can edit the same source tree that is visible on the host. This avoids the host HiDPI cursor-coordinate issues seen with QEMU's GTK window and the cursor escape roughness seen with QEMU's SDL window. SDL and GTK remain available as direct QEMU display fallbacks:
 
 ```sh
 OLC_QEMU_FRONTEND=sdl ./launch-vm
@@ -39,6 +39,37 @@ OLC_QEMU_GDK_SCALE=2 OLC_QEMU_GDK_DPI_SCALE=0.5 ./launch-vm
 ```
 
 Firefox in the guest is packaged from pinned nixpkgs with a repo-local browser frontend patch. The normal VM uses the fast packaged target, which repacks the pinned nixpkgs Firefox browser chrome assets instead of recompiling Firefox for every JavaScript-only OL-C shell edit.
+
+## Milestone 4 In-VM Development
+
+`./launch-vm` mounts the host repo into the guest at:
+
+```sh
+/source
+```
+
+The mount is read-write. The `demo` user is pinned to UID `1000`, which matches the normal first-user UID on Ubuntu hosts and keeps host-owned repo files writable from the guest in the common development setup. If the host repo owner is not UID `1000`, writes from inside the guest may need host-side ownership or permission adjustment.
+
+The localhost UI service uses the packaged Nix store source by default, but when `/source/localhost-ui/server.mjs` exists it runs the service from `/source` instead. The source preview supervisor watches `/source/localhost-ui` and `/source/terminal-client/dist`; when those files change it restarts the HTTPS service. Refresh `https://localhost/` in Firefox to see server-side UI updates.
+
+For terminal client changes, run this inside `/source/terminal-client`:
+
+```sh
+npm run watch
+```
+
+That rebuilds `dist/terminal.js` as `src` changes. The localhost UI service then restarts from the changed `dist` assets.
+
+This source preview loop is for the Node localhost UI and built terminal client assets. Firefox binary and browser chrome package changes still use the intentional packaged workflow below.
+
+The guest includes a `codex` command for in-VM development. From `https://localhost/terminal`, run:
+
+```sh
+cd /source
+codex
+```
+
+The wrapper uses `npx` to run the pinned `@openai/codex` CLI, defaults to `CODEX_MODEL=gpt-5.4`, and passes `--dangerously-bypass-approvals-and-sandbox` so Codex can make full-system development changes inside this disposable VM. The `demo` user has passwordless `sudo` through the `wheel` group for the same reason. This is a development VM convenience, not the intended production OS security posture.
 
 ## Nix Layout
 
@@ -185,10 +216,10 @@ Ubuntu host prerequisites:
 
 ```sh
 sudo apt update
-sudo apt install -y qemu-system-x86 qemu-utils qemu-kvm virt-viewer
+sudo apt install -y qemu-system-x86 qemu-utils qemu-kvm virt-viewer virtiofsd
 ```
 
-`virt-viewer` provides the `remote-viewer` command used by `./launch-vm` to open the default SPICE VM display. Without it, the launcher will stop before booting the guest.
+`virt-viewer` provides the `remote-viewer` command used by `./launch-vm` to open the default SPICE VM display. `virtiofsd` provides the host daemon used to mount this repo at `/source` inside the guest. Without either command, the launcher will stop before booting the guest.
 
 Install Nix using the standard installer for your environment, then confirm the required tools exist:
 
@@ -196,6 +227,7 @@ Install Nix using the standard installer for your environment, then confirm the 
 command -v nix
 command -v qemu-system-x86_64
 command -v remote-viewer
+command -v virtiofsd
 test -e /dev/kvm && echo "/dev/kvm present"
 ```
 

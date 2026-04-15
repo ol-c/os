@@ -55,6 +55,33 @@ fi
 exit 0
 EOF
 
+  cat >"${CASE_TMP}/fakebin/virtiofsd" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "${CASE_TMP}/virtiofsd.args"
+socket_path=""
+shared_dir=""
+for arg in "\$@"; do
+  case "\$arg" in
+    --socket-path=*)
+      socket_path="\${arg#--socket-path=}"
+      ;;
+    --shared-dir=*)
+      shared_dir="\${arg#--shared-dir=}"
+      ;;
+  esac
+done
+printf '%s\n' "\$socket_path" > "${CASE_TMP}/virtiofsd.socket-path"
+printf '%s\n' "\$shared_dir" > "${CASE_TMP}/virtiofsd.shared-dir"
+if [[ -n "\$socket_path" ]]; then
+  mkdir -p "\$(dirname "\$socket_path")"
+  : > "\$socket_path"
+fi
+trap 'printf "%s\n" terminated > "${CASE_TMP}/virtiofsd.terminated"; exit 0' TERM INT
+while true; do
+  sleep 1
+done
+EOF
+
   cat >"${CASE_TMP}/fakebin/remote-viewer" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" > "${CASE_TMP}/remote-viewer.args"
@@ -73,7 +100,7 @@ printf '%s\n' "\$*" > "${CASE_TMP}/build-vm.args"
 printf '%s\n' "${CASE_TMP}/artifacts/guest.qcow2"
 EOF
 
-  chmod +x "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/fakebin/remote-viewer" "${CASE_TMP}/fakebin/build-vm"
+  chmod +x "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/fakebin/virtiofsd" "${CASE_TMP}/fakebin/remote-viewer" "${CASE_TMP}/fakebin/build-vm"
 }
 
 assert_contains() {
@@ -126,6 +153,29 @@ test_requires_remote_viewer_for_spice() {
   cleanup_case
 }
 
+test_requires_virtiofsd() {
+  local output status
+  setup_case
+  rm -f "${CASE_TMP}/fakebin/virtiofsd"
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}" \
+      2>&1
+  )"
+  status=$?
+  set -e
+
+  [[ $status -ne 0 ]] || fail "expected launch-vm to fail without virtiofsd"
+  assert_contains "$output" "required command not found: virtiofsd"
+  assert_contains "$output" "sudo apt install -y virtiofsd"
+  assert_contains "$output" "OLC_VIRTIOFSD=/path/to/virtiofsd ./launch-vm"
+  cleanup_case
+}
+
 test_requires_kvm_by_default() {
   local output status
   setup_case
@@ -146,7 +196,7 @@ test_requires_kvm_by_default() {
 }
 
 test_invokes_qemu_with_expected_spice_args() {
-  local output qemu_args viewer_args build_args sdl_hidpi_disabled gdk_scale gdk_dpi_scale spice_socket
+  local output qemu_args viewer_args build_args virtiofsd_args virtiofsd_shared_dir sdl_hidpi_disabled gdk_scale gdk_dpi_scale spice_socket virtiofs_socket
   setup_case
 
   output="$(
@@ -161,12 +211,16 @@ test_invokes_qemu_with_expected_spice_args() {
   qemu_args="$(cat "${CASE_TMP}/qemu.args")"
   viewer_args="$(cat "${CASE_TMP}/remote-viewer.args")"
   build_args="$(cat "${CASE_TMP}/build-vm.args")"
+  virtiofsd_args="$(cat "${CASE_TMP}/virtiofsd.args")"
+  virtiofsd_shared_dir="$(cat "${CASE_TMP}/virtiofsd.shared-dir")"
   sdl_hidpi_disabled="$(cat "${CASE_TMP}/qemu.sdl-hidpi-disabled")"
   gdk_scale="$(cat "${CASE_TMP}/qemu.gdk-scale")"
   gdk_dpi_scale="$(cat "${CASE_TMP}/qemu.gdk-dpi-scale")"
   assert_contains "$output" "graphical proof: Firefox launches as the in-guest UI shell"
   assert_contains "$output" "serial output: terminal"
   assert_contains "$output" "qemu frontend: spice"
+  assert_contains "$output" "source mount: ${ROOT_DIR} -> /source"
+  assert_contains "$output" "virtiofsd sandbox: none"
   assert_contains "$output" "spice socket:"
   assert_contains "$output" "viewer: remote-viewer spice+unix://"
   assert_contains "$output" "sdl hidpi disabled: SDL_VIDEO_HIGHDPI_DISABLED=1"
@@ -175,9 +229,13 @@ test_invokes_qemu_with_expected_spice_args() {
   assert_contains "$qemu_args" "-cpu host"
   assert_contains "$qemu_args" "-smp 3"
   assert_contains "$qemu_args" "-m 3072"
+  assert_contains "$qemu_args" "-object memory-backend-memfd,id=olc-mem,size=3072M,share=on"
+  assert_contains "$qemu_args" "-numa node,memdev=olc-mem"
   assert_contains "$qemu_args" "if=virtio,format=qcow2,file=${CASE_TMP}/artifacts/guest.qcow2"
   assert_contains "$qemu_args" "-netdev user,id=olc-net"
   assert_contains "$qemu_args" "-device virtio-net-pci,netdev=olc-net"
+  assert_contains "$qemu_args" "-chardev socket,id=ol-c-source,path="
+  assert_contains "$qemu_args" "-device vhost-user-fs-pci,chardev=ol-c-source,tag=ol-c-source"
   assert_contains "$qemu_args" "-device virtio-vga"
   assert_contains "$qemu_args" "-device qemu-xhci,id=ol-c-usb"
   assert_contains "$qemu_args" "-device usb-tablet,bus=ol-c-usb.0"
@@ -192,6 +250,11 @@ test_invokes_qemu_with_expected_spice_args() {
   assert_contains "$qemu_args" "-chardev spicevmc,id=ol-c-vdagent,name=vdagent"
   assert_contains "$qemu_args" "-device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0"
   assert_contains "$qemu_args" "-serial mon:stdio"
+  assert_contains "$virtiofsd_args" "--socket-path="
+  assert_contains "$virtiofsd_args" "--shared-dir=${ROOT_DIR}"
+  assert_contains "$virtiofsd_args" "--sandbox=none"
+  assert_contains "$virtiofsd_args" "--cache=auto"
+  [[ "$virtiofsd_shared_dir" == "$ROOT_DIR" ]] || fail "expected virtiofsd to share repo root, got [$virtiofsd_shared_dir]"
   [[ "$qemu_args" != *"-nographic"* ]] || fail "milestone2 should use a graphical display"
   assert_contains "$viewer_args" "spice+unix://"
   [[ -z "$build_args" ]] || fail "expected launch-vm to call build-vm without arguments, got [$build_args]"
@@ -199,8 +262,11 @@ test_invokes_qemu_with_expected_spice_args() {
   [[ "$gdk_scale" == "1" ]] || fail "expected QEMU GTK scale to default to 1, got [$gdk_scale]"
   [[ "$gdk_dpi_scale" == "1" ]] || fail "expected QEMU GTK DPI scale to default to 1, got [$gdk_dpi_scale]"
   [[ -f "${CASE_TMP}/qemu.terminated" ]] || fail "expected viewer exit to terminate QEMU"
+  [[ -f "${CASE_TMP}/virtiofsd.terminated" ]] || fail "expected launcher cleanup to terminate virtiofsd"
   spice_socket="${viewer_args#spice+unix://}"
   [[ ! -e "$(dirname "$spice_socket")" ]] || fail "expected SPICE temp directory to be removed"
+  virtiofs_socket="$(cat "${CASE_TMP}/virtiofsd.socket-path")"
+  [[ ! -e "$(dirname "$virtiofs_socket")" ]] || fail "expected virtiofs temp directory to be removed"
   cleanup_case
 }
 
@@ -348,6 +414,7 @@ EOF
 
 test_requires_qemu
 test_requires_remote_viewer_for_spice
+test_requires_virtiofsd
 test_requires_kvm_by_default
 test_invokes_qemu_with_expected_spice_args
 test_exits_when_qemu_exits_first

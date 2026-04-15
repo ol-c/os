@@ -6,12 +6,15 @@ BUILD_VM="${ROOT_DIR}/build-vm"
 FLAKE_NIX="${ROOT_DIR}/flake.nix"
 OLC_NIX="${ROOT_DIR}/nix/ol-c.nix"
 NIX_BASE="${ROOT_DIR}/nix/modules/base.nix"
+NIX_DEVELOPMENT="${ROOT_DIR}/nix/modules/development.nix"
 NIX_GRAPHICAL_SESSION="${ROOT_DIR}/nix/modules/graphical-session.nix"
 NIX_LOCALHOST_UI="${ROOT_DIR}/nix/modules/localhost-ui.nix"
 NIX_PACKAGES="${ROOT_DIR}/nix/modules/packages.nix"
+NIX_SHARED_REPO="${ROOT_DIR}/nix/modules/shared-repo.nix"
 NIX_USERS="${ROOT_DIR}/nix/modules/users.nix"
 NIX_FIREFOX_FAST="${ROOT_DIR}/nix/firefox-localhost-fast.nix"
 LOCALHOST_UI_SERVER="${ROOT_DIR}/localhost-ui/server.mjs"
+LOCALHOST_UI_DEV_SUPERVISOR="${ROOT_DIR}/localhost-ui/dev-supervisor.mjs"
 LOCALHOST_UI_APP="${ROOT_DIR}/localhost-ui/app.mjs"
 LOCALHOST_UI_SYSTEM_CONTROLS="${ROOT_DIR}/localhost-ui/system-controls.mjs"
 LOCALHOST_UI_SYSTEM_PAGE="${ROOT_DIR}/localhost-ui/system-page.mjs"
@@ -156,10 +159,13 @@ test_vm_runs_firefox_borderless_and_maximized() {
   contents="$(
     cat \
       "${NIX_BASE}" \
+      "${NIX_DEVELOPMENT}" \
       "${NIX_GRAPHICAL_SESSION}" \
       "${NIX_LOCALHOST_UI}" \
       "${NIX_PACKAGES}" \
+      "${NIX_SHARED_REPO}" \
       "${NIX_USERS}" \
+      "${LOCALHOST_UI_DEV_SUPERVISOR}" \
       "${LOCALHOST_UI_SERVER}" \
       "${LOCALHOST_UI_APP}" \
       "${LOCALHOST_UI_SYSTEM_CONTROLS}" \
@@ -173,10 +179,37 @@ test_vm_runs_firefox_borderless_and_maximized() {
   [[ "$olc_nix" == *"./modules/packages.nix"* ]] || fail "expected OL-C module to import packages module"
   [[ "$olc_nix" == *"./modules/localhost-ui.nix"* ]] || fail "expected OL-C module to import localhost UI module"
   [[ "$olc_nix" == *"./modules/graphical-session.nix"* ]] || fail "expected OL-C module to import graphical session module"
+  [[ "$olc_nix" == *"./modules/shared-repo.nix"* ]] || fail "expected OL-C module to import shared repo module"
+  [[ "$olc_nix" == *"./modules/development.nix"* ]] || fail "expected OL-C module to import development module"
   [[ "$olc_nix" != *"system.activationScripts.olcDemoSession"* ]] || fail "expected OL-C module to delegate graphical session setup"
   [[ "$olc_nix" != *"systemd.services.ol-c-ui"* ]] || fail "expected OL-C module to delegate localhost UI setup"
 
+  [[ "$contents" == *"fileSystems.\"/source\""* ]] || fail "expected VM to mount the shared repo at /source"
+  [[ "$contents" == *"device = \"ol-c-source\";"* ]] || fail "expected VM shared repo mount to use the QEMU virtiofs tag"
+  [[ "$contents" == *"fsType = \"virtiofs\";"* ]] || fail "expected VM shared repo mount to use virtiofs"
+  [[ "$contents" == *"\"x-systemd.automount\""* ]] || fail "expected VM shared repo mount to be automount-friendly"
+  [[ "$contents" == *"uid = 1000;"* ]] || fail "expected demo user UID to be fixed for host shared repo writes"
+  [[ "$contents" == *"git"* ]] || fail "expected VM to include git for in-guest development"
+  [[ "$contents" == *"ripgrep"* ]] || fail "expected VM to include ripgrep for in-guest development"
+  [[ "$contents" == *"openssh"* ]] || fail "expected VM to include OpenSSH tools for in-guest development"
+  [[ "$contents" == *"writeShellScriptBin \"codex\""* ]] || fail "expected VM to include a codex command wrapper"
+  [[ "$contents" == *"codexVersion = \"0.120.0\";"* ]] || fail "expected VM codex wrapper to pin the Codex CLI version"
+  [[ "$contents" == *"@openai/codex@\${codexVersion}"* ]] || fail "expected VM codex wrapper to use the pinned Codex CLI version"
+  [[ "$contents" == *"--dangerously-bypass-approvals-and-sandbox"* ]] || fail "expected VM codex wrapper to run with full development permissions"
+  [[ "$contents" == *"CODEX_MODEL:-gpt-5.4"* ]] || fail "expected VM codex wrapper to default to GPT-5.4"
+  [[ "$contents" == *"getent passwd"* ]] || fail "expected VM codex wrapper to recover HOME when terminal sessions omit it"
+  [[ "$contents" == *"CODEX_HOME:-''\${HOME}/.codex"* ]] || fail "expected VM codex wrapper to derive CODEX_HOME from a safe HOME value"
+  [[ "$contents" == *"mkdir -p \"\$CODEX_HOME\""* ]] || fail "expected VM codex wrapper to create CODEX_HOME before launching Codex"
+  [[ "$contents" == *"NO_UPDATE_NOTIFIER"* ]] || fail "expected VM codex wrapper to suppress npm update notices"
+  [[ "$contents" == *"security.sudo.wheelNeedsPassword = false;"* ]] || fail "expected VM demo user to have passwordless sudo for development"
   [[ "$contents" == *"OLC_LOCALHOST_UI_OK"* ]] || fail "expected VM to define an OL-C localhost UI success marker"
+  [[ "$contents" == *"dev-supervisor.mjs"* ]] || fail "expected VM localhost UI service to run through the source preview supervisor"
+  [[ "$contents" == *"OLC_SOURCE_PREVIEW_MODE"* ]] || fail "expected VM source preview supervisor to log selected preview mode"
+  [[ "$contents" == *"const defaultSourceRoot = '/source';"* ]] || fail "expected VM source preview supervisor to default to /source"
+  [[ "$contents" == *"serverPath: sourceServer"* ]] || fail "expected VM source preview supervisor to prefer /source localhost UI server"
+  [[ "$contents" == *"storeRoot}/server.mjs"* ]] || fail "expected VM source preview supervisor to fall back to the packaged server"
+  [[ "$contents" == *"/terminal-client/dist/terminal.js"* ]] || fail "expected VM source preview supervisor to use source terminal client assets"
+  [[ "$contents" == *"scheduleRestart()"* ]] || fail "expected VM source preview supervisor to restart after watched edits"
   [[ "$contents" == *"const fallbackTerminalTitle = 'ol-c terminal';"* ]] || fail "expected VM terminal fallback title to use product branding"
   [[ "$contents" == *"<title>System</title>"* ]] || fail "expected VM home tab title to use the system status document title"
   [[ "$contents" == *"<h1>System</h1>"* ]] || fail "expected VM home heading to use the system status document title"

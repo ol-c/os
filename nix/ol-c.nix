@@ -7,5 +7,7 @@
     ./modules/packages.nix
     ./modules/localhost-ui.nix
     ./modules/graphical-session.nix
+    ./modules/shared-repo.nix
+    ./modules/development.nix
   ];
 }

@@ -1,14 +1,15 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
-import { build } from 'esbuild';
+import { build, context } from 'esbuild';
 
 const outdir = join(process.cwd(), 'dist');
 const require = createRequire(import.meta.url);
+const watchMode = process.argv.includes('--watch');
 
 mkdirSync(outdir, { recursive: true });
 
-await build({
+const buildOptions = {
   entryPoints: [join(process.cwd(), 'src/index.js')],
   bundle: true,
   format: 'iife',
@@ -17,7 +18,15 @@ await build({
   outfile: join(outdir, 'terminal.js'),
   minify: false,
   sourcemap: false,
-});
+};
+
+if (watchMode) {
+  const buildContext = await context(buildOptions);
+  await buildContext.watch();
+  console.log('watching terminal client source');
+} else {
+  await build(buildOptions);
+}
 
 const xtermCssPath = dirname(require.resolve('@xterm/xterm/package.json'));
 const xtermCss = readFileSync(join(xtermCssPath, 'css/xterm.css'), 'utf8');
@@ -77,3 +86,7 @@ body {
 `;
 
 writeFileSync(join(outdir, 'terminal.css'), `${xtermCss}\n${appCss}`);
+
+if (watchMode) {
+  await new Promise(() => {});
+}
