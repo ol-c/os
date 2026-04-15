@@ -103,6 +103,25 @@ Suggested selector:
 
 The fake adapter should maintain in-memory state for mutable controls. It should start from a known default state, update state through the same mutation paths as the real adapter, and return the same status shape.
 
+Fake hardware capabilities are composed with `OLC_HARDWARE_TEST` instead of fixed scenario names. Supported tokens are:
+
+- `network`
+- `wifi`
+- `battery`
+- `audio`
+- `brightness`
+- `appearance`
+- `bluetooth`
+
+Convenience tokens are:
+
+- `none`
+- `desktop`
+- `laptop`
+- `all`
+
+Commas and colons are both accepted separators, so `OLC_HARDWARE_TEST=wifi,bluetooth` and `OLC_HARDWARE_TEST=wifi:bluetooth` are equivalent. This is a development harness for real-hardware capability contracts, not a claim that QEMU emulates all of those devices. Later real-hardware probe reports should map into this same capability model, and deeper fidelity tests can use tools such as `umockdev` or `python-dbusmock` when we need to replay sysfs, udev, or D-Bus service behavior.
+
 ## Control Semantics
 
 Use conservative first semantics for each utility.

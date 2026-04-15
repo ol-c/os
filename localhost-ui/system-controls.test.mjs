@@ -1,6 +1,47 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createFakeSystemAdapter, createSystemControls } from './system-controls.mjs';
+import {
+  createDefaultSystemStatus,
+  createFakeSystemAdapter,
+  createSystemControls,
+  listFakeHardwareCapabilityTokens,
+  parseFakeHardwareCapabilities,
+} from './system-controls.mjs';
+
+test('hardware test capability parsing accepts comma and colon separators', () => {
+  assert.deepEqual(
+    Array.from(parseFakeHardwareCapabilities('wifi:bluetooth,battery')).sort(),
+    [ 'appearance', 'battery', 'bluetooth', 'wifi' ],
+  );
+  assert.deepEqual(
+    Array.from(parseFakeHardwareCapabilities('wifi:wifi')).sort(),
+    [ 'appearance', 'wifi' ],
+  );
+});
+
+test('hardware test convenience tokens expand to capability sets', () => {
+  assert.deepEqual(
+    Array.from(parseFakeHardwareCapabilities('none')).sort(),
+    [ 'appearance' ],
+  );
+  assert.deepEqual(
+    Array.from(parseFakeHardwareCapabilities('desktop')).sort(),
+    [ 'appearance', 'audio', 'network' ],
+  );
+  assert.deepEqual(
+    Array.from(parseFakeHardwareCapabilities('laptop')).sort(),
+    [ 'appearance', 'audio', 'battery', 'bluetooth', 'brightness', 'network', 'wifi' ],
+  );
+  assert.deepEqual(
+    Array.from(parseFakeHardwareCapabilities('all')).sort(),
+    [ 'appearance', 'audio', 'battery', 'bluetooth', 'brightness', 'network', 'wifi' ],
+  );
+});
+
+test('hardware test capability parsing rejects unknown tokens', () => {
+  assert.throws(() => parseFakeHardwareCapabilities('wifi,camera'), /unknown hardware test capability: camera/);
+  assert.ok(listFakeHardwareCapabilityTokens().includes('wifi'));
+});
 
 test('fake adapter returns a complete initial status', async () => {
   const adapter = createFakeSystemAdapter();
@@ -15,15 +56,29 @@ test('fake adapter returns a complete initial status', async () => {
     'bluetooth',
   ]);
   assert.equal(status.network.connected, true);
-  assert.match(status.network.implementation, /Fake backend/);
+  assert.match(status.network.implementation, /Fake hardware test/);
   assert.equal(status.volume.percent, 40);
-  assert.match(status.volume.implementation, /Fake backend/);
+  assert.match(status.volume.implementation, /Fake hardware test/);
   assert.equal(status.appearance.mode, 'light');
-  assert.match(status.appearance.implementation, /Fake backend/);
+  assert.match(status.appearance.implementation, /Fake hardware test/);
+});
+
+test('hardware test capabilities shape facility availability', async () => {
+  const status = createDefaultSystemStatus('wifi,battery,bluetooth');
+
+  assert.equal(status.network.available, true);
+  assert.equal(status.network.kind, 'wifi');
+  assert.deepEqual(status.network.choices.map(choice => choice.id), [ 'wifi-home', 'wifi-office', 'offline' ]);
+  assert.equal(status.power.available, true);
+  assert.equal(status.volume.available, false);
+  assert.equal(status.brightness.available, false);
+  assert.equal(status.appearance.available, true);
+  assert.equal(status.bluetooth.available, true);
+  assert.match(status.volume.implementation, /OLC_HARDWARE_TEST=audio/);
 });
 
 test('fake adapter updates mutable controls', async () => {
-  const adapter = createFakeSystemAdapter();
+  const adapter = createFakeSystemAdapter(createDefaultSystemStatus('all'));
 
   await adapter.volume({ percent: 65 });
   await adapter.volume({ muted: true });
@@ -41,8 +96,28 @@ test('fake adapter updates mutable controls', async () => {
   assert.equal(status.network.connected, false);
 });
 
+test('fake Wi-Fi choices update kind and SSID', async () => {
+  const adapter = createFakeSystemAdapter(createDefaultSystemStatus('wifi'));
+
+  await adapter.network({ selected: 'wifi-office' });
+  const status = await adapter.getStatus();
+
+  assert.equal(status.network.connected, true);
+  assert.equal(status.network.kind, 'wifi');
+  assert.equal(status.network.ssid, 'Office Wi-Fi');
+});
+
+test('fake unavailable controls reject commands', async () => {
+  const adapter = createFakeSystemAdapter(createDefaultSystemStatus('none'));
+
+  await assert.rejects(() => adapter.network({ selected: 'offline' }), /network control is unavailable/);
+  await assert.rejects(() => adapter.volume({ percent: 10 }), /volume control is unavailable/);
+  await assert.rejects(() => adapter.brightness({ percent: 10 }), /brightness control is unavailable/);
+  await assert.rejects(() => adapter.bluetooth({ enabled: true }), /bluetooth control is unavailable/);
+});
+
 test('fake adapter rejects invalid commands', async () => {
-  const adapter = createFakeSystemAdapter();
+  const adapter = createFakeSystemAdapter(createDefaultSystemStatus('all'));
 
   await assert.rejects(() => adapter.volume({ percent: 101 }), /integer from 0 to 100/);
   await assert.rejects(() => adapter.volume({ muted: 'yes' }), /muted must be true or false/);

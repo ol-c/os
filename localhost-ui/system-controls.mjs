@@ -4,50 +4,156 @@ import { networkInterfaces } from 'node:os';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+const defaultFakeHardwareTest = 'network,audio,brightness,appearance';
+const supportedCapabilityTokens = new Set([
+  'appearance',
+  'audio',
+  'battery',
+  'bluetooth',
+  'brightness',
+  'network',
+  'wifi',
+]);
+const convenienceCapabilityTokens = new Map([
+  [ 'all', [ 'network', 'wifi', 'battery', 'audio', 'brightness', 'appearance', 'bluetooth' ] ],
+  [ 'desktop', [ 'network', 'audio', 'appearance' ] ],
+  [ 'laptop', [ 'network', 'wifi', 'battery', 'audio', 'brightness', 'appearance', 'bluetooth' ] ],
+  [ 'none', [ 'appearance' ] ],
+]);
 
-export function createDefaultSystemStatus() {
+export function listFakeHardwareCapabilityTokens() {
+  return [
+    ...Array.from(supportedCapabilityTokens).sort(),
+    ...Array.from(convenienceCapabilityTokens.keys()).sort(),
+  ];
+}
+
+export function parseFakeHardwareCapabilities(value = defaultFakeHardwareTest) {
+  const rawTokens = String(value || defaultFakeHardwareTest)
+    .split(/[,:]/)
+    .map(token => token.trim().toLowerCase())
+    .filter(Boolean);
+  const capabilities = new Set();
+
+  for (const token of rawTokens) {
+    if (convenienceCapabilityTokens.has(token)) {
+      for (const capability of convenienceCapabilityTokens.get(token)) {
+        capabilities.add(capability);
+      }
+      continue;
+    }
+
+    if (!supportedCapabilityTokens.has(token)) {
+      throw validationError(`unknown hardware test capability: ${token}`);
+    }
+
+    capabilities.add(token);
+  }
+
+  capabilities.add('appearance');
+  return capabilities;
+}
+
+function capabilityListText(capabilities) {
+  return Array.from(capabilities).sort().join(', ');
+}
+
+function fakeImplementation(capabilities, capability, availableText, unavailableText) {
+  const enabled = capabilities.has(capability);
+  const status = enabled ? availableText : unavailableText;
+  return `Fake hardware test (${capabilityListText(capabilities)}): ${status}`;
+}
+
+export function createDefaultSystemStatus(capabilityInput = defaultFakeHardwareTest) {
+  const capabilities = capabilityInput instanceof Set
+    ? new Set(capabilityInput)
+    : parseFakeHardwareCapabilities(capabilityInput);
+  const hasNetwork = capabilities.has('network') || capabilities.has('wifi');
+  const hasWifi = capabilities.has('wifi');
+  const networkChoices = [];
+  if (capabilities.has('network')) {
+    networkChoices.push({ id: 'wired', label: 'Wired' });
+  }
+  if (hasWifi) {
+    networkChoices.push(
+      { id: 'wifi-home', label: 'Home Wi-Fi' },
+      { id: 'wifi-office', label: 'Office Wi-Fi' },
+    );
+  }
+  networkChoices.push({ id: 'offline', label: 'Offline' });
+  const selectedNetwork = hasNetwork
+    ? networkChoices.find(choice => choice.id !== 'offline')?.id ?? 'offline'
+    : null;
+
   return {
     network: {
-      available: true,
-      connected: true,
-      implementation: 'Fake backend: selectable wired or offline state for deterministic tests.',
-      kind: 'ethernet',
+      available: hasNetwork,
+      connected: hasNetwork,
+      implementation: fakeImplementation(
+        capabilities,
+        hasWifi ? 'wifi' : 'network',
+        hasWifi ? 'Wi-Fi and wired network choices are fake-controllable.' : 'wired network is fake-controllable.',
+        'enable with OLC_HARDWARE_TEST=network or wifi.',
+      ),
+      kind: selectedNetwork?.startsWith('wifi-') ? 'wifi' : hasNetwork ? 'ethernet' : null,
       ssid: null,
-      address: '10.0.2.15',
-      choices: [
-        { id: 'wired', label: 'Wired' },
-        { id: 'offline', label: 'Offline' },
-      ],
-      selected: 'wired',
+      address: hasNetwork ? '10.0.2.15' : null,
+      choices: hasNetwork ? networkChoices : [],
+      selected: selectedNetwork,
     },
     power: {
-      available: false,
-      charging: null,
-      implementation: 'Fake backend: no battery is exposed in the default test state.',
-      percent: null,
+      available: capabilities.has('battery'),
+      charging: capabilities.has('battery') ? false : null,
+      implementation: fakeImplementation(
+        capabilities,
+        'battery',
+        'battery state is fake-readable.',
+        'enable with OLC_HARDWARE_TEST=battery.',
+      ),
+      percent: capabilities.has('battery') ? 82 : null,
       timeRemainingSeconds: null,
     },
     volume: {
-      available: true,
-      implementation: 'Fake backend: volume and mute changes are stored in memory.',
-      muted: false,
-      percent: 40,
+      available: capabilities.has('audio'),
+      implementation: fakeImplementation(
+        capabilities,
+        'audio',
+        'volume and mute are fake-controllable.',
+        'enable with OLC_HARDWARE_TEST=audio.',
+      ),
+      muted: capabilities.has('audio') ? false : null,
+      percent: capabilities.has('audio') ? 40 : null,
     },
     brightness: {
-      available: true,
-      implementation: 'Fake backend: brightness changes are stored in memory.',
-      percent: 70,
+      available: capabilities.has('brightness'),
+      implementation: fakeImplementation(
+        capabilities,
+        'brightness',
+        'brightness is fake-controllable.',
+        'enable with OLC_HARDWARE_TEST=brightness.',
+      ),
+      percent: capabilities.has('brightness') ? 70 : null,
     },
     appearance: {
       available: true,
-      implementation: 'Fake backend: mode changes are stored in memory and applied to this page.',
+      implementation: fakeImplementation(
+        capabilities,
+        'appearance',
+        'appearance is fake-controllable and applied to this page.',
+        'appearance remains available for the test display.',
+      ),
       mode: 'light',
     },
     bluetooth: {
-      available: true,
-      enabled: false,
-      implementation: 'Fake backend: Bluetooth power state is stored in memory.',
-      discovering: false,
+      available: capabilities.has('bluetooth'),
+      enabled: capabilities.has('bluetooth') ? false : null,
+      implementation: fakeImplementation(
+        capabilities,
+        'bluetooth',
+        'Bluetooth power state is fake-controllable.',
+        'enable with OLC_HARDWARE_TEST=bluetooth.',
+      ),
+      discovering: capabilities.has('bluetooth') ? false : null,
     },
   };
 }
@@ -125,13 +231,21 @@ export function createFakeSystemAdapter(initialStatus = createDefaultSystemStatu
 
     async network(command) {
       requireObject(command);
+      if (!state.network.available) {
+        throw unavailableError('network control is unavailable');
+      }
       if (command.selected !== undefined) {
         if (!state.network.choices.some(choice => choice.id === command.selected)) {
           throw validationError('selected network choice is not available');
         }
         state.network.selected = command.selected;
         state.network.connected = command.selected !== 'offline';
-        state.network.kind = command.selected === 'offline' ? null : 'ethernet';
+        state.network.kind = command.selected === 'offline'
+          ? null
+          : command.selected.startsWith('wifi-') ? 'wifi' : 'ethernet';
+        state.network.ssid = command.selected.startsWith('wifi-')
+          ? state.network.choices.find(choice => choice.id === command.selected)?.label ?? null
+          : null;
         state.network.address = command.selected === 'offline' ? null : '10.0.2.15';
       }
       return clone(state);
@@ -139,6 +253,9 @@ export function createFakeSystemAdapter(initialStatus = createDefaultSystemStatu
 
     async volume(command) {
       requireObject(command);
+      if (!state.volume.available) {
+        throw unavailableError('volume control is unavailable');
+      }
       if (command.percent !== undefined) {
         validatePercent(command.percent);
         state.volume.percent = command.percent;
@@ -152,6 +269,9 @@ export function createFakeSystemAdapter(initialStatus = createDefaultSystemStatu
 
     async brightness(command) {
       requireObject(command);
+      if (!state.brightness.available) {
+        throw unavailableError('brightness control is unavailable');
+      }
       validatePercent(command.percent);
       state.brightness.percent = command.percent;
       return clone(state);
@@ -166,6 +286,9 @@ export function createFakeSystemAdapter(initialStatus = createDefaultSystemStatu
 
     async bluetooth(command) {
       requireObject(command);
+      if (!state.bluetooth.available) {
+        throw unavailableError('bluetooth control is unavailable');
+      }
       validateBoolean(command.enabled, 'enabled');
       state.bluetooth.enabled = command.enabled;
       state.bluetooth.discovering = false;
@@ -430,7 +553,7 @@ export function createSystemControls(adapter, options = {}) {
 
 export function createSelectedSystemControls(backendName = process.env.OLC_SYSTEM_CONTROLS_BACKEND) {
   const adapter = backendName === 'fake'
-    ? createFakeSystemAdapter()
+    ? createFakeSystemAdapter(createDefaultSystemStatus(process.env.OLC_HARDWARE_TEST))
     : createRealSystemAdapter();
 
   return createSystemControls(adapter);

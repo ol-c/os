@@ -86,6 +86,14 @@ Proof of success:
 
 The first controls implementation should keep the browser contract separate from the guest system adapter, should use server-sent events for pushed status updates, and should make `OLC_SYSTEM_CONTROLS_BACKEND=fake` select the deterministic fake backend for tests.
 
+Fake hardware capabilities can be composed with `OLC_HARDWARE_TEST` when the fake backend is selected:
+
+```sh
+OLC_SYSTEM_CONTROLS_BACKEND=fake OLC_HARDWARE_TEST=wifi:bluetooth:battery node localhost-ui/server.mjs
+```
+
+Supported capability tokens are `network`, `wifi`, `battery`, `audio`, `brightness`, `appearance`, and `bluetooth`. Convenience tokens are `none`, `desktop`, `laptop`, and `all`. Commas and colons are both accepted separators.
+
 Run the system controls service tests with:
 
 ```sh

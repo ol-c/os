@@ -2,13 +2,16 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
 import { createOlcApp } from './app.mjs';
-import { createFakeSystemAdapter, createSystemControls } from './system-controls.mjs';
+import { createDefaultSystemStatus, createFakeSystemAdapter, createSystemControls } from './system-controls.mjs';
 
-async function withServer(fn) {
+async function withServer(fn, hardwareTest = undefined) {
   const app = createOlcApp({
     bashBin: '/bin/bash',
     demoUser: { uid: '1000', gid: '100' },
-    systemControls: createSystemControls(createFakeSystemAdapter(), { pollIntervalMs: 0 }),
+    systemControls: createSystemControls(
+      createFakeSystemAdapter(createDefaultSystemStatus(hardwareTest)),
+      { pollIntervalMs: 0 },
+    ),
     terminalClientCss: '',
     terminalClientJs: '',
     ttydBin: '/bin/false',
@@ -97,6 +100,19 @@ test('SSE stream sends the initial status event', async () => {
   });
 });
 
+test('SSE stream reflects selected fake hardware capabilities', async () => {
+  await withServer(async baseUrl => {
+    const response = await fetch(`${baseUrl}/api/system/events`);
+    const status = await readStatusEvent(response.body);
+    await response.body.cancel();
+
+    assert.equal(status.network.kind, 'wifi');
+    assert.equal(status.power.available, true);
+    assert.equal(status.bluetooth.available, true);
+    assert.equal(status.volume.available, false);
+  }, 'wifi,battery,bluetooth');
+});
+
 test('command endpoint returns status and publishes an SSE update', async () => {
   await withServer(async baseUrl => {
     const events = await fetch(`${baseUrl}/api/system/events`);
@@ -138,4 +154,17 @@ test('command endpoint validates request bodies and methods', async () => {
     const wrongMethod = await requestJson(baseUrl, '/api/system/bluetooth');
     assert.equal(wrongMethod.response.status, 405);
   });
+});
+
+test('command endpoint rejects disabled hardware capabilities', async () => {
+  await withServer(async baseUrl => {
+    const { body, response } = await requestJson(baseUrl, '/api/system/volume', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ percent: 73 }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.match(body.error, /volume control is unavailable/);
+  }, 'none');
 });

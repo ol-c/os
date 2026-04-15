@@ -185,6 +185,8 @@ test_vm_runs_firefox_borderless_and_maximized() {
   [[ "$contents" == *"POST /api/system"* || "$contents" == *"postCommand('/api/system/volume'"* ]] || fail "expected VM localhost UI to send system control commands"
   [[ "$contents" == *"createSelectedSystemControls"* ]] || fail "expected VM localhost UI to select real or fake system controls"
   [[ "$contents" == *"OLC_SYSTEM_CONTROLS_BACKEND"* ]] || fail "expected VM localhost UI to support deterministic fake controls"
+  [[ "$contents" == *"OLC_HARDWARE_TEST"* ]] || fail "expected VM localhost UI to support composable fake hardware capabilities"
+  [[ "$contents" == *"wifi"* && "$contents" == *"bluetooth"* && "$contents" == *"battery"* ]] || fail "expected VM localhost UI to define hardware test capability tokens"
   [[ "$contents" == *"'/api/system/events'"* ]] || fail "expected VM localhost UI to expose an SSE system status endpoint"
   [[ "$contents" == *"'/api/system/volume'"* ]] || fail "expected VM localhost UI to expose the volume command endpoint"
   [[ "$contents" == *"'/api/system/appearance'"* ]] || fail "expected VM localhost UI to expose the appearance command endpoint"
