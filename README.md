@@ -60,7 +60,7 @@ npm run watch
 
 That rebuilds `dist/terminal.js` as `src` changes. The rebuilt assets are used by the stable terminal service after the VM image or service is refreshed.
 
-The terminal service is intentionally stable and separate from the reloadable UI preview service. Existing terminal tabs keep running while `ol-c-ui` restarts. Rebuilt terminal client assets apply to newly opened `/terminal` tabs after the VM image or stable terminal service is updated. Firefox binary and browser chrome package changes still use the intentional packaged workflow below.
+The terminal service is intentionally stable and separate from the reloadable UI preview service. `https://localhost/terminal` remains the user-facing entry point, but the terminal page loads assets and connects its backend websocket directly to the stable terminal backend on `https://localhost:9443`. Existing terminal tabs keep running while `ol-c-ui` restarts. Rebuilt terminal client assets apply to newly opened `/terminal` tabs after the VM image or stable terminal service is updated. Firefox binary and browser chrome package changes still use the intentional packaged workflow below.
 
 The guest includes a `codex` command for in-VM development. From `https://localhost/terminal`, run:
 
@@ -92,7 +92,7 @@ Proof of success:
 - common full-screen terminal programs such as `vim`, `less`, and `top` behave correctly enough for normal use
 - the browser tab title shows the executing shell command while a command runs, shows the current directory at an idle shell prompt, and follows title updates from running programs when they emit them
 
-The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The stable OL-C terminal service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps the backend alive while the browser terminal websocket is connected. The reloadable localhost HTTPS UI service proxies `/terminal*` to that stable terminal service.
+The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The stable OL-C terminal service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps the backend alive while the browser terminal websocket is connected. The reloadable localhost HTTPS UI service only hands off the initial `/terminal` document; terminal assets, token requests, close requests, and websockets use the stable backend origin on port `9443` with short `/session/<token>/...` paths.
 
 Session behavior for this proof:
 - `/terminal` always creates a fresh shell

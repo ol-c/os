@@ -48,6 +48,7 @@ async function withTerminalServer(fn) {
     spawnProcess,
     terminalClientCss: '/* terminal css */',
     terminalClientJs: '/* terminal js */',
+    terminalPublicUrl: 'https://localhost:9443',
     ttydBin: '/bin/ttyd',
   });
   const server = http.createServer(app.handleRequest);
@@ -64,7 +65,7 @@ async function withTerminalServer(fn) {
 }
 
 function extractBackendToken(html) {
-  const match = html.match(/\/terminal\/backend\/([^/]+)\/token/);
+  const match = html.match(/\/session\/([^/]+)\/token/);
   assert.ok(match, 'expected terminal HTML to include a backend token URL');
   return match[1];
 }
@@ -83,20 +84,55 @@ test('/terminal creates a fresh hidden backend token on each visit', async () =>
     assert.equal(second.status, 200);
     assert.notEqual(firstToken, secondToken);
     assert.match(firstHtml, /window\.OLC_TERMINAL_CONFIG/);
+    assert.match(firstHtml, /https:\/\/localhost:9443\/session\/[^/]+\/token/);
+    assert.match(firstHtml, /https:\/\/localhost:9443\/session\/[^/]+\/close/);
+    assert.match(firstHtml, /https:\/\/localhost:9443\/session\/[^/]+\/ws/);
+    assert.match(firstHtml, /https:\/\/localhost:9443\/assets\/terminal\.css/);
+    assert.match(firstHtml, /https:\/\/localhost:9443\/assets\/terminal\.js/);
 
-    await fetch(`${baseUrl}/terminal/backend/${firstToken}/close`, { method: 'POST' });
-    await fetch(`${baseUrl}/terminal/backend/${secondToken}/close`, { method: 'POST' });
+    await fetch(`${baseUrl}/session/${firstToken}/close`, { method: 'POST' });
+    await fetch(`${baseUrl}/session/${secondToken}/close`, { method: 'POST' });
   });
 });
 
 test('terminal assets are served by the stable terminal app', async () => {
   await withTerminalServer(async baseUrl => {
-    const css = await fetch(`${baseUrl}/terminal/assets/terminal.css`);
-    const js = await fetch(`${baseUrl}/terminal/assets/terminal.js`);
+    const css = await fetch(`${baseUrl}/assets/terminal.css`);
+    const js = await fetch(`${baseUrl}/assets/terminal.js`);
 
     assert.equal(css.status, 200);
     assert.equal(await css.text(), '/* terminal css */');
     assert.equal(js.status, 200);
     assert.equal(await js.text(), '/* terminal js */');
+  });
+});
+
+test('terminal backend accepts localhost CORS requests from the UI origin', async () => {
+  await withTerminalServer(async baseUrl => {
+    const page = await fetch(`${baseUrl}/terminal`);
+    const token = extractBackendToken(await page.text());
+
+    const tokenResponse = await fetch(`${baseUrl}/session/${token}/token`, {
+      headers: { origin: 'https://localhost' },
+    });
+    assert.equal(tokenResponse.headers.get('access-control-allow-origin'), 'https://localhost');
+
+    const preflight = await fetch(`${baseUrl}/session/${token}/close`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://localhost',
+        'access-control-request-method': 'POST',
+      },
+    });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://localhost');
+    assert.match(preflight.headers.get('access-control-allow-methods'), /POST/);
+
+    const closeResponse = await fetch(`${baseUrl}/session/${token}/close`, {
+      method: 'POST',
+      headers: { origin: 'https://localhost' },
+    });
+    assert.equal(closeResponse.status, 204);
+    assert.equal(closeResponse.headers.get('access-control-allow-origin'), 'https://localhost');
   });
 });

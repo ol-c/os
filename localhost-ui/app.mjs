@@ -1,4 +1,5 @@
 import http from 'node:http';
+import https from 'node:https';
 import { URL } from 'node:url';
 import { rootHtml } from './system-page.mjs';
 
@@ -109,7 +110,9 @@ function parseUpstream(url) {
   const parsed = new URL(url);
   return {
     host: parsed.hostname,
-    port: Number(parsed.port || 80),
+    port: Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80)),
+    rejectUnauthorized: parsed.protocol === 'https:' ? false : undefined,
+    request: parsed.protocol === 'https:' ? https.request : http.request,
   };
 }
 
@@ -125,16 +128,17 @@ function stripHopByHopHeaders(headers) {
 export function createOlcApp(options) {
   const {
     systemControls,
-    terminalUpstreamUrl = 'http://127.0.0.1:9444',
+    terminalUpstreamUrl = 'https://127.0.0.1:9443',
   } = options;
   const terminalUpstream = parseUpstream(terminalUpstreamUrl);
 
   function proxyTerminalRequest(req, res) {
-    const proxy = http.request({
+    const proxy = terminalUpstream.request({
       host: terminalUpstream.host,
       port: terminalUpstream.port,
       method: req.method,
       path: req.url,
+      rejectUnauthorized: terminalUpstream.rejectUnauthorized,
       headers: {
         ...stripHopByHopHeaders(req.headers),
         host: `${terminalUpstream.host}:${terminalUpstream.port}`,
@@ -234,70 +238,9 @@ export function createOlcApp(options) {
     res.end(proxyErrorHtml('The requested ol-c page was not found.'));
   }
 
-  function handleUpgrade(req, socket, head) {
-    const reqUrl = new URL(req.url, 'https://localhost');
-
-    if (!reqUrl.pathname.startsWith('/terminal')) {
-      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-
-    const proxy = http.request({
-      host: terminalUpstream.host,
-      port: terminalUpstream.port,
-      path: req.url,
-      headers: {
-        ...stripHopByHopHeaders(req.headers),
-        connection: 'upgrade',
-        host: `${terminalUpstream.host}:${terminalUpstream.port}`,
-        upgrade: req.headers.upgrade,
-      },
-    });
-
-    proxy.on('upgrade', (proxyResponse, proxySocket, proxyHead) => {
-      const statusCode = proxyResponse.statusCode ?? 101;
-      const statusMessage = proxyResponse.statusMessage ?? 'Switching Protocols';
-      const headerLines = Object.entries(proxyResponse.headers)
-        .flatMap(([name, value]) => {
-          if (Array.isArray(value)) {
-            return value.map(item => `${name}: ${item}`);
-          }
-
-          if (value === undefined) {
-            return [];
-          }
-
-          return [ `${name}: ${value}` ];
-        })
-        .join('\r\n');
-
-      socket.write(`HTTP/1.1 ${statusCode} ${statusMessage}\r\n${headerLines}\r\n\r\n`);
-
-      if (proxyHead.length > 0) {
-        socket.write(proxyHead);
-      }
-      if (head.length > 0) {
-        proxySocket.write(head);
-      }
-
-      proxySocket.pipe(socket);
-      socket.pipe(proxySocket);
-    });
-
-    proxy.on('response', proxyResponse => {
-      const statusCode = proxyResponse.statusCode ?? 502;
-      const statusMessage = proxyResponse.statusMessage ?? 'Bad Gateway';
-      socket.write(`HTTP/1.1 ${statusCode} ${statusMessage}\r\nConnection: close\r\n\r\n`);
-      proxyResponse.resume();
-      socket.destroy();
-    });
-
-    proxy.on('error', () => {
-      socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
-      socket.destroy();
-    });
-    proxy.end();
+  function handleUpgrade(req, socket) {
+    socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+    socket.destroy();
   }
 
   return {

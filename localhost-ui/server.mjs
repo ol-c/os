@@ -17,7 +17,7 @@ const tlsKeyPath = requireEnv('OLC_TLS_KEY');
 const tlsCertPath = requireEnv('OLC_TLS_CERT');
 const app = createOlcApp({
   systemControls: createSelectedSystemControls(),
-  terminalUpstreamUrl: process.env.OLC_TERMINAL_UPSTREAM || 'http://127.0.0.1:9444',
+  terminalUpstreamUrl: process.env.OLC_TERMINAL_UPSTREAM || 'https://127.0.0.1:9443',
 });
 
 const server = createServer({

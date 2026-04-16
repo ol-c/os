@@ -7,6 +7,10 @@ import { URL } from 'node:url';
 const fallbackTerminalTitle = 'ol-c terminal';
 const backendStartupTimeoutMs = 30_000;
 const reconnectGraceTimeoutMs = 60_000;
+const allowedTerminalOrigins = new Set([
+  'https://localhost',
+  'https://127.0.0.1',
+]);
 
 function setNoStore(res) {
   res.setHeader('cache-control', 'no-store');
@@ -58,8 +62,13 @@ function proxyErrorHtml(message) {
 </html>`;
 }
 
-function terminalHtml(token) {
-  const backendBasePath = `/terminal/backend/${token}`;
+function pathForBackend(token) {
+  return `/session/${token}`;
+}
+
+function terminalHtml(token, terminalPublicUrl = '') {
+  const backendBasePath = pathForBackend(token);
+  const publicPrefix = terminalPublicUrl.replace(/\/$/, '');
 
   return `<!doctype html>
 <html lang="en">
@@ -67,7 +76,7 @@ function terminalHtml(token) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${fallbackTerminalTitle}</title>
-    <link rel="stylesheet" href="/terminal/assets/terminal.css" />
+    <link rel="stylesheet" href="${publicPrefix}/assets/terminal.css" />
   </head>
   <body>
     <div id="app">
@@ -76,12 +85,12 @@ function terminalHtml(token) {
     </div>
     <script>
       window.OLC_TERMINAL_CONFIG = {
-        closeUrl: ${JSON.stringify(`${backendBasePath}/close`)},
-        tokenUrl: ${JSON.stringify(`${backendBasePath}/token`)},
-        wsPath: ${JSON.stringify(`${backendBasePath}/ws`)},
+        closeUrl: ${JSON.stringify(`${publicPrefix}${backendBasePath}/close`)},
+        tokenUrl: ${JSON.stringify(`${publicPrefix}${backendBasePath}/token`)},
+        wsUrl: ${JSON.stringify(`${publicPrefix}${backendBasePath}/ws`)},
       };
     </script>
-    <script src="/terminal/assets/terminal.js"></script>
+    <script src="${publicPrefix}/assets/terminal.js"></script>
   </body>
 </html>`;
 }
@@ -100,6 +109,7 @@ export function createTerminalApp(options) {
     spawnProcess = spawn,
     terminalClientCss,
     terminalClientJs,
+    terminalPublicUrl = '',
     ttydBin,
   } = options;
   const terminalBackends = new Map();
@@ -190,7 +200,7 @@ export function createTerminalApp(options) {
   async function spawnTerminalBackend() {
     const token = randomUUID();
     const port = await reservePort();
-    const basePath = `/terminal/backend/${token}`;
+    const basePath = pathForBackend(token);
     const args = [
       '--port', String(port),
       '--interface', 'lo',
@@ -244,8 +254,21 @@ export function createTerminalApp(options) {
 
   function getBackendToken(reqUrl) {
     const pathname = new URL(reqUrl, 'https://localhost').pathname;
-    const match = pathname.match(/^\/terminal\/backend\/([^/]+)(?:\/|$)/);
+    const match = pathname.match(/^\/session\/([^/]+)(?:\/|$)/);
     return match ? match[1] : null;
+  }
+
+  function applyCors(req, res) {
+    const origin = req.headers.origin;
+
+    if (!allowedTerminalOrigins.has(origin)) {
+      return;
+    }
+
+    res.setHeader('access-control-allow-origin', origin);
+    res.setHeader('vary', 'Origin');
+    res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+    res.setHeader('access-control-allow-headers', 'content-type');
   }
 
   function markBackendActive(token) {
@@ -285,6 +308,8 @@ export function createTerminalApp(options) {
   }
 
   function closeTerminalBackend(req, res, token) {
+    applyCors(req, res);
+
     if (req.method !== 'POST') {
       setNoStore(res);
       res.writeHead(405, {
@@ -340,8 +365,16 @@ export function createTerminalApp(options) {
 
   async function handleRequest(req, res) {
     const reqUrl = new URL(req.url, 'https://localhost');
+    applyCors(req, res);
 
-    if (reqUrl.pathname === '/terminal/assets/terminal.css') {
+    if (req.method === 'OPTIONS') {
+      setNoStore(res);
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (reqUrl.pathname === '/assets/terminal.css') {
       setNoStore(res);
       res.writeHead(200, {
         'content-type': 'text/css; charset=utf-8',
@@ -350,7 +383,7 @@ export function createTerminalApp(options) {
       return;
     }
 
-    if (reqUrl.pathname === '/terminal/assets/terminal.js') {
+    if (reqUrl.pathname === '/assets/terminal.js') {
       setNoStore(res);
       res.writeHead(200, {
         'content-type': 'text/javascript; charset=utf-8',
@@ -367,7 +400,7 @@ export function createTerminalApp(options) {
         res.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
         });
-        res.end(terminalHtml(token));
+        res.end(terminalHtml(token, terminalPublicUrl));
       } catch (error) {
         setNoStore(res);
         res.writeHead(502, {
@@ -378,12 +411,12 @@ export function createTerminalApp(options) {
       return;
     }
 
-    if (reqUrl.pathname.match(/^\/terminal\/backend\/[^/]+\/close$/)) {
+    if (reqUrl.pathname.match(/^\/session\/[^/]+\/close$/)) {
       closeTerminalBackend(req, res, getBackendToken(req.url));
       return;
     }
 
-    if (reqUrl.pathname.startsWith('/terminal/backend/')) {
+    if (reqUrl.pathname.startsWith('/session/')) {
       proxyRequest(req, res, getBackendToken(req.url));
       return;
     }

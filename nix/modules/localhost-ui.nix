@@ -86,7 +86,10 @@ in {
         OLC_BASH = "${pkgs.bashInteractive}/bin/bash";
         OLC_TERMINAL_CLIENT_CSS = "${../../terminal-client/dist/terminal.css}";
         OLC_TERMINAL_CLIENT_JS = "${../../terminal-client/dist/terminal.js}";
-        OLC_TERMINAL_PORT = "9444";
+        OLC_TERMINAL_PORT = "9443";
+        OLC_TERMINAL_PUBLIC_URL = "https://localhost:9443";
+        OLC_TLS_CERT = "${localhostTls}/server.crt";
+        OLC_TLS_KEY = "${localhostTls}/server.key";
         OLC_TTYD = "${pkgs.ttyd}/bin/ttyd";
       };
 
@@ -106,7 +109,7 @@ in {
       environment = {
         OLC_PACTL = "${pkgs.pulseaudio}/bin/pactl";
         OLC_PULSE_SERVER = "unix:/run/user/1000/pulse/native";
-        OLC_TERMINAL_UPSTREAM = "http://127.0.0.1:9444";
+        OLC_TERMINAL_UPSTREAM = "https://127.0.0.1:9443";
         OLC_TLS_CERT = "${localhostTls}/server.crt";
         OLC_TLS_KEY = "${localhostTls}/server.key";
       };

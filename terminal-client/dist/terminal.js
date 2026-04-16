@@ -6376,8 +6376,7 @@ WARNING: This link could potentially be dangerous`)) {
     try {
       const authToken = await fetchBackendToken();
       firstReconnectFailureAt = null;
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//${window.location.host}${appConfig.wsPath}`;
+      const wsUrl = appConfig.wsUrl.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
       const ws = new WebSocket(wsUrl, ["tty"]);
       socket = ws;
       ws.binaryType = "arraybuffer";

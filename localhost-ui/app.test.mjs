@@ -201,13 +201,13 @@ test('/terminal is proxied to the stable terminal service', async () => {
   });
 });
 
-test('/terminal backend paths are proxied without requiring visible session URLs', async () => {
+test('terminal backend paths are not proxied through the reloadable UI service', async () => {
   await withTerminalUpstream(async (baseUrl, seenPaths) => {
-    const response = await fetch(`${baseUrl}/terminal/backend/session-token/token`);
+    const response = await fetch(`${baseUrl}/session/session-token/token`);
     const body = await response.text();
 
-    assert.equal(response.status, 200);
-    assert.equal(body, 'terminal upstream /terminal/backend/session-token/token');
-    assert.deepEqual(seenPaths, [ '/terminal/backend/session-token/token' ]);
+    assert.equal(response.status, 404);
+    assert.match(body, /requested ol-c page was not found/);
+    assert.deepEqual(seenPaths, []);
   });
 });
