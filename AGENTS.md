@@ -209,13 +209,17 @@ Question this milestone answers:
 
 # Current Focus
 
-Milestones 1, 2, and 3 are complete.
+Milestones 1, 2, 3, and 4 are complete.
 
-We are currently focused on Milestone 4.
+We are currently focused on Milestone 6.
 
 Immediate next task:
-- Prove synced in-VM development against the host OL-C repo mounted at `/source`.
-- Keep efficient Firefox source-tree launch from inside the VM as a later development-loop milestone after the shared repo preview loop is stable.
+- Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
+
+In-VM validation note:
+- When Codex is running inside the OL-C guest, it can identify that context with `hostnamectl`, `systemd-detect-virt`, and `findmnt -T /source`.
+- If `/source` is mounted from `ol-c-source` with `virtiofs`, Codex should treat edits as host-synced repo edits and can validate browser-surface work directly inside the guest.
+- When a graphical Firefox session is running in the guest, Codex may use available local GUI automation tools such as `xdotool` to actively drive the browser for validation.
 
 Implementation status:
 - [x] Chose QEMU for the first development backend.
@@ -248,7 +252,8 @@ Implementation status:
 - [x] Enable in-guest development against the shared tree with a fixed mount location.
 - [x] Add source-backed preview for localhost UI from `/source`, with terminal sessions owned by a stable service so Codex-driven edits do not kill the active terminal.
 - [x] Document the validate-inside-VM, then package-with-Nix workflow for browser-surface changes.
-- [ ] Add a later development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
+- [x] Prove synced in-VM development against the host OL-C repo mounted at `/source`.
+- [ ] Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
 
 Known bugs to track:
 - [x] Firefox localhost replacement is too fragile: when the last terminal tab closes itself after root shell exit, Firefox does not open a replacement `https://localhost` tab. The terminal page should not own this; fix the browser shell patch so all last-tab closure paths get the localhost replacement behavior.
