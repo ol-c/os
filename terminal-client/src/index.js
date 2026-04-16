@@ -1,6 +1,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { createSessionLifecycle } from './session-lifecycle.mjs';
+import { terminalThemes } from './terminal-themes.mjs';
 
 const OUTPUT = '0';
 const SET_WINDOW_TITLE = '1';
@@ -16,16 +17,18 @@ const reconnectFailureWindowMs = 10_000;
 
 const terminalNode = document.getElementById('terminal');
 const statusNode = document.getElementById('terminal-status');
+const darkModeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+function selectedTerminalTheme() {
+  return darkModeQuery.matches ? terminalThemes.dark : terminalThemes.light;
+}
+
 const terminal = new Terminal({
   allowProposedApi: true,
   cursorBlink: true,
   fontFamily: 'Consolas, "Liberation Mono", Menlo, Courier, monospace',
   fontSize: 13,
-  theme: {
-    background: '#050814',
-    foreground: '#dbe4f0',
-    cursor: '#93c5fd',
-  },
+  theme: selectedTerminalTheme(),
 });
 const fitAddon = new FitAddon();
 const sessionLifecycle = createSessionLifecycle({
@@ -134,8 +137,13 @@ function applyPreferences(preferences) {
     }
   }
 
+  applyPreferredColorScheme();
   fitAddon.fit();
   sendResize();
+}
+
+function applyPreferredColorScheme() {
+  terminal.options.theme = selectedTerminalTheme();
 }
 
 function scheduleReconnect() {
@@ -284,5 +292,6 @@ window.addEventListener('resize', () => {
   fitAddon.fit();
   sendResize();
 });
+darkModeQuery.addEventListener('change', applyPreferredColorScheme);
 
 void connect();

@@ -21,7 +21,10 @@ LOCALHOST_UI_APP="${ROOT_DIR}/localhost-ui/app.mjs"
 LOCALHOST_UI_SYSTEM_CONTROLS="${ROOT_DIR}/localhost-ui/system-controls.mjs"
 LOCALHOST_UI_SYSTEM_PAGE="${ROOT_DIR}/localhost-ui/system-page.mjs"
 TERMINAL_CLIENT_SOURCE="${ROOT_DIR}/terminal-client/src/index.js"
+TERMINAL_CLIENT_THEMES="${ROOT_DIR}/terminal-client/src/terminal-themes.mjs"
 TERMINAL_CLIENT_LIFECYCLE="${ROOT_DIR}/terminal-client/src/session-lifecycle.mjs"
+TERMINAL_CLIENT_DIST_CSS="${ROOT_DIR}/terminal-client/dist/terminal.css"
+TERMINAL_CLIENT_BUILD="${ROOT_DIR}/terminal-client/build.mjs"
 FIREFOX_PATCH="${ROOT_DIR}/patches/firefox/0001-close-last-tab-to-localhost.patch"
 TEST_TMP_ROOT="${ROOT_DIR}/.tmp-tests"
 CASE_TMP=""
@@ -157,7 +160,7 @@ EOF
 }
 
 test_vm_runs_firefox_borderless_and_maximized() {
-  local contents olc_nix terminal_client
+  local contents olc_nix terminal_client terminal_themes terminal_css terminal_build
   contents="$(
     cat \
       "${NIX_BASE}" \
@@ -177,6 +180,9 @@ test_vm_runs_firefox_borderless_and_maximized() {
   )"
   olc_nix="$(cat "${OLC_NIX}")"
   terminal_client="$(cat "${TERMINAL_CLIENT_SOURCE}" "${TERMINAL_CLIENT_LIFECYCLE}")"
+  terminal_themes="$(cat "${TERMINAL_CLIENT_THEMES}")"
+  terminal_css="$(cat "${TERMINAL_CLIENT_DIST_CSS}")"
+  terminal_build="$(cat "${TERMINAL_CLIENT_BUILD}")"
 
   [[ "$olc_nix" == *"./modules/base.nix"* ]] || fail "expected OL-C module to import base module"
   [[ "$olc_nix" == *"./modules/users.nix"* ]] || fail "expected OL-C module to import users module"
@@ -277,6 +283,27 @@ test_vm_runs_firefox_borderless_and_maximized() {
   [[ "$terminal_client" == *"const reconnectFailureWindowMs = 10_000;"* ]] || fail "expected VM terminal client to retry transient token failures"
   [[ "$terminal_client" == *"firstReconnectFailureAt ??= now;"* ]] || fail "expected VM terminal client to track reconnect failure windows"
   [[ "$terminal_client" == *"const fallbackTitle = 'ol-c terminal';"* ]] || fail "expected VM terminal client fallback title to use product branding"
+  [[ "$terminal_client" == *"import { terminalThemes } from './terminal-themes.mjs';"* ]] || fail "expected VM terminal client to import vendored terminal themes"
+  [[ "$terminal_client" == *"window.matchMedia('(prefers-color-scheme: dark)')"* ]] || fail "expected VM terminal client to follow browser light and dark modes"
+  [[ "$terminal_client" == *"return darkModeQuery.matches ? terminalThemes.dark : terminalThemes.light;"* ]] || fail "expected VM terminal client to choose between vendored light and dark themes"
+  [[ "$terminal_client" == *"theme: selectedTerminalTheme()"* ]] || fail "expected VM terminal client to initialize xterm with the selected vendored theme"
+  [[ "$terminal_client" == *"terminal.options.theme = selectedTerminalTheme();"* ]] || fail "expected VM terminal client to update xterm theme when the color scheme changes"
+  [[ "$terminal_themes" == *"export const terminalThemes"* ]] || fail "expected VM terminal themes to be exported from a dedicated module"
+  [[ "$terminal_themes" == *"base03: '#002b36'"* && "$terminal_themes" == *"base3: '#fdf6e3'"* ]] || fail "expected VM terminal themes to vendor canonical Solarized base colors"
+  [[ "$terminal_themes" == *"light: Object.freeze"* && "$terminal_themes" == *"dark: Object.freeze"* ]] || fail "expected VM terminal themes to define light and dark variants"
+  [[ "$terminal_themes" == *"selectionBackground: solarized.base2"* && "$terminal_themes" == *"selectionBackground: solarized.base02"* ]] || fail "expected VM terminal themes to define curated Solarized selection colors"
+  [[ "$terminal_themes" == *"brightMagenta: solarized.violet"* ]] || fail "expected VM terminal themes to include the full Solarized ANSI palette"
+  [[ "$terminal_client" != *"background: '#050814'"* ]] || fail "expected VM terminal client to avoid the old custom dark background"
+  [[ "$terminal_client" != *"foreground: '#dbe4f0'"* ]] || fail "expected VM terminal client to avoid the old custom foreground"
+  [[ "$terminal_css" == *"body {"* && "$terminal_css" == *"margin: 0;"* && "$terminal_css" == *"padding: 0;"* ]] || fail "expected VM terminal page to remove browser body spacing"
+  [[ "$terminal_css" == *"@media (prefers-color-scheme: dark)"* ]] || fail "expected VM terminal CSS to define dark-mode colors with a media query"
+  [[ "$terminal_css" == *"--terminal-bg: #fdf6e3;"* && "$terminal_css" == *"--terminal-fg: #657b83;"* ]] || fail "expected VM terminal CSS to define Solarized Light page colors"
+  [[ "$terminal_css" == *"--terminal-bg: #002b36;"* && "$terminal_css" == *"--terminal-fg: #839496;"* ]] || fail "expected VM terminal CSS to define Solarized Dark page colors"
+  [[ "$terminal_css" == *"background: var(--terminal-bg);"* ]] || fail "expected VM terminal page background to match the terminal background"
+  [[ "$terminal_css" != *"radial-gradient"* ]] || fail "expected VM terminal page to avoid styled gradient backgrounds"
+  [[ "$terminal_css" != *"linear-gradient"* ]] || fail "expected VM terminal page to avoid styled gradient backgrounds"
+  [[ "$terminal_css" != *"padding: 12px;"* ]] || fail "expected VM terminal surface to avoid inner terminal padding"
+  [[ "$terminal_build" == *"const xtermCss = readFileSync(join(xtermCssPath, 'css/xterm.css'), 'utf8');"* ]] || fail "expected terminal build to include the upstream xterm.css stylesheet"
   [[ "$terminal_client" == *"closeRootSessionTab"* ]] || fail "expected VM terminal client to close the tab when the root terminal session exits"
   [[ "$terminal_client" == *"This browser blocked closing the tab"* ]] || fail "expected VM terminal client to keep root-exit fallback behavior explicit"
   [[ "$terminal_client" == *"if (event.code === 1000 || event.code === 1001)"* ]] || fail "expected VM terminal client to treat normal websocket closure as root-session exit"

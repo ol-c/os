@@ -1,0 +1,56 @@
+const solarized = Object.freeze({
+  base03: '#002b36',
+  base02: '#073642',
+  base01: '#586e75',
+  base00: '#657b83',
+  base0: '#839496',
+  base1: '#93a1a1',
+  base2: '#eee8d5',
+  base3: '#fdf6e3',
+  yellow: '#b58900',
+  orange: '#cb4b16',
+  red: '#dc322f',
+  magenta: '#d33682',
+  violet: '#6c71c4',
+  blue: '#268bd2',
+  cyan: '#2aa198',
+  green: '#859900',
+});
+
+const solarizedAnsi = Object.freeze({
+  black: solarized.base02,
+  red: solarized.red,
+  green: solarized.green,
+  yellow: solarized.yellow,
+  blue: solarized.blue,
+  magenta: solarized.magenta,
+  cyan: solarized.cyan,
+  white: solarized.base2,
+  brightBlack: solarized.base03,
+  brightRed: solarized.orange,
+  brightGreen: solarized.base01,
+  brightYellow: solarized.base00,
+  brightBlue: solarized.base0,
+  brightMagenta: solarized.violet,
+  brightCyan: solarized.base1,
+  brightWhite: solarized.base3,
+});
+
+export const terminalThemes = Object.freeze({
+  light: Object.freeze({
+    ...solarizedAnsi,
+    background: solarized.base3,
+    cursor: solarized.base01,
+    cursorAccent: solarized.base3,
+    foreground: solarized.base00,
+    selectionBackground: solarized.base2,
+  }),
+  dark: Object.freeze({
+    ...solarizedAnsi,
+    background: solarized.base03,
+    cursor: solarized.base1,
+    cursorAccent: solarized.base03,
+    foreground: solarized.base0,
+    selectionBackground: solarized.base02,
+  }),
+});

@@ -6157,6 +6157,62 @@ WARNING: This link could potentially be dangerous`)) {
     };
   }
 
+  // src/terminal-themes.mjs
+  var solarized = Object.freeze({
+    base03: "#002b36",
+    base02: "#073642",
+    base01: "#586e75",
+    base00: "#657b83",
+    base0: "#839496",
+    base1: "#93a1a1",
+    base2: "#eee8d5",
+    base3: "#fdf6e3",
+    yellow: "#b58900",
+    orange: "#cb4b16",
+    red: "#dc322f",
+    magenta: "#d33682",
+    violet: "#6c71c4",
+    blue: "#268bd2",
+    cyan: "#2aa198",
+    green: "#859900"
+  });
+  var solarizedAnsi = Object.freeze({
+    black: solarized.base02,
+    red: solarized.red,
+    green: solarized.green,
+    yellow: solarized.yellow,
+    blue: solarized.blue,
+    magenta: solarized.magenta,
+    cyan: solarized.cyan,
+    white: solarized.base2,
+    brightBlack: solarized.base03,
+    brightRed: solarized.orange,
+    brightGreen: solarized.base01,
+    brightYellow: solarized.base00,
+    brightBlue: solarized.base0,
+    brightMagenta: solarized.violet,
+    brightCyan: solarized.base1,
+    brightWhite: solarized.base3
+  });
+  var terminalThemes = Object.freeze({
+    light: Object.freeze({
+      ...solarizedAnsi,
+      background: solarized.base3,
+      cursor: solarized.base01,
+      cursorAccent: solarized.base3,
+      foreground: solarized.base00,
+      selectionBackground: solarized.base2
+    }),
+    dark: Object.freeze({
+      ...solarizedAnsi,
+      background: solarized.base03,
+      cursor: solarized.base1,
+      cursorAccent: solarized.base03,
+      foreground: solarized.base0,
+      selectionBackground: solarized.base02
+    })
+  });
+
   // src/index.js
   var OUTPUT = "0";
   var SET_WINDOW_TITLE = "1";
@@ -6170,16 +6226,16 @@ WARNING: This link could potentially be dangerous`)) {
   var reconnectFailureWindowMs = 1e4;
   var terminalNode = document.getElementById("terminal");
   var statusNode = document.getElementById("terminal-status");
+  var darkModeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  function selectedTerminalTheme() {
+    return darkModeQuery.matches ? terminalThemes.dark : terminalThemes.light;
+  }
   var terminal = new import_xterm.Terminal({
     allowProposedApi: true,
     cursorBlink: true,
     fontFamily: 'Consolas, "Liberation Mono", Menlo, Courier, monospace',
     fontSize: 13,
-    theme: {
-      background: "#050814",
-      foreground: "#dbe4f0",
-      cursor: "#93c5fd"
-    }
+    theme: selectedTerminalTheme()
   });
   var fitAddon = new import_addon_fit.FitAddon();
   var sessionLifecycle = createSessionLifecycle({
@@ -6269,8 +6325,12 @@ WARNING: This link could potentially be dangerous`)) {
         terminal.options[key] = value;
       }
     }
+    applyPreferredColorScheme();
     fitAddon.fit();
     sendResize();
+  }
+  function applyPreferredColorScheme() {
+    terminal.options.theme = selectedTerminalTheme();
   }
   function scheduleReconnect() {
     if (terminated || reconnectTimer !== null) {
@@ -6397,5 +6457,6 @@ WARNING: This link could potentially be dangerous`)) {
     fitAddon.fit();
     sendResize();
   });
+  darkModeQuery.addEventListener("change", applyPreferredColorScheme);
   void connect();
 })();
