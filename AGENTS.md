@@ -258,8 +258,21 @@ Milestones 1, 2, 3, and 4 are complete.
 We are currently focused on Milestone 6.
 
 Immediate next task:
-- Move the repo off unsupported `nixos-24.11` to a currently supported NixOS branch, then rebuild and retest the VM.
+- Refresh `patches/firefox/0001-close-last-tab-to-localhost.patch` for Firefox `149.0.2` from the `nixos-25.11` update; the current build fails because the `browser/base/content/browser.js` hunk no longer matches the extracted runtime asset.
+- After the Firefox patch refresh, rerun the supported-branch validation build and boot checks.
 - After the supported-branch update is proven, add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
+
+Supported-branch validation next steps:
+- Run the fast deterministic contract checks:
+  - `node --test localhost-ui/*.test.mjs`
+  - `cd terminal-client && npm test && npm run build`
+  - `bash tests/test-build-vm.sh`
+  - `bash tests/test-launch-vm.sh`
+  - `bash tests/test-build-firefox-remote.sh`
+- Run `./build-vm` as the minimum real Nix build gate for the NixOS branch update.
+  - Current known blocker: Firefox `149.0.2` patch drift in `browser/base/content/browser.js`; refresh the repo patch before rerunning this gate.
+- Run `./launch-vm` as the VM smoke proof that the rebuilt image still boots into the graphical browser surface.
+- Run `nix build .#firefox-localhost-source --print-build-logs` before considering Firefox patch compatibility proven against the updated nixpkgs Firefox source build path.
 
 In-VM validation note:
 - When Codex is running inside the OL-C guest, it can identify that context with `hostnamectl`, `systemd-detect-virt`, and `findmnt -T /source`.
@@ -267,7 +280,7 @@ In-VM validation note:
 - When a graphical Firefox session is running in the guest, Codex may use available local GUI automation tools such as `xdotool` to actively drive the browser for validation.
 
 Security and update planning note:
-- The current repo pins `nixos-24.11`, which is no longer a supported NixOS branch.
+- The repo has been prepped to move from unsupported `nixos-24.11` to `nixos-25.11`; the host build and VM boot still need to prove the update.
 - Relying on nixpkgs for Firefox security updates is the preferred path, but only if OL-C tracks a supported branch promptly.
 - User-facing OL-C updates should eventually be exposed through the browser System page and backed by prebuilt artifacts.
 - Users should not need to operate NixOS directly or compile Firefox locally to receive browser security updates.

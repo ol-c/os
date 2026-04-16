@@ -3,7 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 LAUNCH_VM="${ROOT_DIR}/launch-vm"
-TEST_TMP_ROOT="${ROOT_DIR}/.tmp-tests"
+TEST_TMP_ROOT="${OLC_TEST_TMP_ROOT:-${ROOT_DIR}/.tmp-tests}"
+TEST_SYSTEM_PATH="${OLC_TEST_SYSTEM_PATH:-/usr/bin:/bin}"
+TEST_FAKE_BASH="${OLC_TEST_FAKE_BASH:-$(command -v bash)}"
 CASE_TMP=""
 
 fail() {
@@ -26,7 +28,7 @@ setup_case() {
   : > "${CASE_TMP}/artifacts/guest.qcow2"
 
   cat >"${CASE_TMP}/fakebin/qemu-system-x86_64" <<EOF
-#!/usr/bin/env bash
+#!${TEST_FAKE_BASH}
 printf '%s\n' "\$*" > "${CASE_TMP}/qemu.args"
 printf '%s\n' "\${SDL_VIDEO_HIGHDPI_DISABLED:-}" > "${CASE_TMP}/qemu.sdl-hidpi-disabled"
 printf '%s\n' "\${GDK_SCALE:-}" > "${CASE_TMP}/qemu.gdk-scale"
@@ -56,7 +58,7 @@ exit 0
 EOF
 
   cat >"${CASE_TMP}/fakebin/virtiofsd" <<EOF
-#!/usr/bin/env bash
+#!${TEST_FAKE_BASH}
 printf '%s\n' "\$*" > "${CASE_TMP}/virtiofsd.args"
 socket_path=""
 shared_dir=""
@@ -83,7 +85,7 @@ done
 EOF
 
   cat >"${CASE_TMP}/fakebin/remote-viewer" <<EOF
-#!/usr/bin/env bash
+#!${TEST_FAKE_BASH}
 printf '%s\n' "\$*" > "${CASE_TMP}/remote-viewer.args"
 if [[ "\${OLC_FAKE_VIEWER_WAIT:-0}" = "1" ]]; then
   trap 'printf "%s\n" terminated > "${CASE_TMP}/remote-viewer.terminated"; exit 0' TERM INT
@@ -95,7 +97,7 @@ exit 0
 EOF
 
   cat >"${CASE_TMP}/fakebin/build-vm" <<EOF
-#!/usr/bin/env bash
+#!${TEST_FAKE_BASH}
 printf '%s\n' "\$*" > "${CASE_TMP}/build-vm.args"
 printf '%s\n' "${CASE_TMP}/artifacts/guest.qcow2"
 EOF
@@ -118,7 +120,7 @@ test_requires_qemu() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
@@ -139,7 +141,7 @@ test_requires_remote_viewer_for_spice() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
@@ -160,7 +162,7 @@ test_requires_virtiofsd() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
@@ -182,8 +184,9 @@ test_requires_kvm_by_default() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_KVM_DEVICE="${CASE_TMP}/missing-kvm" \
       "${LAUNCH_VM}" \
       2>&1
   )"
@@ -191,7 +194,7 @@ test_requires_kvm_by_default() {
   set -e
 
   [[ $status -ne 0 ]] || fail "expected launch-vm to fail without kvm"
-  assert_contains "$output" "/dev/kvm is required"
+  assert_contains "$output" "${CASE_TMP}/missing-kvm is required"
   cleanup_case
 }
 
@@ -200,7 +203,7 @@ test_invokes_qemu_with_expected_spice_args() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
@@ -275,7 +278,7 @@ test_exits_when_qemu_exits_first() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
       OLC_FAKE_QEMU_EXIT_EARLY=1 \
@@ -297,7 +300,7 @@ test_allows_direct_display_backend_override() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
       OLC_QEMU_DISPLAY="gtk,gl=off,zoom-to-fit=off" \
@@ -328,7 +331,7 @@ test_allows_sdl_frontend_override() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
       OLC_QEMU_FRONTEND=sdl \
@@ -349,7 +352,7 @@ test_rejects_milestone_argument() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
@@ -370,7 +373,7 @@ test_requires_option_values() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
@@ -390,7 +393,7 @@ test_fails_if_build_output_is_missing() {
   setup_case
 
   cat >"${CASE_TMP}/fakebin/build-vm" <<EOF
-#!/usr/bin/env bash
+#!${TEST_FAKE_BASH}
 printf '%s\n' "\$*" > "${CASE_TMP}/build-vm.args"
 printf '%s\n' "${CASE_TMP}/artifacts/missing.qcow2"
 EOF
@@ -398,7 +401,7 @@ EOF
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \

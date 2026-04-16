@@ -6254,6 +6254,8 @@ WARNING: This link could potentially be dangerous`)) {
   var pageTitle = fallbackTitle;
   var reconnectDelayMs = 1e3;
   var firstReconnectFailureAt = null;
+  var TerminalSessionEndedError = class extends Error {
+  };
   terminal.loadAddon(fitAddon);
   terminal.open(terminalNode);
   fitAddon.fit();
@@ -6298,6 +6300,10 @@ WARNING: This link could potentially be dangerous`)) {
       credentials: "same-origin"
     });
     if (!response.ok) {
+      if (response.status === 410) {
+        const body2 = await response.json().catch(() => null);
+        throw new TerminalSessionEndedError(body2?.error ?? "The terminal session ended.");
+      }
       throw new Error(`token endpoint returned ${response.status}`);
     }
     const body = await response.json();
@@ -6425,6 +6431,10 @@ WARNING: This link could potentially be dangerous`)) {
         }
       };
     } catch (error) {
+      if (error instanceof TerminalSessionEndedError) {
+        endSession(error.message);
+        return;
+      }
       const now = Date.now();
       firstReconnectFailureAt ??= now;
       if (now - firstReconnectFailureAt < reconnectFailureWindowMs) {

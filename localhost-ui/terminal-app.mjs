@@ -7,6 +7,7 @@ import { URL } from 'node:url';
 const fallbackTerminalTitle = 'ol-c terminal';
 const backendStartupTimeoutMs = 30_000;
 const reconnectGraceTimeoutMs = 60_000;
+const backendExitMessageTtlMs = 60_000;
 const allowedTerminalOrigins = new Set([
   'https://localhost',
   'https://127.0.0.1',
@@ -113,6 +114,46 @@ export function createTerminalApp(options) {
     ttydBin,
   } = options;
   const terminalBackends = new Map();
+  const terminalBackendExits = new Map();
+
+  function forgetBackendExit(token) {
+    const exit = terminalBackendExits.get(token);
+
+    if (!exit) {
+      return;
+    }
+
+    exit.timer = cancelTimer(exit.timer);
+    terminalBackendExits.delete(token);
+  }
+
+  function formatBackendExitMessage({ code, signal, stderrTail }) {
+    const reason = signal
+      ? `signal ${signal}`
+      : `exit code ${code ?? 'unknown'}`;
+    const stderr = stderrTail.trim();
+
+    if (!stderr) {
+      return `The terminal backend exited unexpectedly with ${reason}.`;
+    }
+
+    return `The terminal backend exited unexpectedly with ${reason}. Last error output: ${stderr}`;
+  }
+
+  function rememberBackendExit(token, details) {
+    forgetBackendExit(token);
+    terminalBackendExits.set(token, {
+      ...details,
+      timer: setTimeout(() => {
+        terminalBackendExits.delete(token);
+      }, backendExitMessageTtlMs),
+    });
+  }
+
+  function backendExitMessage(token) {
+    const exit = terminalBackendExits.get(token);
+    return exit ? formatBackendExitMessage(exit) : null;
+  }
 
   function terminateBackend(token) {
     const backend = terminalBackends.get(token);
@@ -220,9 +261,15 @@ export function createTerminalApp(options) {
       process.stdout.write(`[ol-c-terminal][ttyd:${token}] ${chunk}`);
     });
     child.stderr.on('data', chunk => {
+      const nextTail = `${terminalBackends.get(token)?.stderrTail ?? ''}${chunk}`;
+      const maxTailLength = 1000;
+      const backend = terminalBackends.get(token);
+      if (backend) {
+        backend.stderrTail = nextTail.slice(-maxTailLength);
+      }
       process.stderr.write(`[ol-c-terminal][ttyd:${token}] ${chunk}`);
     });
-    child.on('exit', () => {
+    child.on('exit', (code, signal) => {
       const current = terminalBackends.get(token);
 
       if (!current || current.child !== child) {
@@ -232,6 +279,11 @@ export function createTerminalApp(options) {
       current.startupTimer = cancelTimer(current.startupTimer);
       current.reconnectGraceTimer = cancelTimer(current.reconnectGraceTimer);
       terminalBackends.delete(token);
+      rememberBackendExit(token, {
+        code,
+        signal,
+        stderrTail: current.stderrTail,
+      });
     });
 
     terminalBackends.set(token, {
@@ -239,6 +291,7 @@ export function createTerminalApp(options) {
       child,
       port,
       reconnectGraceTimer: null,
+      stderrTail: '',
       startupTimer: scheduleStartupTimeout(token),
     });
 
@@ -333,6 +386,20 @@ export function createTerminalApp(options) {
     const backend = markBackendActive(token);
 
     if (!backend) {
+      const exitMessage = token ? backendExitMessage(token) : null;
+      if (exitMessage) {
+        setNoStore(res);
+        if (new URL(req.url, 'https://localhost').pathname.endsWith('/token')) {
+          res.writeHead(410, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, error: exitMessage }));
+          return;
+        }
+
+        res.writeHead(410, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(proxyErrorHtml(exitMessage));
+        return;
+      }
+
       setNoStore(res);
       res.writeHead(404, { 'content-type': 'text/html; charset=utf-8' });
       res.end(proxyErrorHtml('This terminal session is no longer available.'));

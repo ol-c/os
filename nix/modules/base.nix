@@ -5,7 +5,7 @@
     "${modulesPath}/profiles/qemu-guest.nix"
   ];
 
-  system.stateVersion = "24.11";
+  system.stateVersion = "25.11";
 
   boot.loader.grub = {
     enable = true;

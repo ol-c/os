@@ -26,7 +26,9 @@ TERMINAL_CLIENT_LIFECYCLE="${ROOT_DIR}/terminal-client/src/session-lifecycle.mjs
 TERMINAL_CLIENT_DIST_CSS="${ROOT_DIR}/terminal-client/dist/terminal.css"
 TERMINAL_CLIENT_BUILD="${ROOT_DIR}/terminal-client/build.mjs"
 FIREFOX_PATCH="${ROOT_DIR}/patches/firefox/0001-close-last-tab-to-localhost.patch"
-TEST_TMP_ROOT="${ROOT_DIR}/.tmp-tests"
+TEST_TMP_ROOT="${OLC_TEST_TMP_ROOT:-${ROOT_DIR}/.tmp-tests}"
+TEST_SYSTEM_PATH="${OLC_TEST_SYSTEM_PATH:-/usr/bin:/bin}"
+TEST_FAKE_BASH="${OLC_TEST_FAKE_BASH:-$(command -v bash)}"
 CASE_TMP=""
 
 fail() {
@@ -48,13 +50,18 @@ setup_case() {
   mkdir -p "${CASE_TMP}/fakebin" "${CASE_TMP}/out"
 
   cat >"${CASE_TMP}/fakebin/nix" <<EOF
-#!/usr/bin/env bash
+#!${TEST_FAKE_BASH}
 printf '%s\n' "\$*" > "${CASE_TMP}/nix.args"
 : > "${CASE_TMP}/out/image.qcow2"
 printf '%s\n' "${CASE_TMP}/out"
 EOF
 
-  chmod +x "${CASE_TMP}/fakebin/nix"
+  cat >"${CASE_TMP}/fakebin/findmnt" <<EOF
+#!${TEST_FAKE_BASH}
+exit 1
+EOF
+
+  chmod +x "${CASE_TMP}/fakebin/nix" "${CASE_TMP}/fakebin/findmnt"
 }
 
 assert_eq() {
@@ -72,7 +79,7 @@ test_requires_nix() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       "${BUILD_VM}" \
       2>&1
   )"
@@ -89,7 +96,7 @@ test_prints_resolved_image_path() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       "${BUILD_VM}"
   )"
 
@@ -105,7 +112,7 @@ test_rejects_milestone_arguments() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       "${BUILD_VM}" milestone1 \
       2>&1
   )"
@@ -123,7 +130,7 @@ test_rejects_unknown_argument() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       "${BUILD_VM}" mystery \
       2>&1
   )"
@@ -140,14 +147,14 @@ test_requires_bootable_image_in_output() {
   setup_case
 
   cat >"${CASE_TMP}/fakebin/nix" <<EOF
-#!/usr/bin/env bash
+#!${TEST_FAKE_BASH}
 printf '%s\n' "${CASE_TMP}/out"
 EOF
   chmod +x "${CASE_TMP}/fakebin/nix"
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       "${BUILD_VM}" \
       2>&1
   )"
@@ -156,6 +163,38 @@ EOF
 
   [[ $status -ne 0 ]] || fail "expected build-vm to fail without a bootable image"
   [[ "$output" == *"unable to locate a bootable disk image"* ]] || fail "unexpected output: $output"
+  cleanup_case
+}
+
+test_refuses_guest_build_when_nix_store_is_tight() {
+  local output status
+  setup_case
+
+  cat >"${CASE_TMP}/fakebin/findmnt" <<EOF
+#!${TEST_FAKE_BASH}
+printf '%s\n' 'ol-c-source virtiofs'
+EOF
+  cat >"${CASE_TMP}/fakebin/df" <<EOF
+#!${TEST_FAKE_BASH}
+printf '%s\n' 'Filesystem 1048576-blocks Used Available Capacity Mounted on'
+printf '%s\n' '/dev/disk/by-label/nixos 6899 6163 365 95% /'
+EOF
+  chmod +x "${CASE_TMP}/fakebin/findmnt" "${CASE_TMP}/fakebin/df"
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      OLC_MIN_BUILD_FREE_MB=2048 \
+      "${BUILD_VM}" \
+      2>&1
+  )"
+  status=$?
+  set -e
+
+  [[ $status -ne 0 ]] || fail "expected build-vm to refuse a low-space guest build"
+  [[ "$output" == *"local VM image build is unsafe inside the OL-C guest"* ]] || fail "unexpected output: $output"
+  [[ "$output" == *"/nix has 365 MiB free; need at least 2048 MiB"* ]] || fail "unexpected output: $output"
+  [[ ! -f "${CASE_TMP}/nix.args" ]] || fail "expected build-vm to stop before invoking nix"
   cleanup_case
 }
 
@@ -451,6 +490,7 @@ test_prints_resolved_image_path
 test_rejects_milestone_arguments
 test_rejects_unknown_argument
 test_requires_bootable_image_in_output
+test_refuses_guest_build_when_nix_store_is_tight
 test_vm_runs_firefox_borderless_and_maximized
 test_packages_firefox_with_localhost_patch
 

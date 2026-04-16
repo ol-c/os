@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
 usage() {
   cat <<'EOF'
 Usage: build-vm
@@ -17,6 +19,50 @@ fail() {
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     fail "required command not found: $1"
+  fi
+}
+
+repo_is_olc_virtiofs_mount() {
+  if ! command -v findmnt >/dev/null 2>&1; then
+    return 1
+  fi
+
+  while read -r source fs_type; do
+    if [[ "$source" == "ol-c-source" && "$fs_type" == "virtiofs" ]]; then
+      return 0
+    fi
+  done < <(findmnt -R "$ROOT_DIR" -n -o SOURCE,FSTYPE 2>/dev/null || true)
+
+  return 1
+}
+
+nix_store_free_mb() {
+  df -Pm /nix 2>/dev/null | awk 'NR == 2 { print $4 }'
+}
+
+check_local_build_capacity() {
+  local min_free_mb free_mb
+
+  if [[ "${OLC_SKIP_BUILD_CAPACITY_CHECK:-0}" == "1" ]]; then
+    return
+  fi
+
+  if ! repo_is_olc_virtiofs_mount; then
+    return
+  fi
+
+  if ! command -v df >/dev/null 2>&1 || ! command -v awk >/dev/null 2>&1; then
+    return
+  fi
+
+  min_free_mb="${OLC_MIN_BUILD_FREE_MB:-2048}"
+  free_mb="$(nix_store_free_mb)"
+  if [[ -z "$free_mb" || ! "$free_mb" =~ ^[0-9]+$ ]]; then
+    return
+  fi
+
+  if (( free_mb < min_free_mb )); then
+    fail "local VM image build is unsafe inside the OL-C guest: /nix has ${free_mb} MiB free; need at least ${min_free_mb} MiB. Shut down this VM and run ./build-vm on the host, or set OLC_SKIP_BUILD_CAPACITY_CHECK=1 to override."
   fi
 }
 
@@ -51,6 +97,7 @@ esac
 
 BUILD_TARGET="${BUILD_TARGET:-.#ol-c-image}"
 
+check_local_build_capacity
 require_command nix
 
 NIX_BUILD_OUTPUT="$(

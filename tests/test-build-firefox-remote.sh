@@ -3,7 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 REMOTE_BUILD="${ROOT_DIR}/build-firefox-remote"
-TEST_TMP_ROOT="${ROOT_DIR}/.tmp-tests"
+TEST_TMP_ROOT="${OLC_TEST_TMP_ROOT:-${ROOT_DIR}/.tmp-tests}"
+TEST_SYSTEM_PATH="${OLC_TEST_SYSTEM_PATH:-/usr/bin:/bin}"
+TEST_FAKE_BASH="${OLC_TEST_FAKE_BASH:-$(command -v bash)}"
 CASE_TMP=""
 
 fail() {
@@ -16,16 +18,20 @@ cleanup_case() {
     rm -rf "$CASE_TMP"
   fi
   CASE_TMP=""
+  unset OLC_GCP_LOCAL_BUILDS_DIR
+  unset OLC_GCP_RESULT_LINK
 }
 
 setup_case() {
   cleanup_case
   mkdir -p "$TEST_TMP_ROOT"
   CASE_TMP="$(mktemp -d "${TEST_TMP_ROOT}/remote.XXXXXX")"
+  export OLC_GCP_LOCAL_BUILDS_DIR="${CASE_TMP}/gcp-builds"
+  export OLC_GCP_RESULT_LINK="${CASE_TMP}/result-gcp-firefox-localhost"
   mkdir -p "${CASE_TMP}/fakebin" "${CASE_TMP}/calls"
 
   cat >"${CASE_TMP}/fakebin/gcloud" <<EOF
-#!/usr/bin/env bash
+#!${TEST_FAKE_BASH}
 printf '%s\n' "\$*" >> "${CASE_TMP}/calls/gcloud"
 
 if [[ "\$*" == "config get-value project" ]]; then
@@ -164,7 +170,7 @@ exit 0
 EOF
 
   cat >"${CASE_TMP}/fakebin/nix" <<EOF
-#!/usr/bin/env bash
+#!${TEST_FAKE_BASH}
 printf '%s\n' "\$*" >> "${CASE_TMP}/calls/nix"
 EOF
 
@@ -185,7 +191,7 @@ test_requires_gcloud() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       "${REMOTE_BUILD}" --dry-run \
       2>&1
   )"
@@ -202,7 +208,7 @@ test_dry_run_uses_safe_defaults() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       "${REMOTE_BUILD}" --dry-run
   )"
 
@@ -235,7 +241,7 @@ test_dry_run_allows_target_override() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       "${REMOTE_BUILD}" --dry-run .#ol-c-image
   )"
 
@@ -249,7 +255,7 @@ test_bucket_override_still_wins() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_GCP_BUCKET=custom-ol-c-builds \
       "${REMOTE_BUILD}" --dry-run
   )"
@@ -263,7 +269,7 @@ test_interactive_identity_confirmation_can_continue() {
   setup_case
 
   output="$(
-    printf '\n' | PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    printf '\n' | PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_GCP_CONFIRM_IDENTITY=1 \
       "${REMOTE_BUILD}" --dry-run
   )"
@@ -280,7 +286,7 @@ test_interactive_identity_confirmation_can_login() {
   setup_case
 
   output="$(
-    printf '%s\n%s\n' "login" "yes" | PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    printf '%s\n%s\n' "login" "yes" | PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_GCP_CONFIRM_IDENTITY=1 \
       OLC_FAKE_NO_ACTIVE_ACCOUNT=1 \
       OLC_FAKE_LOGIN_SETS_ACCOUNT=1 \
@@ -299,7 +305,7 @@ test_interactive_identity_confirmation_can_switch_account() {
   setup_case
 
   output="$(
-    printf '%s\n%s\n%s\n' "account" "other@example.com" "yes" | PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    printf '%s\n%s\n%s\n' "account" "other@example.com" "yes" | PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_GCP_CONFIRM_IDENTITY=1 \
       "${REMOTE_BUILD}" --dry-run
   )"
@@ -318,7 +324,7 @@ test_interactive_identity_confirmation_can_switch_config() {
   setup_case
 
   output="$(
-    printf '%s\n%s\n%s\n' "config" "other" "yes" | PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    printf '%s\n%s\n%s\n' "config" "other" "yes" | PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_GCP_CONFIRM_IDENTITY=1 \
       "${REMOTE_BUILD}" --dry-run
   )"
@@ -337,7 +343,7 @@ test_bucket_create_and_vm_submit_contract() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       "${REMOTE_BUILD}" .#firefox-localhost
   )"
   calls="$(cat "${CASE_TMP}/calls/gcloud")"
@@ -362,7 +368,7 @@ test_kill_deletes_compute_instance() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       "${REMOTE_BUILD}" --kill ol-c-firefox-test
   )"
   calls="$(cat "${CASE_TMP}/calls/gcloud")"
@@ -377,17 +383,15 @@ test_fetch_imports_downloaded_cache() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       "${REMOTE_BUILD}" --fetch ol-c-firefox-test
   )"
   nix_calls="$(cat "${CASE_TMP}/calls/nix")"
 
   assert_contains "$output" "Downloading artifacts for ol-c-firefox-test"
   assert_contains "$output" "Remote result: /nix/store/test-firefox"
-  assert_contains "$nix_calls" "copy --no-check-sigs --from file://${ROOT_DIR}/.gcp-builds/ol-c-firefox-test/ol-c-nix-cache /nix/store/test-firefox"
-  [[ -L "${ROOT_DIR}/result-gcp-firefox-localhost" ]] || fail "expected fetch to update result symlink"
-  rm -f "${ROOT_DIR}/result-gcp-firefox-localhost"
-  rm -rf "${ROOT_DIR}/.gcp-builds/ol-c-firefox-test"
+  assert_contains "$nix_calls" "copy --no-check-sigs --from file://${OLC_GCP_LOCAL_BUILDS_DIR}/ol-c-firefox-test/ol-c-nix-cache /nix/store/test-firefox"
+  [[ -L "${OLC_GCP_RESULT_LINK}" ]] || fail "expected fetch to update result symlink"
   cleanup_case
 }
 
@@ -396,7 +400,7 @@ test_submit_launches_browser_login_when_account_missing() {
   setup_case
 
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_FAKE_NO_ACTIVE_ACCOUNT=1 \
       OLC_FAKE_LOGIN_SETS_ACCOUNT=1 \
       "${REMOTE_BUILD}" --dry-run
@@ -415,7 +419,7 @@ test_submit_fails_if_browser_login_does_not_select_account() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_FAKE_NO_ACTIVE_ACCOUNT=1 \
       "${REMOTE_BUILD}" --dry-run \
       2>&1
@@ -436,7 +440,7 @@ test_submit_helps_select_project_interactively() {
   setup_case
 
   output="$(
-    printf '%s\n' "chosen-project" | PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    printf '%s\n' "chosen-project" | PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_FAKE_NO_PROJECT=1 \
       OLC_GCP_ASSUME_INTERACTIVE=1 \
       "${REMOTE_BUILD}" --dry-run
@@ -459,7 +463,7 @@ test_submit_fails_without_project_when_noninteractive() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_FAKE_NO_PROJECT=1 \
       "${REMOTE_BUILD}" --dry-run \
       2>&1
@@ -480,7 +484,7 @@ test_management_mode_does_not_launch_login() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_FAKE_NO_ACTIVE_ACCOUNT=1 \
       OLC_FAKE_LOGIN_SETS_ACCOUNT=1 \
       "${REMOTE_BUILD}" --kill ol-c-firefox-test \
@@ -502,7 +506,7 @@ test_bucket_create_failure_recommends_unique_bucket() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_FAKE_BUCKET_CREATE_FAIL=1 \
       "${REMOTE_BUILD}" .#firefox-localhost \
       2>&1
@@ -522,7 +526,7 @@ test_vm_create_failure_cleans_uploaded_source() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:/usr/bin:/bin" \
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       OLC_FAKE_VM_CREATE_FAIL=1 \
       "${REMOTE_BUILD}" .#firefox-localhost \
       2>&1

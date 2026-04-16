@@ -49,6 +49,8 @@ let pageTitle = fallbackTitle;
 let reconnectDelayMs = 1000;
 let firstReconnectFailureAt = null;
 
+class TerminalSessionEndedError extends Error {}
+
 terminal.loadAddon(fitAddon);
 terminal.open(terminalNode);
 fitAddon.fit();
@@ -103,6 +105,11 @@ async function fetchBackendToken() {
   });
 
   if (!response.ok) {
+    if (response.status === 410) {
+      const body = await response.json().catch(() => null);
+      throw new TerminalSessionEndedError(body?.error ?? 'The terminal session ended.');
+    }
+
     throw new Error(`token endpoint returned ${response.status}`);
   }
 
@@ -252,6 +259,11 @@ async function connect() {
       }
     };
   } catch (error) {
+    if (error instanceof TerminalSessionEndedError) {
+      endSession(error.message);
+      return;
+    }
+
     const now = Date.now();
     firstReconnectFailureAt ??= now;
 

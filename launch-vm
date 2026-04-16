@@ -23,6 +23,7 @@ Environment:
   OLC_SOURCE_DIR          Host source tree to mount at /source. Default: this repo.
   OLC_VIRTIOFSD           virtiofsd executable path. Default: first virtiofsd in PATH.
   OLC_VIRTIOFSD_SANDBOX   virtiofsd sandbox mode. Default: none.
+  OLC_KVM_DEVICE          KVM device path. Default: /dev/kvm.
 EOF
 }
 
@@ -92,6 +93,7 @@ QEMU_GDK_SCALE="${OLC_QEMU_GDK_SCALE:-1}"
 QEMU_GDK_DPI_SCALE="${OLC_QEMU_GDK_DPI_SCALE:-1}"
 SOURCE_DIR="${OLC_SOURCE_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
 VIRTIOFSD_SANDBOX="${OLC_VIRTIOFSD_SANDBOX:-none}"
+KVM_DEVICE="${OLC_KVM_DEVICE:-/dev/kvm}"
 SPICE_SOCKET_DIR=""
 VIRTIOFS_SOCKET_DIR=""
 VIRTIOFSD_PID=""
@@ -145,8 +147,8 @@ if [[ "$QEMU_FRONTEND" == "spice" ]]; then
   require_command remote-viewer
 fi
 
-if [[ ! -e /dev/kvm && "${OLC_SKIP_KVM_CHECK:-0}" != "1" ]]; then
-  fail "/dev/kvm is required"
+if [[ ! -e "$KVM_DEVICE" && "${OLC_SKIP_KVM_CHECK:-0}" != "1" ]]; then
+  fail "${KVM_DEVICE} is required"
 fi
 
 BUILD_VM_BIN="${BUILD_VM_BIN:-./build-vm}"

@@ -11,7 +11,8 @@ DEFAULT_BOOT_DISK_SIZE="300GB"
 DEFAULT_TIMEOUT="1h"
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-LOCAL_BUILDS_DIR="${ROOT_DIR}/.gcp-builds"
+LOCAL_BUILDS_DIR="${OLC_GCP_LOCAL_BUILDS_DIR:-${ROOT_DIR}/.gcp-builds}"
+RESULT_LINK="${OLC_GCP_RESULT_LINK:-${ROOT_DIR}/result-gcp-firefox-localhost}"
 
 usage() {
   cat <<'USAGE'
@@ -36,6 +37,8 @@ Environment overrides:
   OLC_GCP_BOOT_DISK_TYPE    default: hyperdisk-balanced
   OLC_GCP_BOOT_DISK_SIZE    default: 300GB
   OLC_GCP_TIMEOUT           default: 1h
+  OLC_GCP_LOCAL_BUILDS_DIR  default: <repo>/.gcp-builds
+  OLC_GCP_RESULT_LINK       default: <repo>/result-gcp-firefox-localhost
 USAGE
 }
 
@@ -476,7 +479,7 @@ fetch_result() {
     echo "Importing ${remote_out} into the local Nix store"
     nix copy --no-check-sigs --from "file://${cache_dir}" "$remote_out"
     if [[ "$target" == "$DEFAULT_TARGET" ]]; then
-      ln -sfn "$remote_out" "${ROOT_DIR}/result-gcp-firefox-localhost"
+      ln -sfn "$remote_out" "$RESULT_LINK"
     fi
   else
     echo "Local nix not found; downloaded cache archive but did not import it."

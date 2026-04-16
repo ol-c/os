@@ -6,6 +6,7 @@ import { createTerminalApp } from './terminal-app.mjs';
 
 function createFakeTtydSpawner() {
   const servers = [];
+  const children = [];
 
   function spawnProcess(command, args) {
     const port = Number(args[args.indexOf('--port') + 1]);
@@ -27,10 +28,12 @@ function createFakeTtydSpawner() {
     });
     server.listen(port, '127.0.0.1');
     servers.push(server);
+    children.push(child);
     return child;
   }
 
   return {
+    children,
     spawnProcess,
     cleanup: () => {
       for (const server of servers.splice(0)) {
@@ -135,4 +138,42 @@ test('terminal backend accepts localhost CORS requests from the UI origin', asyn
     assert.equal(closeResponse.status, 204);
     assert.equal(closeResponse.headers.get('access-control-allow-origin'), 'https://localhost');
   });
+});
+
+test('terminal token endpoint reports a recent backend exit reason', async () => {
+  const spawner = createFakeTtydSpawner();
+  const app = createTerminalApp({
+    bashBin: '/bin/bash',
+    demoUser: { uid: '1000', gid: '100' },
+    spawnProcess: spawner.spawnProcess,
+    terminalClientCss: '/* terminal css */',
+    terminalClientJs: '/* terminal js */',
+    terminalPublicUrl: 'https://localhost:9443',
+    ttydBin: '/bin/ttyd',
+  });
+  const server = http.createServer(app.handleRequest);
+
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const page = await fetch(`${baseUrl}/terminal`);
+    const token = extractBackendToken(await page.text());
+    const child = spawner.children.at(-1);
+
+    child.stderr.emit('data', Buffer.from('No space left on device\n'));
+    child.emit('exit', 1, null);
+
+    const response = await fetch(`${baseUrl}/session/${token}/token`);
+    const body = await response.json();
+
+    assert.equal(response.status, 410);
+    assert.match(body.error, /terminal backend exited unexpectedly/i);
+    assert.match(body.error, /exit code 1/);
+    assert.match(body.error, /No space left on device/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    spawner.cleanup();
+  }
 });
