@@ -7,7 +7,7 @@ Usage: launch-vm [options]
 
 Options:
   --cpus N          Guest vCPU count. Default: 2.
-  --memory MB       Guest memory in megabytes. Default: 2048.
+  --memory MB       Guest memory in megabytes. Default: 4096.
   --help            Show this help text.
 
 Environment:
@@ -85,7 +85,7 @@ require_value() {
 }
 
 CPUS=2
-MEMORY_MB=2048
+MEMORY_MB=4096
 QEMU_FRONTEND="${OLC_QEMU_FRONTEND:-spice}"
 QEMU_DISPLAY="${OLC_QEMU_DISPLAY:-}"
 QEMU_SDL_VIDEO_HIGHDPI_DISABLED="${OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED:-1}"

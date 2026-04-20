@@ -5,20 +5,23 @@ DEFAULT_TARGET=".#firefox-localhost"
 DEFAULT_BUCKET_SUFFIX="ol-c-remote-builds"
 DEFAULT_LOCATION="us-central1"
 DEFAULT_ZONE="us-central1-a"
-DEFAULT_MACHINE_TYPE="h4d-standard-192"
-DEFAULT_BOOT_DISK_TYPE="hyperdisk-balanced"
+DEFAULT_MACHINE_TYPE="c2-standard-30"
+DEFAULT_BOOT_DISK_TYPE="pd-ssd"
 DEFAULT_BOOT_DISK_SIZE="300GB"
 DEFAULT_TIMEOUT="1h"
+DEFAULT_POLL_INTERVAL="30"
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 LOCAL_BUILDS_DIR="${OLC_GCP_LOCAL_BUILDS_DIR:-${ROOT_DIR}/.gcp-builds}"
 RESULT_LINK="${OLC_GCP_RESULT_LINK:-${ROOT_DIR}/result-gcp-firefox-localhost}"
+TIMING_HISTORY="${OLC_GCP_TIMING_HISTORY:-${LOCAL_BUILDS_DIR}/timing-history.tsv}"
 
 usage() {
   cat <<'USAGE'
 Usage:
   build-firefox-remote [TARGET]
   build-firefox-remote --dry-run [TARGET]
+  build-firefox-remote --no-wait [TARGET]
   build-firefox-remote --logs JOB_ID
   build-firefox-remote --status JOB_ID
   build-firefox-remote --fetch JOB_ID
@@ -33,12 +36,14 @@ Environment overrides:
   OLC_GCP_BUCKET            default: <project-id>-ol-c-remote-builds
   OLC_GCP_LOCATION          default: us-central1
   OLC_GCP_ZONE              default: us-central1-a
-  OLC_GCP_MACHINE_TYPE      default: h4d-standard-192
-  OLC_GCP_BOOT_DISK_TYPE    default: hyperdisk-balanced
+  OLC_GCP_MACHINE_TYPE      default: c2-standard-30
+  OLC_GCP_BOOT_DISK_TYPE    default: pd-ssd
   OLC_GCP_BOOT_DISK_SIZE    default: 300GB
   OLC_GCP_TIMEOUT           default: 1h
+  OLC_GCP_POLL_INTERVAL     default: 30
   OLC_GCP_LOCAL_BUILDS_DIR  default: <repo>/.gcp-builds
   OLC_GCP_RESULT_LINK       default: <repo>/result-gcp-firefox-localhost
+  OLC_GCP_TIMING_HISTORY    default: <local-builds-dir>/timing-history.tsv
 USAGE
 }
 
@@ -96,18 +101,34 @@ timeout_to_seconds() {
   local timeout="$1"
   case "$timeout" in
     *h)
+      [[ "${timeout%h}" =~ ^[0-9]+$ ]] || fail "invalid OLC_GCP_TIMEOUT: ${timeout}"
       printf '%s\n' "$((${timeout%h} * 3600))"
       ;;
     *m)
+      [[ "${timeout%m}" =~ ^[0-9]+$ ]] || fail "invalid OLC_GCP_TIMEOUT: ${timeout}"
       printf '%s\n' "$((${timeout%m} * 60))"
       ;;
     *s)
+      [[ "${timeout%s}" =~ ^[0-9]+$ ]] || fail "invalid OLC_GCP_TIMEOUT: ${timeout}"
       printf '%s\n' "${timeout%s}"
       ;;
     *)
+      [[ "$timeout" =~ ^[0-9]+$ ]] || fail "invalid OLC_GCP_TIMEOUT: ${timeout}"
       printf '%s\n' "$timeout"
       ;;
   esac
+}
+
+validate_settings() {
+  [[ -n "$LOCATION" ]] || fail "OLC_GCP_LOCATION must not be empty"
+  [[ -n "$ZONE" ]] || fail "OLC_GCP_ZONE must not be empty"
+  [[ -n "$MACHINE_TYPE" ]] || fail "OLC_GCP_MACHINE_TYPE must not be empty"
+  [[ -n "$BOOT_DISK_TYPE" ]] || fail "OLC_GCP_BOOT_DISK_TYPE must not be empty"
+  [[ "$BOOT_DISK_SIZE_GB" =~ ^[0-9]+$ ]] || fail "invalid OLC_GCP_BOOT_DISK_SIZE: ${BOOT_DISK_SIZE}"
+  (( BOOT_DISK_SIZE_GB > 0 )) || fail "OLC_GCP_BOOT_DISK_SIZE must be greater than 0"
+  (( TIMEOUT_SECONDS > 0 )) || fail "OLC_GCP_TIMEOUT must be greater than 0"
+  [[ "$POLL_INTERVAL" =~ ^[0-9]+$ ]] || fail "invalid OLC_GCP_POLL_INTERVAL: ${POLL_INTERVAL}"
+  (( POLL_INTERVAL > 0 )) || fail "OLC_GCP_POLL_INTERVAL must be greater than 0"
 }
 
 confirm_gcloud_identity() {
@@ -162,7 +183,7 @@ confirm_gcloud_identity() {
 }
 
 print_gcloud_context() {
-  local project="$1" location="$2" zone="$3" bucket="$4" target="$5" machine_type="$6" timeout="$7"
+  local project="$1" location="$2" zone="$3" bucket="$4" target="$5" machine_type="$6" disk_type="$7" disk_size="$8" timeout="$9"
 
   echo "Google Cloud configurations:"
   gcloud config configurations list || true
@@ -178,6 +199,7 @@ print_gcloud_context() {
   echo "  bucket:       gs://$bucket"
   echo "  target:       $target"
   echo "  machine:      $machine_type"
+  echo "  boot disk:    ${disk_type}, ${disk_size}"
   echo "  timeout:      $timeout"
   echo
 }
@@ -193,6 +215,7 @@ resolve_settings() {
   BOOT_DISK_TYPE="${OLC_GCP_BOOT_DISK_TYPE:-$DEFAULT_BOOT_DISK_TYPE}"
   BOOT_DISK_SIZE="${OLC_GCP_BOOT_DISK_SIZE:-$DEFAULT_BOOT_DISK_SIZE}"
   TIMEOUT="${OLC_GCP_TIMEOUT:-$DEFAULT_TIMEOUT}"
+  POLL_INTERVAL="${OLC_GCP_POLL_INTERVAL:-$DEFAULT_POLL_INTERVAL}"
   BOOT_DISK_SIZE_GB="$(normalize_disk_size_gb "$BOOT_DISK_SIZE")"
   TIMEOUT_SECONDS="$(timeout_to_seconds "$TIMEOUT")"
 
@@ -230,6 +253,8 @@ resolve_settings() {
   if [[ -z "$BUCKET" ]]; then
     BUCKET="${PROJECT}-${DEFAULT_BUCKET_SUFFIX}"
   fi
+
+  validate_settings
 }
 
 ensure_bucket() {
@@ -273,14 +298,111 @@ log() {
 
 upload_if_exists() {
   local path="$1" name="$2"
+  command -v gcloud >/dev/null 2>&1 || return 0
   if [[ -e "$path" ]]; then
     gcloud --quiet storage cp "$path" "${RUN_URI}/${name}" || true
   fi
 }
 
+json_escape() {
+  printf '%s' "${1:-}" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n\r' '  '
+}
+
+timestamp_utc() {
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+
+duration_for_phase() {
+  local phase="$1"
+  local path="/tmp/ol-c-timing-${phase}.txt"
+  if [[ -s "$path" ]]; then
+    sed -n '1p' "$path"
+  else
+    printf '0\n'
+  fi
+}
+
+write_progress() {
+  local status="$1" phase="$2" percent="$3" message="$4" exit_status="${5:-}"
+  local now elapsed eta_json exit_json
+  now="$(date +%s)"
+  elapsed="$((now - RUN_STARTED_EPOCH))"
+  eta_json="null"
+  if [[ "$status" == "running" && "${ESTIMATED_TOTAL_SECONDS:-0}" =~ ^[0-9]+$ && "${ESTIMATED_TOTAL_SECONDS:-0}" -gt 0 ]]; then
+    eta_json="$((ESTIMATED_TOTAL_SECONDS - elapsed))"
+    (( eta_json >= 0 )) || eta_json=0
+  fi
+  exit_json="null"
+  if [[ -n "$exit_status" ]]; then
+    exit_json="$exit_status"
+  fi
+  cat >/tmp/ol-c-progress.json <<EOF
+{"status":"$(json_escape "$status")","phase":"$(json_escape "$phase")","percent":${percent},"message":"$(json_escape "$message")","started_at":"${RUN_STARTED_AT}","updated_at":"$(timestamp_utc)","elapsed_seconds":${elapsed},"eta_seconds":${eta_json},"exit_status":${exit_json},"target":"$(json_escape "$BUILD_TARGET")","machine_type":"$(json_escape "${MACHINE_TYPE:-}")","boot_disk_type":"$(json_escape "${BOOT_DISK_TYPE:-}")","boot_disk_size":"$(json_escape "${BOOT_DISK_SIZE:-}")","zone":"$(json_escape "${ZONE:-}")"}
+EOF
+}
+
+upload_progress() {
+  upload_if_exists /tmp/ol-c-progress.json progress.json
+}
+
+phase_begin() {
+  CURRENT_PHASE="$1"
+  CURRENT_PERCENT="$2"
+  CURRENT_MESSAGE="$3"
+  PHASE_STARTED_EPOCH="$(date +%s)"
+  printf '%s\n' "$PHASE_STARTED_EPOCH" >"/tmp/ol-c-phase-${CURRENT_PHASE}.start"
+  write_progress running "$CURRENT_PHASE" "$CURRENT_PERCENT" "$CURRENT_MESSAGE"
+  upload_progress
+}
+
+phase_end() {
+  local phase="$1" percent="$2" message="$3"
+  local now start duration
+  now="$(date +%s)"
+  start="$(sed -n '1p' "/tmp/ol-c-phase-${phase}.start" 2>/dev/null || printf '%s\n' "$now")"
+  duration="$((now - start))"
+  printf '%s\n' "$duration" >"/tmp/ol-c-timing-${phase}.txt"
+  CURRENT_PHASE="$phase"
+  CURRENT_PERCENT="$percent"
+  CURRENT_MESSAGE="$message"
+  write_progress running "$phase" "$percent" "$message"
+  upload_progress
+}
+
+record_current_phase_duration() {
+  local now start duration path
+  [[ -n "${CURRENT_PHASE:-}" ]] || return 0
+  path="/tmp/ol-c-timing-${CURRENT_PHASE}.txt"
+  [[ -s "$path" ]] && return 0
+  [[ -s "/tmp/ol-c-phase-${CURRENT_PHASE}.start" ]] || return 0
+  now="$(date +%s)"
+  start="$(sed -n '1p' "/tmp/ol-c-phase-${CURRENT_PHASE}.start" 2>/dev/null || printf '%s\n' "$now")"
+  duration="$((now - start))"
+  printf '%s\n' "$duration" >"$path"
+}
+
+write_timings() {
+  local status="$1" now total
+  record_current_phase_duration
+  now="$(date +%s)"
+  total="$((now - RUN_STARTED_EPOCH))"
+  cat >/tmp/ol-c-timings.json <<EOF
+{"status":"$(json_escape "$status")","target":"$(json_escape "$BUILD_TARGET")","machine_type":"$(json_escape "${MACHINE_TYPE:-}")","boot_disk_type":"$(json_escape "${BOOT_DISK_TYPE:-}")","boot_disk_size":"$(json_escape "${BOOT_DISK_SIZE:-}")","zone":"$(json_escape "${ZONE:-}")","started_at":"${RUN_STARTED_AT}","finished_at":"$(timestamp_utc)","total_seconds":${total},"phases":{"host-tools":$(duration_for_phase host-tools),"google-cloud-cli":$(duration_for_phase google-cloud-cli),"nix-install":$(duration_for_phase nix-install),"source-download":$(duration_for_phase source-download),"nix-build":$(duration_for_phase nix-build),"closure-export":$(duration_for_phase closure-export),"result-upload":$(duration_for_phase result-upload)}}
+EOF
+}
+
 finish_with_status() {
   local status="$1"
   printf '%s\n' "$status" >/tmp/ol-c-status.txt
+  if [[ "$status" == "0" ]]; then
+    write_progress succeeded complete 100 "complete" 0
+    write_timings succeeded
+  else
+    write_progress failed "${CURRENT_PHASE:-unknown}" "${CURRENT_PERCENT:-0}" "${CURRENT_MESSAGE:-failed}" "$status"
+    write_timings failed
+  fi
+  upload_if_exists /tmp/ol-c-progress.json progress.json
+  upload_if_exists /tmp/ol-c-timings.json timings.json
   upload_if_exists /tmp/ol-c-build.log build.log
   upload_if_exists /tmp/ol-c-status.txt status.txt
   return 0
@@ -296,17 +418,30 @@ self_delete_or_shutdown() {
   shutdown -h now || true
 }
 
-trap 'status=$?; finish_with_status "$status"; exit "$status"' ERR
+trap 'status=$?; set +e; finish_with_status "$status"; self_delete_or_shutdown; exit "$status"' ERR
 
 exec > >(tee /tmp/ol-c-build.log) 2>&1
 
+RUN_STARTED_EPOCH="$(date +%s)"
+RUN_STARTED_AT="$(timestamp_utc)"
+CURRENT_PHASE="startup"
+CURRENT_PERCENT="0"
+CURRENT_MESSAGE="startup script began"
+write_progress running "$CURRENT_PHASE" "$CURRENT_PERCENT" "$CURRENT_MESSAGE"
+upload_progress
+
 export DEBIAN_FRONTEND=noninteractive
+export HOME=/root
+mkdir -p "$HOME"
 
 log "installing host tools"
+phase_begin host-tools 5 "installing host tools"
 apt-get update
 apt-get install -y ca-certificates curl gnupg tar gzip xz-utils
+phase_end host-tools 15 "host tools installed"
 
 log "installing Google Cloud CLI"
+phase_begin google-cloud-cli 15 "installing Google Cloud CLI"
 install -d -m 0755 /usr/share/keyrings
 curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
   | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
@@ -314,8 +449,10 @@ printf 'deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cl
   >/etc/apt/sources.list.d/google-cloud-sdk.list
 apt-get update
 apt-get install -y google-cloud-cli
+phase_end google-cloud-cli 25 "Google Cloud CLI installed"
 
 log "installing Nix"
+phase_begin nix-install 25 "installing Nix"
 mkdir -p /etc/nix
 cat >/etc/nix/nix.conf <<'NIXCONF'
 experimental-features = nix-command flakes
@@ -327,16 +464,49 @@ curl -fsSL https://nixos.org/nix/install | sh -s -- --daemon --yes
 set +u
 . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
 set -u
+cat >/etc/nix/nix.conf <<'NIXCONF'
+experimental-features = nix-command flakes
+trusted-users = root
+max-jobs = auto
+cores = 0
+NIXCONF
+systemctl restart nix-daemon.service || true
+export NIX_CONFIG='experimental-features = nix-command flakes'
+phase_end nix-install 35 "Nix installed and configured"
 
 log "downloading source archive from ${SOURCE_URI}"
+phase_begin source-download 35 "downloading source archive"
 mkdir -p /work/source
 gcloud --quiet storage cp "$SOURCE_URI" /tmp/ol-c-source.tar.gz
 tar -xzf /tmp/ol-c-source.tar.gz -C /work/source
+phase_end source-download 45 "source archive extracted"
 
 log "building ${BUILD_TARGET}"
+phase_begin nix-build 50 "Nix build started"
 cd /work/source
 set +e
-timeout "$TIMEOUT_SECONDS" nix build "$BUILD_TARGET" --print-build-logs --out-link /tmp/ol-c-result
+timeout "$TIMEOUT_SECONDS" nix build "$BUILD_TARGET" --print-build-logs --out-link /tmp/ol-c-result &
+build_pid="$!"
+while kill -0 "$build_pid" >/dev/null 2>&1; do
+  sleep 30
+  if kill -0 "$build_pid" >/dev/null 2>&1; then
+    now="$(date +%s)"
+    build_elapsed="$((now - PHASE_STARTED_EPOCH))"
+    build_percent=50
+    if [[ "${ESTIMATED_NIX_BUILD_SECONDS:-0}" =~ ^[0-9]+$ && "${ESTIMATED_NIX_BUILD_SECONDS:-0}" -gt 0 ]]; then
+      build_percent="$((50 + (build_elapsed * 30 / ESTIMATED_NIX_BUILD_SECONDS)))"
+    elif [[ "${TIMEOUT_SECONDS:-0}" =~ ^[0-9]+$ && "${TIMEOUT_SECONDS:-0}" -gt 0 ]]; then
+      build_percent="$((50 + (build_elapsed * 30 / TIMEOUT_SECONDS)))"
+    fi
+    (( build_percent < 80 )) || build_percent=79
+    latest_line="$(grep -av '^$' /tmp/ol-c-build.log 2>/dev/null | tail -n 1 || true)"
+    CURRENT_PERCENT="$build_percent"
+    CURRENT_MESSAGE="${latest_line:-Nix build running}"
+    write_progress running nix-build "$CURRENT_PERCENT" "$CURRENT_MESSAGE"
+    upload_progress
+  fi
+done
+wait "$build_pid"
 build_status="$?"
 set -e
 if [[ "$build_status" -ne 0 ]]; then
@@ -345,6 +515,7 @@ if [[ "$build_status" -ne 0 ]]; then
   self_delete_or_shutdown
   exit "$build_status"
 fi
+phase_end nix-build 80 "Nix build succeeded"
 
 remote_out="$(readlink -f /tmp/ol-c-result)"
 printf '%s\n' "$remote_out" >/tmp/ol-c-result-path.txt
@@ -352,17 +523,20 @@ printf '%s\n' "$BUILD_TARGET" >/tmp/ol-c-target.txt
 printf '%s\n' 0 >/tmp/ol-c-status.txt
 
 log "exporting Nix closure ${remote_out}"
+phase_begin closure-export 80 "exporting Nix closure"
 nix copy --to file:///tmp/ol-c-nix-cache "$remote_out"
 tar -C /tmp -czf /tmp/ol-c-nix-cache.tar.gz ol-c-nix-cache
+phase_end closure-export 90 "Nix closure exported"
 
 log "uploading result artifacts to ${RUN_URI}"
+phase_begin result-upload 90 "uploading result artifacts"
 gcloud --quiet storage cp /tmp/ol-c-nix-cache.tar.gz "${RUN_URI}/ol-c-nix-cache.tar.gz"
 gcloud --quiet storage cp /tmp/ol-c-result-path.txt "${RUN_URI}/result-path.txt"
 gcloud --quiet storage cp /tmp/ol-c-target.txt "${RUN_URI}/target.txt"
-gcloud --quiet storage cp /tmp/ol-c-status.txt "${RUN_URI}/status.txt"
-gcloud --quiet storage cp /tmp/ol-c-build.log "${RUN_URI}/build.log"
+phase_end result-upload 95 "result artifacts uploaded"
 
 log "build complete: ${remote_out}"
+finish_with_status 0
 self_delete_or_shutdown
 STARTUP
 }
@@ -376,8 +550,13 @@ write_startup_script() {
     printf 'export RUN_URI="%s"\n' "$(printf '%s' "$run_uri" | sed 's/"/\\"/g')"
     printf 'export PROJECT="%s"\n' "$(printf '%s' "$PROJECT" | sed 's/"/\\"/g')"
     printf 'export ZONE="%s"\n' "$(printf '%s' "$ZONE" | sed 's/"/\\"/g')"
+    printf 'export MACHINE_TYPE="%s"\n' "$(printf '%s' "$MACHINE_TYPE" | sed 's/"/\\"/g')"
+    printf 'export BOOT_DISK_TYPE="%s"\n' "$(printf '%s' "$BOOT_DISK_TYPE" | sed 's/"/\\"/g')"
+    printf 'export BOOT_DISK_SIZE="%s"\n' "$(printf '%s' "$BOOT_DISK_SIZE" | sed 's/"/\\"/g')"
     printf 'export INSTANCE_NAME="%s"\n' "$(printf '%s' "$instance_name" | sed 's/"/\\"/g')"
     printf 'export TIMEOUT_SECONDS="%s"\n' "$(printf '%s' "$TIMEOUT_SECONDS" | sed 's/"/\\"/g')"
+    printf 'export ESTIMATED_TOTAL_SECONDS="%s"\n' "$(timing_estimate "$target" total)"
+    printf 'export ESTIMATED_NIX_BUILD_SECONDS="%s"\n' "$(timing_estimate "$target" nix-build)"
     startup_script
   } >"$path"
 }
@@ -385,6 +564,125 @@ write_startup_script() {
 run_prefix() {
   local job_id="$1"
   printf 'gs://%s/runs/%s' "$BUCKET" "$job_id"
+}
+
+json_value() {
+  local file="$1" key="$2" value
+  value="$(sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$file" | sed -n '1p')"
+  if [[ -n "$value" ]]; then
+    printf '%s\n' "$value"
+    return
+  fi
+  sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\([^,}]*\).*/\1/p" "$file" | sed -n '1p'
+}
+
+json_phase_duration() {
+  local file="$1" phase="$2"
+  sed -n "s/.*\"${phase}\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$file" | sed -n '1p'
+}
+
+format_seconds() {
+  local seconds="${1:-0}"
+  [[ "$seconds" =~ ^[0-9]+$ ]] || seconds=0
+  if (( seconds >= 3600 )); then
+    printf '%dh%02dm%02ds' "$((seconds / 3600))" "$(((seconds % 3600) / 60))" "$((seconds % 60))"
+  elif (( seconds >= 60 )); then
+    printf '%dm%02ds' "$((seconds / 60))" "$((seconds % 60))"
+  else
+    printf '%ds' "$seconds"
+  fi
+}
+
+download_artifact() {
+  local job_id="$1" name="$2" dst="$3"
+  gcloud_quiet storage cp "$(run_prefix "$job_id")/${name}" "$dst" >/dev/null 2>&1
+}
+
+progress_line_from_file() {
+  local file="$1" percent phase message elapsed eta status updated
+  percent="$(json_value "$file" percent)"
+  phase="$(json_value "$file" phase)"
+  message="$(json_value "$file" message)"
+  elapsed="$(json_value "$file" elapsed_seconds)"
+  eta="$(json_value "$file" eta_seconds)"
+  status="$(json_value "$file" status)"
+  updated="$(json_value "$file" updated_at)"
+  [[ -n "$percent" ]] || return 1
+  printf '%s%% %s: %s' "$percent" "${phase:-unknown}" "${message:-no message}"
+  if [[ -n "$elapsed" && "$elapsed" != "null" ]]; then
+    printf ' (elapsed %s' "$(format_seconds "$elapsed")"
+    if [[ -n "$eta" && "$eta" != "null" ]]; then
+      printf ', eta %s' "$(format_seconds "$eta")"
+    fi
+    printf ')'
+  fi
+  if [[ -n "$status" && "$status" != "running" ]]; then
+    printf ' [%s]' "$status"
+  fi
+  if [[ -n "$updated" ]]; then
+    printf ' updated %s' "$updated"
+  fi
+  printf '\n'
+}
+
+progress_artifact() {
+  local job_id="$1" tmp="$2"
+  download_artifact "$job_id" progress.json "$tmp"
+}
+
+save_timing_history() {
+  local job_id="$1" tmp status target machine disk_type disk_size zone total host_tools google_cloud_cli nix_install source_download nix_build closure_export result_upload
+  mkdir -p "$LOCAL_BUILDS_DIR"
+  tmp="$(mktemp)"
+  if ! download_artifact "$job_id" timings.json "$tmp"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  if [[ -f "$TIMING_HISTORY" ]] && awk -F '\t' -v job="$job_id" '$1 == job { found = 1 } END { exit found ? 0 : 1 }' "$TIMING_HISTORY"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  status="$(json_value "$tmp" status)"
+  target="$(json_value "$tmp" target)"
+  machine="$(json_value "$tmp" machine_type)"
+  disk_type="$(json_value "$tmp" boot_disk_type)"
+  disk_size="$(json_value "$tmp" boot_disk_size)"
+  zone="$(json_value "$tmp" zone)"
+  total="$(json_value "$tmp" total_seconds)"
+  host_tools="$(json_phase_duration "$tmp" host-tools)"
+  google_cloud_cli="$(json_phase_duration "$tmp" google-cloud-cli)"
+  nix_install="$(json_phase_duration "$tmp" nix-install)"
+  source_download="$(json_phase_duration "$tmp" source-download)"
+  nix_build="$(json_phase_duration "$tmp" nix-build)"
+  closure_export="$(json_phase_duration "$tmp" closure-export)"
+  result_upload="$(json_phase_duration "$tmp" result-upload)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$job_id" "${status:-unknown}" "${target:-unknown}" "${machine:-unknown}" "${disk_type:-unknown}" "${disk_size:-unknown}" "${zone:-unknown}" \
+    "${total:-0}" "${host_tools:-0}" "${google_cloud_cli:-0}" "${nix_install:-0}" "${source_download:-0}" "${nix_build:-0}" "${closure_export:-0}" "${result_upload:-0}" \
+    >>"$TIMING_HISTORY"
+  rm -f "$tmp"
+}
+
+timing_estimate() {
+  local target="$1" phase="$2" field
+  [[ -f "$TIMING_HISTORY" ]] || {
+    printf '0\n'
+    return
+  }
+  case "$phase" in
+    total) field=8 ;;
+    nix-build) field=13 ;;
+    *) field=8 ;;
+  esac
+  awk -F '\t' \
+    -v target="$target" \
+    -v machine="$MACHINE_TYPE" \
+    -v disk_type="$BOOT_DISK_TYPE" \
+    -v disk_size="$BOOT_DISK_SIZE" \
+    -v zone="$ZONE" \
+    -v field="$field" \
+    '$2 == "succeeded" && $3 == target && $4 == machine && $5 == disk_type && $6 == disk_size && $7 == zone && $field ~ /^[0-9]+$/ && $field > 0 { print $field }' \
+    "$TIMING_HISTORY" | sort -n | awk '{ values[NR] = $1 } END { if (NR == 0) print 0; else if (NR % 2) print values[(NR + 1) / 2]; else print int((values[NR / 2] + values[NR / 2 + 1]) / 2) }'
 }
 
 instance_state() {
@@ -416,31 +714,44 @@ status_artifact() {
 }
 
 wait_for_job() {
-  local job_id="$1" deadline now state remote_status
+  local job_id="$1" deadline now state remote_status progress_tmp progress_line last_progress_line=""
   deadline=$(($(date +%s) + TIMEOUT_SECONDS + 600))
+  progress_tmp="$(mktemp)"
 
   while true; do
     remote_status="$(status_artifact "$job_id" || true)"
     if [[ "$remote_status" == "0" ]]; then
+      save_timing_history "$job_id"
+      rm -f "$progress_tmp"
       echo "Remote build ${job_id} succeeded"
       return 0
     elif [[ -n "$remote_status" ]]; then
+      save_timing_history "$job_id"
+      rm -f "$progress_tmp"
       echo "Remote build ${job_id} failed with status ${remote_status}" >&2
       return 1
     fi
 
     state="$(instance_state "$job_id")"
-    case "$state" in
-      "")
-        echo "Waiting for VM ${job_id}; instance not found yet or already deleted"
-        ;;
-      TERMINATED|STOPPING|SUSPENDED)
-        echo "VM ${job_id} ended with state ${state}; waiting for uploaded status"
-        ;;
-      *)
-        echo "Waiting for VM ${job_id}; state=${state}"
-        ;;
-    esac
+    if progress_artifact "$job_id" "$progress_tmp"; then
+      progress_line="$(progress_line_from_file "$progress_tmp" || true)"
+      if [[ -n "$progress_line" && "$progress_line" != "$last_progress_line" ]]; then
+        echo "Remote progress ${job_id}: ${progress_line}"
+        last_progress_line="$progress_line"
+      fi
+    else
+      case "$state" in
+        "")
+          echo "Waiting for VM ${job_id}; instance not found yet or already deleted"
+          ;;
+        TERMINATED|STOPPING|SUSPENDED)
+          echo "VM ${job_id} ended with state ${state}; waiting for uploaded status"
+          ;;
+        *)
+          echo "Waiting for VM ${job_id}; state=${state}"
+          ;;
+      esac
+    fi
 
     now="$(date +%s)"
     if (( now >= deadline )); then
@@ -448,9 +759,10 @@ wait_for_job() {
       gcloud_quiet compute instances delete "$job_id" \
         --project="$PROJECT" \
         --zone="$ZONE" || true
+      rm -f "$progress_tmp"
       return 1
     fi
-    sleep 30
+    sleep "$POLL_INTERVAL"
   done
 }
 
@@ -467,7 +779,10 @@ fetch_result() {
   gcloud_quiet storage cp "$(run_prefix "$job_id")/result-path.txt" "${dir}/result-path.txt"
   gcloud_quiet storage cp "$(run_prefix "$job_id")/target.txt" "${dir}/target.txt"
   gcloud_quiet storage cp "$(run_prefix "$job_id")/build.log" "${dir}/build.log" || true
+  gcloud_quiet storage cp "$(run_prefix "$job_id")/progress.json" "${dir}/progress.json" || true
+  gcloud_quiet storage cp "$(run_prefix "$job_id")/timings.json" "${dir}/timings.json" || true
   gcloud_quiet storage cp "$(run_prefix "$job_id")/ol-c-nix-cache.tar.gz" "$cache_archive"
+  save_timing_history "$job_id"
 
   rm -rf "$cache_dir"
   tar -xzf "$cache_archive" -C "$dir"
@@ -495,7 +810,7 @@ fetch_result() {
 }
 
 submit_build() {
-  local target="$1" dry_run="$2"
+  local target="$1" dry_run="$2" wait_for_result="$3"
   local job_id tmpdir archive startup source_uri run_uri
 
   job_id="ol-c-firefox-$(date -u +%Y%m%d-%H%M%S)-$$"
@@ -505,7 +820,7 @@ submit_build() {
   run_uri="$(run_prefix "$job_id")"
   source_uri="${run_uri}/source.tar.gz"
 
-  print_gcloud_context "$PROJECT" "$LOCATION" "$ZONE" "$BUCKET" "$target" "$MACHINE_TYPE" "$TIMEOUT"
+  print_gcloud_context "$PROJECT" "$LOCATION" "$ZONE" "$BUCKET" "$target" "$MACHINE_TYPE" "$BOOT_DISK_TYPE" "$BOOT_DISK_SIZE" "$TIMEOUT"
   if ! command -v nix >/dev/null 2>&1; then
     echo "warning: local nix not found; the remote build can run, but automatic local import will be skipped during fetch" >&2
     echo
@@ -572,6 +887,17 @@ EOF
   echo "  $0 --kill ${job_id}"
   echo
 
+  if [[ "$wait_for_result" == "0" ]]; then
+    echo "Not waiting for ${job_id}; the build is running remotely."
+    echo "Check status:"
+    echo "  $0 --status ${job_id}"
+    echo "Fetch logs:"
+    echo "  $0 --logs ${job_id}"
+    echo "Fetch result after success:"
+    echo "  $0 --fetch ${job_id}"
+    return 0
+  fi
+
   if wait_for_job "$job_id"; then
     fetch_result "$job_id"
   else
@@ -584,12 +910,19 @@ EOF
 }
 
 show_status() {
-  local job_id="$1" state remote_status
+  local job_id="$1" state remote_status progress_tmp
   state="$(instance_state "$job_id")"
   remote_status="$(status_artifact "$job_id" || true)"
   echo "Job: ${job_id}"
   echo "Instance: ${state:-not found}"
   echo "Remote status: ${remote_status:-not uploaded}"
+  progress_tmp="$(mktemp)"
+  if progress_artifact "$job_id" "$progress_tmp"; then
+    echo "Progress: $(progress_line_from_file "$progress_tmp" || printf 'unreadable progress artifact')"
+  else
+    echo "Progress: not uploaded"
+  fi
+  rm -f "$progress_tmp"
   echo "Artifacts: $(run_prefix "$job_id")/"
   echo
   gcloud compute instances describe "$job_id" \
@@ -628,33 +961,56 @@ cleanup_run() {
 }
 
 main() {
-  local mode="submit" dry_run="0" target="$DEFAULT_TARGET" job_id=""
+  local mode="submit" mode_seen="0" dry_run="0" wait_for_result="1" target="$DEFAULT_TARGET" job_id="" positional=()
 
-  case "${1:-}" in
-    --help|-h)
-      usage
-      exit 0
-      ;;
-    --dry-run)
-      dry_run="1"
-      shift
-      target="${1:-$DEFAULT_TARGET}"
-      ;;
-    --logs|--status|--fetch|--kill|--cleanup)
-      mode="${1#--}"
-      shift
-      job_id="${1:-}"
-      [[ -n "$job_id" ]] || fail "--${mode} requires JOB_ID"
-      ;;
-    --*)
-      fail "unknown option: $1"
-      ;;
-    "")
-      ;;
-    *)
-      target="$1"
-      ;;
-  esac
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      --dry-run)
+        dry_run="1"
+        shift
+        ;;
+      --no-wait)
+        wait_for_result="0"
+        shift
+        ;;
+      --logs|--status|--fetch|--kill|--cleanup)
+        [[ "$mode_seen" == "0" ]] || fail "expected only one management option"
+        mode_seen="1"
+        mode="${1#--}"
+        shift
+        job_id="${1:-}"
+        [[ -n "$job_id" ]] || fail "--${mode} requires JOB_ID"
+        shift
+        ;;
+      --*)
+        fail "unknown option: $1"
+        ;;
+      *)
+        positional+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [[ "${#positional[@]}" -gt 1 ]]; then
+    fail "expected at most one TARGET"
+  fi
+  if [[ "${#positional[@]}" -eq 1 ]]; then
+    target="${positional[0]}"
+  fi
+  if [[ "$mode" != "submit" && "${#positional[@]}" -gt 0 ]]; then
+    fail "TARGET can only be used when submitting a build"
+  fi
+  if [[ "$mode" != "submit" && "$dry_run" == "1" ]]; then
+    fail "--dry-run can only be used when submitting a build"
+  fi
+  if [[ "$mode" != "submit" && "$wait_for_result" == "0" ]]; then
+    fail "--no-wait can only be used when submitting a build"
+  fi
 
   require_command gcloud
   case "$mode" in
@@ -670,7 +1026,7 @@ main() {
   case "$mode" in
     submit)
       require_command tar
-      submit_build "$target" "$dry_run"
+      submit_build "$target" "$dry_run" "$wait_for_result"
       ;;
     logs)
       show_logs "$job_id"

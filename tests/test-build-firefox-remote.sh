@@ -148,7 +148,23 @@ if [[ "\$1" == "--quiet" && "\${2:-}" == "storage" && "\${3:-}" == "cp" ]]; then
           printf '%s\n' "remote log" > "\$dst"
           ;;
         */status.txt)
+          if [[ "\${OLC_FAKE_NO_STATUS:-0}" == "1" ]]; then
+            exit 1
+          fi
+          if [[ "\${OLC_FAKE_STATUS_AFTER_PROGRESS:-0}" == "1" && ! -f "${CASE_TMP}/status-polled" ]]; then
+            : > "${CASE_TMP}/status-polled"
+            exit 1
+          fi
           printf '%s\n' "0" > "\$dst"
+          ;;
+        */progress.json)
+          if [[ "\${OLC_FAKE_NO_PROGRESS:-0}" == "1" ]]; then
+            exit 1
+          fi
+          printf '%s\n' '{"status":"running","phase":"nix-build","percent":63,"message":"building Firefox","started_at":"2026-04-20T01:00:00Z","updated_at":"2026-04-20T01:02:00Z","elapsed_seconds":120,"eta_seconds":300,"exit_status":null,"target":".#firefox-localhost","machine_type":"c2-standard-30","boot_disk_type":"pd-ssd","boot_disk_size":"300GB","zone":"us-central1-a"}' > "\$dst"
+          ;;
+        */timings.json)
+          printf '%s\n' '{"status":"succeeded","target":".#firefox-localhost","machine_type":"c2-standard-30","boot_disk_type":"pd-ssd","boot_disk_size":"300GB","zone":"us-central1-a","started_at":"2026-04-20T01:00:00Z","finished_at":"2026-04-20T01:10:00Z","total_seconds":600,"phases":{"host-tools":10,"google-cloud-cli":20,"nix-install":30,"source-download":5,"nix-build":500,"closure-export":20,"result-upload":15}}' > "\$dst"
           ;;
         */ol-c-nix-cache.tar.gz)
           tmp="\$(mktemp -d)"
@@ -216,12 +232,13 @@ test_dry_run_uses_safe_defaults() {
   assert_contains "$output" "Google Cloud auth accounts:"
   assert_contains "$output" "bucket:       gs://ol-c-test-project-ol-c-remote-builds"
   assert_contains "$output" "target:       .#firefox-localhost"
-  assert_contains "$output" "machine:      h4d-standard-192"
+  assert_contains "$output" "machine:      c2-standard-30"
+  assert_contains "$output" "boot disk:    pd-ssd, 300GB"
   assert_contains "$output" "timeout:      1h"
   assert_contains "$output" "Would create Compute Engine VM:"
   assert_contains "$output" "gcloud compute instances create ol-c-firefox-"
-  assert_contains "$output" "--machine-type=h4d-standard-192"
-  assert_contains "$output" "--boot-disk-type=hyperdisk-balanced"
+  assert_contains "$output" "--machine-type=c2-standard-30"
+  assert_contains "$output" "--boot-disk-type=pd-ssd"
   assert_contains "$output" "--boot-disk-size=300GB"
   assert_contains "$output" "--image-family=ubuntu-2404-lts-amd64"
   assert_contains "$output" "--image-project=ubuntu-os-cloud"
@@ -231,6 +248,14 @@ test_dry_run_uses_safe_defaults() {
   assert_contains "$output" "--instance-termination-action=DELETE"
   assert_contains "$output" "--labels=ol-c-purpose=firefox-remote-build,ol-c-job=ol-c-firefox-"
   assert_contains "$output" '.#firefox-localhost'
+  assert_contains "$output" "export HOME=/root"
+  assert_contains "$output" "trap 'status=\$?; set +e; finish_with_status \"\$status\"; self_delete_or_shutdown; exit \"\$status\"' ERR"
+  assert_contains "$output" "export NIX_CONFIG='experimental-features = nix-command flakes'"
+  assert_contains "$output" "write_progress()"
+  assert_contains "$output" "write_timings()"
+  assert_contains "$output" "progress.json"
+  assert_contains "$output" "timings.json"
+  assert_contains "$output" "phase_begin nix-build 50"
   assert_contains "$output" "/tmp/ol-c-build.log"
   assert_contains "$output" "ol-c-nix-cache.tar.gz"
   cleanup_case
@@ -261,6 +286,91 @@ test_bucket_override_still_wins() {
   )"
 
   assert_contains "$output" "bucket:       gs://custom-ol-c-builds"
+  cleanup_case
+}
+
+test_no_wait_submits_without_fetching_result() {
+  local output calls
+  setup_case
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      "${REMOTE_BUILD}" --no-wait .#firefox-localhost
+  )"
+  calls="$(cat "${CASE_TMP}/calls/gcloud" 2>/dev/null || true)"
+
+  assert_contains "$output" "VM submitted: ol-c-firefox-"
+  assert_contains "$output" "Not waiting for ol-c-firefox-"
+  assert_contains "$output" "--status ol-c-firefox-"
+  assert_contains "$output" "--logs ol-c-firefox-"
+  assert_contains "$output" "--fetch ol-c-firefox-"
+  assert_contains "$calls" "compute instances create ol-c-firefox-"
+  [[ ! -s "${CASE_TMP}/calls/nix" ]] || fail "no-wait should not fetch and import the result"
+  [[ "$output" != *"Downloading artifacts"* ]] || fail "no-wait should not fetch artifacts"
+  cleanup_case
+}
+
+test_invalid_timeout_fails_before_bucket_creation() {
+  local output status calls
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      OLC_GCP_TIMEOUT=soon \
+      "${REMOTE_BUILD}" --dry-run \
+      2>&1
+  )"
+  status=$?
+  set -e
+  calls="$(cat "${CASE_TMP}/calls/gcloud" 2>/dev/null || true)"
+
+  [[ $status -ne 0 ]] || fail "expected invalid timeout to fail"
+  assert_contains "$output" "invalid OLC_GCP_TIMEOUT: soon"
+  [[ "$calls" != *"storage buckets create"* ]] || fail "invalid timeout should stop before bucket creation"
+  [[ "$calls" != *"compute instances create"* ]] || fail "invalid timeout should stop before VM creation"
+  cleanup_case
+}
+
+test_invalid_disk_size_fails_before_bucket_creation() {
+  local output status calls
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      OLC_GCP_BOOT_DISK_SIZE=large \
+      "${REMOTE_BUILD}" --dry-run \
+      2>&1
+  )"
+  status=$?
+  set -e
+  calls="$(cat "${CASE_TMP}/calls/gcloud" 2>/dev/null || true)"
+
+  [[ $status -ne 0 ]] || fail "expected invalid disk size to fail"
+  assert_contains "$output" "invalid OLC_GCP_BOOT_DISK_SIZE: large"
+  [[ "$calls" != *"storage buckets create"* ]] || fail "invalid disk size should stop before bucket creation"
+  [[ "$calls" != *"compute instances create"* ]] || fail "invalid disk size should stop before VM creation"
+  cleanup_case
+}
+
+test_management_mode_rejects_extra_target() {
+  local output status calls
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      "${REMOTE_BUILD}" --status ol-c-firefox-test .#firefox-localhost \
+      2>&1
+  )"
+  status=$?
+  set -e
+  calls="$(cat "${CASE_TMP}/calls/gcloud" 2>/dev/null || true)"
+
+  [[ $status -ne 0 ]] || fail "expected management mode extra target to fail"
+  assert_contains "$output" "TARGET can only be used when submitting a build"
+  [[ "$calls" != *"compute instances create"* ]] || fail "status mode should not create a VM"
   cleanup_case
 }
 
@@ -391,7 +501,58 @@ test_fetch_imports_downloaded_cache() {
   assert_contains "$output" "Downloading artifacts for ol-c-firefox-test"
   assert_contains "$output" "Remote result: /nix/store/test-firefox"
   assert_contains "$nix_calls" "copy --no-check-sigs --from file://${OLC_GCP_LOCAL_BUILDS_DIR}/ol-c-firefox-test/ol-c-nix-cache /nix/store/test-firefox"
+  [[ -s "${OLC_GCP_LOCAL_BUILDS_DIR}/timing-history.tsv" ]] || fail "expected fetch to save timing history"
   [[ -L "${OLC_GCP_RESULT_LINK}" ]] || fail "expected fetch to update result symlink"
+  cleanup_case
+}
+
+test_status_prints_progress_artifact() {
+  local output
+  setup_case
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      "${REMOTE_BUILD}" --status ol-c-firefox-test
+  )"
+
+  assert_contains "$output" "Job: ol-c-firefox-test"
+  assert_contains "$output" "Progress: 63% nix-build: building Firefox"
+  assert_contains "$output" "elapsed 2m00s"
+  assert_contains "$output" "eta 5m00s"
+  cleanup_case
+}
+
+test_status_handles_missing_progress_artifact() {
+  local output
+  setup_case
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      OLC_FAKE_NO_PROGRESS=1 \
+      OLC_FAKE_NO_STATUS=1 \
+      "${REMOTE_BUILD}" --status ol-c-firefox-test
+  )"
+
+  assert_contains "$output" "Remote status: not uploaded"
+  assert_contains "$output" "Progress: not uploaded"
+  cleanup_case
+}
+
+test_wait_loop_prints_progress_and_saves_timings() {
+  local output
+  setup_case
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      OLC_FAKE_STATUS_AFTER_PROGRESS=1 \
+      OLC_GCP_POLL_INTERVAL=1 \
+      "${REMOTE_BUILD}" .#firefox-localhost
+  )"
+
+  assert_contains "$output" "Remote progress ol-c-firefox-"
+  assert_contains "$output" "63% nix-build: building Firefox"
+  assert_contains "$output" "Remote build ol-c-firefox-"
+  [[ -s "${OLC_GCP_LOCAL_BUILDS_DIR}/timing-history.tsv" ]] || fail "expected wait loop to save timing history"
   cleanup_case
 }
 
@@ -562,6 +723,10 @@ test_management_mode_does_not_launch_login
 test_dry_run_uses_safe_defaults
 test_dry_run_allows_target_override
 test_bucket_override_still_wins
+test_no_wait_submits_without_fetching_result
+test_invalid_timeout_fails_before_bucket_creation
+test_invalid_disk_size_fails_before_bucket_creation
+test_management_mode_rejects_extra_target
 test_interactive_identity_confirmation_can_continue
 test_interactive_identity_confirmation_can_login
 test_interactive_identity_confirmation_can_switch_account
@@ -571,6 +736,9 @@ test_bucket_create_failure_recommends_unique_bucket
 test_vm_create_failure_cleans_uploaded_source
 test_kill_deletes_compute_instance
 test_fetch_imports_downloaded_cache
+test_status_prints_progress_artifact
+test_status_handles_missing_progress_artifact
+test_wait_loop_prints_progress_and_saves_timings
 test_script_documents_archive_excludes
 
 echo "PASS: build-firefox-remote"

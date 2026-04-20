@@ -1,8 +1,158 @@
+diff --git a/browser/base/content/browser-commands.js b/browser/base/content/browser-commands.js
+index 75ddd82..50ce2a5 100644
+--- a/browser/base/content/browser-commands.js
++++ b/browser/base/content/browser-commands.js
+@@ -9,6 +9,8 @@ var kSkipCacheFlags =
+   Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_PROXY |
+   Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE;
+ 
++const SECUREOS_LOCALHOST_URL = "https://localhost";
++
+ var BrowserCommands = {
+   back(aEvent) {
+     const where = BrowserUtils.whereToOpenLink(aEvent, false, true);
+@@ -292,7 +294,7 @@ var BrowserCommands = {
+ 
+   openTab({ event, url } = {}) {
+     let werePassedURL = !!url;
+-    url ??= BROWSER_NEW_TAB_URL;
++    url ??= SECUREOS_LOCALHOST_URL;
+     let searchClipboard =
+       gMiddleClickNewTabUsesPasteboard && event?.button == 1;
+ 
+diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
+index 0ea3d82..43ccbe9 100644
+--- a/browser/base/content/browser.js
++++ b/browser/base/content/browser.js
+@@ -114,6 +114,7 @@ ChromeUtils.defineESModuleGetters(this, {
+     "moz-src:///browser/components/urlbar/UrlbarTokenizer.sys.mjs",
+   UrlbarUtils: "moz-src:///browser/components/urlbar/UrlbarUtils.sys.mjs",
+   Weave: "resource://services-sync/main.sys.mjs",
++  WebChannel: "resource://gre/modules/WebChannel.sys.mjs",
+   WebNavigationFrames: "resource://gre/modules/WebNavigationFrames.sys.mjs",
+   webrtcUI: "resource:///modules/webrtcUI.sys.mjs",
+   WebsiteFilter: "resource:///modules/policies/WebsiteFilter.sys.mjs",
+@@ -337,6 +338,97 @@ if (AppConstants.ENABLE_WEBDRIVER) {
+   this.RemoteAgent = { running: false };
+ }
+ 
++const SECUREOS_APPEARANCE_CHANNEL_ID = "olc-appearance";
++const SECUREOS_APPEARANCE_ORIGIN = "https://localhost";
++const SECUREOS_APPEARANCE_THEMES = new Map([
++  ["dark", "firefox-compact-dark@mozilla.org"],
++  ["light", "firefox-compact-light@mozilla.org"],
++]);
++
++var gSecureOSAppearanceBridge = {
++  _channel: null,
++
++  init() {
++    if (this._channel) {
++      return;
++    }
++
++    this._channel = new WebChannel(
++      SECUREOS_APPEARANCE_CHANNEL_ID,
++      Services.io.newURI(SECUREOS_APPEARANCE_ORIGIN)
++    );
++    this._channel.listen((id, message, target) => {
++      if (target.browser?.ownerGlobal !== window) {
++        return;
++      }
++
++      this.receiveMessage(message, target);
++    });
++  },
++
++  async receiveMessage(message, target) {
++    let data;
++    try {
++      data = await this.handleMessage(message);
++    } catch (error) {
++      data = {
++        error: error.message || String(error),
++      };
++    }
++
++    this._channel.send(
++      {
++        messageId: message?.messageId,
++        data,
++      },
++      target
++    );
++  },
++
++  async handleMessage(message) {
++    switch (message?.command) {
++      case "getAppearance":
++        return {
++          mode: this.currentMode(),
++        };
++      case "setAppearance":
++        return this.setMode(message.data?.mode);
++      default:
++        throw new Error("unsupported appearance command");
++    }
++  },
++
++  currentMode() {
++    switch (Services.prefs.getStringPref("extensions.activeThemeID", "")) {
++      case SECUREOS_APPEARANCE_THEMES.get("dark"):
++        return "dark";
++      case SECUREOS_APPEARANCE_THEMES.get("light"):
++        return "light";
++      default:
++        return "light";
++    }
++  },
++
++  async setMode(mode) {
++    let themeId = SECUREOS_APPEARANCE_THEMES.get(mode);
++    if (!themeId) {
++      throw new Error("mode must be light or dark");
++    }
++
++    let addon = await AddonManager.getAddonByID(themeId);
++    if (!addon) {
++      throw new Error("Firefox built-in theme is unavailable");
++    }
++
++    await addon.enable();
++    return {
++      mode: this.currentMode(),
++    };
++  },
++};
++
++gSecureOSAppearanceBridge.init();
++
+ ChromeUtils.defineLazyGetter(this, "RTL_UI", () => {
+   return Services.locale.isAppLocaleRTL;
+ });
+@@ -1340,7 +1432,7 @@ function openLocation(event) {
+     AppConstants.BROWSER_CHROME_URL,
+     "_blank",
+     "chrome,all,dialog=no",
+-    BROWSER_NEW_TAB_URL
++    "https://localhost"
+   );
+ }
+ 
+@@ -1879,7 +1971,7 @@ let gFileMenu = {
+  *        A click event on a userContext File Menu option
+  */
+ function openNewUserContextTab(event) {
+-  openTrustedLinkIn(BROWSER_NEW_TAB_URL, "tab", {
++  openTrustedLinkIn("https://localhost", "tab", {
+     userContextId: parseInt(event.target.getAttribute("data-usercontextid")),
+   });
+ }
 diff --git a/browser/base/content/test/general/browser.toml b/browser/base/content/test/general/browser.toml
-index 4b73986..88f1dfd 100644
+index 3831809..10e1246 100644
 --- a/browser/base/content/test/general/browser.toml
 +++ b/browser/base/content/test/general/browser.toml
-@@ -296,6 +296,8 @@ support-files = [
+@@ -320,6 +320,8 @@ support-files = [
  # DO NOT ADD MORE TESTS HERE. USE A TOPICAL DIRECTORY INSTEAD.
  
  ["browser_hide_removing.js"]
@@ -13,7 +163,7 @@ index 4b73986..88f1dfd 100644
  ["browser_homeDrop.js"]
 diff --git a/browser/base/content/test/general/browser_localhost_shell.js b/browser/base/content/test/general/browser_localhost_shell.js
 new file mode 100644
-index 0000000..00b1895
+index 0000000..6c0f0d1
 --- /dev/null
 +++ b/browser/base/content/test/general/browser_localhost_shell.js
 @@ -0,0 +1,228 @@
@@ -246,11 +396,11 @@ index 0000000..00b1895
 +  }
 +});
 diff --git a/browser/components/tabbrowser/content/tabbrowser.js b/browser/components/tabbrowser/content/tabbrowser.js
-index 37570c5..f72b232 100644
+index d88bc0e..67f4e8a 100644
 --- a/browser/components/tabbrowser/content/tabbrowser.js
 +++ b/browser/components/tabbrowser/content/tabbrowser.js
 @@ -19,6 +19,8 @@
-       "chrome://browser/skin/privatebrowsing/favicon.svg",
+       "chrome://global/skin/icons/highlights.svg",
    };
  
 +  const SECUREOS_LOCALHOST_URL = "https://localhost";
@@ -258,16 +408,34 @@ index 37570c5..f72b232 100644
    const {
      LOAD_FLAGS_NONE,
      LOAD_FLAGS_FROM_EXTERNAL,
-@@ -4899,7 +4901,7 @@
+@@ -3002,7 +3004,7 @@
+       Services.obs.notifyObservers(
+         {
+           wrappedJSObject: new Promise(resolve => {
+-            this.selectedTab = this.addTrustedTab(BROWSER_NEW_TAB_URL, {
++            this.selectedTab = this.addTrustedTab(SECUREOS_LOCALHOST_URL, {
+               tabIndex: tab._tPos + 1,
+               userContextId: tab.userContextId,
+               tabGroup: tab.group,
+@@ -5784,7 +5786,7 @@
        aTab._mouseleave();
  
        if (newTab) {
 -        this.addTrustedTab(BROWSER_NEW_TAB_URL, {
 +        this.addTrustedTab(SECUREOS_LOCALHOST_URL, {
            skipAnimation: true,
-         });
-       } else {
-@@ -7330,6 +7332,23 @@
+           // In the event that insertAfterCurrent is set and the current tab is
+           // inside a group that is being closed we want to avoid creating the
+@@ -6085,7 +6087,7 @@
+           if (firefoxViewAvailable) {
+             FirefoxViewHandler.openTab("opentabs");
+           } else {
+-            this.selectedTab = this.addTrustedTab(BROWSER_NEW_TAB_URL, {
++            this.selectedTab = this.addTrustedTab(SECUREOS_LOCALHOST_URL, {
+               skipAnimation: true,
+             });
+           }
+@@ -8487,6 +8489,23 @@
            // We already did PermitUnload in the content process
            // for this tab (the only one in the window). So we don't
            // need to do it again for any tabs.
@@ -291,137 +459,3 @@ index 37570c5..f72b232 100644
            window.skipNextCanClose = true;
            // In the parent-process browser case, the nsCloseEvent will actually take
            // care of tearing down the window, but we need to do this ourselves in the
-diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
-index 2ce617b..4f378dd 100644
---- a/browser/base/content/browser.js
-+++ b/browser/base/content/browser.js
-@@ -82,6 +82,7 @@ ChromeUtils.defineESModuleGetters(this, {
-   UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
-   UrlbarValueFormatter: "resource:///modules/UrlbarValueFormatter.sys.mjs",
-   Weave: "resource://services-sync/main.sys.mjs",
-+  WebChannel: "resource://gre/modules/WebChannel.sys.mjs",
-   WebNavigationFrames: "resource://gre/modules/WebNavigationFrames.sys.mjs",
-   webrtcUI: "resource:///modules/webrtcUI.sys.mjs",
-   WebsiteFilter: "resource:///modules/policies/WebsiteFilter.sys.mjs",
-@@ -145,9 +146,100 @@ XPCOMUtils.defineLazyServiceGetters(this, {
-   BrowserHandler: ["@mozilla.org/browser/clh;1", "nsIBrowserHandler"],
- });
- 
-+const SECUREOS_APPEARANCE_CHANNEL_ID = "olc-appearance";
-+const SECUREOS_APPEARANCE_ORIGIN = "https://localhost";
-+const SECUREOS_APPEARANCE_THEMES = new Map([
-+  ["dark", "firefox-compact-dark@mozilla.org"],
-+  ["light", "firefox-compact-light@mozilla.org"],
-+]);
-+
-+var gSecureOSAppearanceBridge = {
-+  _channel: null,
-+
-+  init() {
-+    if (this._channel) {
-+      return;
-+    }
-+
-+    this._channel = new WebChannel(
-+      SECUREOS_APPEARANCE_CHANNEL_ID,
-+      Services.io.newURI(SECUREOS_APPEARANCE_ORIGIN)
-+    );
-+    this._channel.listen((id, message, target) => {
-+      if (target.browser?.ownerGlobal !== window) {
-+        return;
-+      }
-+
-+      this.receiveMessage(message, target);
-+    });
-+  },
-+
-+  async receiveMessage(message, target) {
-+    let data;
-+    try {
-+      data = await this.handleMessage(message);
-+    } catch (error) {
-+      data = {
-+        error: error.message || String(error),
-+      };
-+    }
-+
-+    this._channel.send(
-+      {
-+        messageId: message?.messageId,
-+        data,
-+      },
-+      target
-+    );
-+  },
-+
-+  async handleMessage(message) {
-+    switch (message?.command) {
-+      case "getAppearance":
-+        return {
-+          mode: this.currentMode(),
-+        };
-+      case "setAppearance":
-+        return this.setMode(message.data?.mode);
-+      default:
-+        throw new Error("unsupported appearance command");
-+    }
-+  },
-+
-+  currentMode() {
-+    switch (Services.prefs.getStringPref("extensions.activeThemeID", "")) {
-+      case SECUREOS_APPEARANCE_THEMES.get("dark"):
-+        return "dark";
-+      case SECUREOS_APPEARANCE_THEMES.get("light"):
-+        return "light";
-+      default:
-+        return "light";
-+    }
-+  },
-+
-+  async setMode(mode) {
-+    let themeId = SECUREOS_APPEARANCE_THEMES.get(mode);
-+    if (!themeId) {
-+      throw new Error("mode must be light or dark");
-+    }
-+
-+    let addon = await AddonManager.getAddonByID(themeId);
-+    if (!addon) {
-+      throw new Error("Firefox built-in theme is unavailable");
-+    }
-+
-+    await addon.enable();
-+    return {
-+      mode: this.currentMode(),
-+    };
-+  },
-+};
-+
-+gSecureOSAppearanceBridge.init();
-+
- if (AppConstants.ENABLE_WEBDRIVER) {
-   XPCOMUtils.defineLazyServiceGetter(
-     this,
-     "Marionette",
-     "@mozilla.org/remote/marionette;1",
-     "nsIMarionette"
-diff --git a/browser/base/content/browser-commands.js b/browser/base/content/browser-commands.js
-index b0b2383..024b763 100644
---- a/browser/base/content/browser-commands.js
-+++ b/browser/base/content/browser-commands.js
-@@ -11,6 +11,8 @@ var kSkipCacheFlags =
-   Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_PROXY |
-   Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE;
- 
-+const SECUREOS_LOCALHOST_URL = "https://localhost";
-+
- var BrowserCommands = {
-   back(aEvent) {
-     const where = BrowserUtils.whereToOpenLink(aEvent, false, true);
-@@ -295,6 +297,6 @@ var BrowserCommands = {
- 
-   openTab({ event, url } = {}) {
-     let werePassedURL = !!url;
--    url ??= BROWSER_NEW_TAB_URL;
-+    url ??= SECUREOS_LOCALHOST_URL;
-     let searchClipboard =
-       gMiddleClickNewTabUsesPasteboard && event?.button == 1;

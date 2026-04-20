@@ -221,10 +221,6 @@ in {
       echo "error: patched Firefox browser.js runtime asset is missing built-in dark theme activation: $browser_js_omni:$browser_js_path" >&2
       exit 1
     fi
-    if ! grep -Fq 'openTrustedLinkIn(BROWSER_NEW_TAB_URL' "$browser_js_extract_dir/$browser_js_path"; then
-      echo "error: Firefox browser.js localhost rewrite did not match the expected runtime asset" >&2
-      exit 1
-    fi
     sed -i \
       's#openTrustedLinkIn(BROWSER_NEW_TAB_URL,#openTrustedLinkIn("https://localhost",#g' \
       "$browser_js_extract_dir/$browser_js_path"
