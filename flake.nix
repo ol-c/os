@@ -18,6 +18,9 @@
       firefoxFastOverlay = import ./nix/firefox-localhost-fast.nix {
         inherit firefoxLocalhostPatch;
       };
+      basePkgs = import nixpkgs {
+        inherit system;
+      };
       firefoxPkgs = import nixpkgs {
         inherit system;
         overlays = [ firefoxFastOverlay ];
@@ -42,6 +45,7 @@
       packages.${system} = {
         firefox-localhost = firefoxPkgs.firefox;
         firefox-localhost-source = firefoxSourcePkgs.firefox;
+        novnc = basePkgs.novnc;
         "ol-c-image" = self.nixosConfigurations."ol-c".config.system.build.images.qemu;
       };
     };

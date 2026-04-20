@@ -23,9 +23,14 @@ Build and launch it with:
 ./launch-vm
 ```
 
-`launch-vm` uses QEMU's SPICE display path by default and opens it with `remote-viewer`. It also mounts this repo read-write inside the guest at `/source` using QEMU virtiofs, so the in-browser terminal can edit the same source tree that is visible on the host. This avoids the host HiDPI cursor-coordinate issues seen with QEMU's GTK window and the cursor escape roughness seen with QEMU's SDL window. SDL and GTK remain available as direct QEMU display fallbacks:
+`launch-vm` uses a browser tab as the default VM display. QEMU exposes the VM display through a local-only VNC WebSocket endpoint, and a small repo-owned viewer page uses pinned noVNC assets to render the VM screen in the browser. It also mounts this repo read-write inside the guest at `/source` using QEMU virtiofs, so the in-browser terminal can edit the same source tree that is visible on the host.
+
+The browser display path is local development only for now: the viewer server and QEMU VNC WebSocket listener bind to `127.0.0.1`. If the browser does not open automatically, use the printed `browser url:` line.
+
+SPICE remains available as an explicit fallback, and SDL/GTK remain available as direct QEMU display fallbacks:
 
 ```sh
+OLC_QEMU_FRONTEND=spice ./launch-vm
 OLC_QEMU_FRONTEND=sdl ./launch-vm
 OLC_QEMU_FRONTEND=gtk ./launch-vm
 OLC_QEMU_DISPLAY='gtk,gl=off,zoom-to-fit=off' ./launch-vm
@@ -72,6 +77,8 @@ codex
 The wrapper uses `npx` to run the pinned `@openai/codex` CLI, defaults to `CODEX_MODEL=gpt-5.4`, and passes `--dangerously-bypass-approvals-and-sandbox` so Codex can make full-system development changes inside this disposable VM. The `demo` user has passwordless `sudo` through the `wheel` group for the same reason. This is a development VM convenience, not the intended production OS security posture.
 
 ## Nix Layout
+
+`vm-screen/server.mjs` is the host-side browser viewer used by the default launcher. It serves a local page and pinned noVNC assets; QEMU provides the VNC WebSocket endpoint directly, so this path does not require `remote-viewer` or `websockify`.
 
 `nix/ol-c.nix` is the current guest entry point. It imports focused modules from `nix/modules/`:
 - `base.nix` owns boot, qemu guest support, serial console, hostname, and NixOS state version

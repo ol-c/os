@@ -12,8 +12,12 @@ Options:
 
 Environment:
   OLC_QEMU_FRONTEND
-                          Graphical frontend: spice, sdl, or gtk. Default: spice.
+                          Graphical frontend: browser, spice, sdl, or gtk. Default: browser.
   OLC_QEMU_DISPLAY  Direct QEMU display backend for debugging. Overrides frontend.
+  OLC_NOVNC_DIR           noVNC asset directory. Default: built from .#novnc.
+  OLC_VM_SCREEN_OPEN_BROWSER
+                          Open the browser viewer with xdg-open. Default: 1.
+  OLC_VM_SCREEN_PORT      Local browser viewer HTTP port. Default: automatic.
   OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED
                           SDL HiDPI mode for QEMU's own window. Default: 1.
   OLC_QEMU_GDK_SCALE
@@ -75,6 +79,51 @@ resolve_virtiofsd() {
   done
 }
 
+resolve_novnc_dir() {
+  local out_path candidate
+
+  if [[ -n "${OLC_NOVNC_DIR:-}" ]]; then
+    printf '%s\n' "$OLC_NOVNC_DIR"
+    return
+  fi
+
+  out_path="$(nix build .#novnc --print-out-paths --no-link)"
+  for candidate in \
+    "$out_path/share/webapps/novnc" \
+    "$out_path/share/webapps/noVNC" \
+    "$out_path/share/novnc" \
+    "$out_path/share/noVNC" \
+    "$out_path"; do
+    if [[ -f "$candidate/core/rfb.js" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  fail "unable to locate noVNC core/rfb.js in nix build output: $out_path"
+}
+
+port_is_open() {
+  local port="$1"
+
+  timeout 0.2 bash -c "</dev/tcp/127.0.0.1/${port}" >/dev/null 2>&1
+}
+
+find_browser_display() {
+  local display vnc_port websocket_port
+
+  for display in $(seq 20 99); do
+    vnc_port=$((5900 + display))
+    websocket_port=$((5700 + display))
+    if ! port_is_open "$vnc_port" && ! port_is_open "$websocket_port"; then
+      printf '%s\n' "$display"
+      return
+    fi
+  done
+
+  fail "unable to find free local VNC and websocket ports"
+}
+
 require_value() {
   local option="$1"
   local value="${2:-}"
@@ -86,19 +135,23 @@ require_value() {
 
 CPUS=2
 MEMORY_MB=4096
-QEMU_FRONTEND="${OLC_QEMU_FRONTEND:-spice}"
+QEMU_FRONTEND="${OLC_QEMU_FRONTEND:-browser}"
 QEMU_DISPLAY="${OLC_QEMU_DISPLAY:-}"
 QEMU_SDL_VIDEO_HIGHDPI_DISABLED="${OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED:-1}"
 QEMU_GDK_SCALE="${OLC_QEMU_GDK_SCALE:-1}"
 QEMU_GDK_DPI_SCALE="${OLC_QEMU_GDK_DPI_SCALE:-1}"
+VM_SCREEN_OPEN_BROWSER="${OLC_VM_SCREEN_OPEN_BROWSER:-1}"
+VM_SCREEN_PORT="${OLC_VM_SCREEN_PORT:-0}"
 SOURCE_DIR="${OLC_SOURCE_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
 VIRTIOFSD_SANDBOX="${OLC_VIRTIOFSD_SANDBOX:-none}"
 KVM_DEVICE="${OLC_KVM_DEVICE:-/dev/kvm}"
 SPICE_SOCKET_DIR=""
 VIRTIOFS_SOCKET_DIR=""
+VM_SCREEN_LOG=""
 VIRTIOFSD_PID=""
 QEMU_PID=""
 VIEWER_PID=""
+VM_SCREEN_PID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -128,7 +181,7 @@ VIRTIOFSD="${OLC_VIRTIOFSD:-$(resolve_virtiofsd)}"
 [[ -d "$SOURCE_DIR" ]] || fail "source directory not found: $SOURCE_DIR"
 
 case "$QEMU_FRONTEND" in
-  spice|sdl|gtk)
+  browser|spice|sdl|gtk)
     ;;
   *)
     fail "unsupported QEMU frontend: $QEMU_FRONTEND"
@@ -145,6 +198,10 @@ fi
 
 if [[ "$QEMU_FRONTEND" == "spice" ]]; then
   require_command remote-viewer
+elif [[ "$QEMU_FRONTEND" == "browser" ]]; then
+  require_command node
+  NOVNC_DIR="$(resolve_novnc_dir)"
+  [[ -f "$NOVNC_DIR/core/rfb.js" ]] || fail "noVNC asset directory does not contain core/rfb.js: $NOVNC_DIR"
 fi
 
 if [[ ! -e "$KVM_DEVICE" && "${OLC_SKIP_KVM_CHECK:-0}" != "1" ]]; then
@@ -161,6 +218,10 @@ echo "serial output: terminal"
 echo "qemu frontend: $QEMU_FRONTEND"
 echo "source mount: $SOURCE_DIR -> /source"
 echo "virtiofsd sandbox: $VIRTIOFSD_SANDBOX"
+if [[ "$QEMU_FRONTEND" == "browser" ]]; then
+  echo "viewer: browser tab"
+  echo "novnc assets: $NOVNC_DIR"
+fi
 if [[ -n "$QEMU_DISPLAY" ]]; then
   echo "display backend: $QEMU_DISPLAY"
 fi
@@ -186,6 +247,15 @@ cleanup() {
 
   if [[ -n "$SPICE_SOCKET_DIR" ]]; then
     rm -rf "$SPICE_SOCKET_DIR"
+  fi
+
+  if [[ -n "$VM_SCREEN_PID" ]] && kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
+    kill "$VM_SCREEN_PID" >/dev/null 2>&1 || true
+    wait "$VM_SCREEN_PID" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -n "$VM_SCREEN_LOG" ]]; then
+    rm -f "$VM_SCREEN_LOG"
   fi
 
   if [[ -n "$VIRTIOFSD_PID" ]] && kill -0 "$VIRTIOFSD_PID" >/dev/null 2>&1; then
@@ -249,6 +319,87 @@ qemu_base_args=(
 )
 
 if [[ "$QEMU_FRONTEND" != "spice" ]]; then
+  if [[ "$QEMU_FRONTEND" == "browser" ]]; then
+    VNC_DISPLAY="$(find_browser_display)"
+    VNC_WEBSOCKET_PORT=$((5700 + VNC_DISPLAY))
+    VM_SCREEN_LOG="$(mktemp "${TMPDIR:-/tmp}/ol-c-vm-screen.XXXXXX.log")"
+
+    echo "vnc display: 127.0.0.1:${VNC_DISPLAY}"
+    echo "vnc websocket: 127.0.0.1:${VNC_WEBSOCKET_PORT}"
+
+    qemu-system-x86_64 \
+      "${qemu_base_args[@]}" \
+      -display none \
+      -vnc "127.0.0.1:${VNC_DISPLAY},websocket=127.0.0.1:${VNC_WEBSOCKET_PORT}" &
+    QEMU_PID="$!"
+
+    OLC_NOVNC_DIR="$NOVNC_DIR" \
+    OLC_VM_SCREEN_HOST="127.0.0.1" \
+    OLC_VM_SCREEN_PORT="$VM_SCREEN_PORT" \
+    OLC_VM_SCREEN_VNC_HOST="127.0.0.1" \
+    OLC_VM_SCREEN_VNC_WS_PORT="$VNC_WEBSOCKET_PORT" \
+      node "$(dirname -- "$0")/vm-screen/server.mjs" >"$VM_SCREEN_LOG" 2>&1 &
+    VM_SCREEN_PID="$!"
+
+    for _ in $(seq 1 100); do
+      if grep -q '^OLC_VM_SCREEN_URL ' "$VM_SCREEN_LOG"; then
+        break
+      fi
+
+      if ! kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
+        cat "$VM_SCREEN_LOG" >&2 || true
+        wait "$VM_SCREEN_PID" || true
+        fail "VM screen server exited before reporting its URL"
+      fi
+
+      sleep 0.1
+    done
+
+    if ! grep -q '^OLC_VM_SCREEN_URL ' "$VM_SCREEN_LOG"; then
+      cat "$VM_SCREEN_LOG" >&2 || true
+      fail "timed out waiting for VM screen server URL"
+    fi
+
+    VM_SCREEN_URL="$(sed -n 's/^OLC_VM_SCREEN_URL //p' "$VM_SCREEN_LOG" | sed -n '1p')"
+    VM_SCREEN_RECONNECT_URL="${VM_SCREEN_URL/127.0.0.1/localhost}"
+    echo "browser url: $VM_SCREEN_URL"
+    echo "reconnect url: $VM_SCREEN_RECONNECT_URL"
+
+    if [[ "$VM_SCREEN_OPEN_BROWSER" == "1" ]] && command -v xdg-open >/dev/null 2>&1; then
+      xdg-open "$VM_SCREEN_URL" >/dev/null 2>&1 || true
+    fi
+
+    while true; do
+      EXITED_PID=""
+      set +e
+      wait -n -p EXITED_PID "$QEMU_PID" "$VM_SCREEN_PID"
+      EXITED_STATUS="$?"
+      set -e
+
+      if [[ "$EXITED_PID" == "$QEMU_PID" ]]; then
+        QEMU_PID=""
+        if kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
+          kill "$VM_SCREEN_PID" >/dev/null 2>&1 || true
+          wait "$VM_SCREEN_PID" >/dev/null 2>&1 || true
+          VM_SCREEN_PID=""
+        fi
+        exit "$EXITED_STATUS"
+      fi
+
+      if [[ "$EXITED_PID" == "$VM_SCREEN_PID" ]]; then
+        VM_SCREEN_PID=""
+        if kill -0 "$QEMU_PID" >/dev/null 2>&1; then
+          kill "$QEMU_PID" >/dev/null 2>&1 || true
+          wait "$QEMU_PID" >/dev/null 2>&1 || true
+          QEMU_PID=""
+        fi
+        exit "$EXITED_STATUS"
+      fi
+
+      exit "$EXITED_STATUS"
+    done
+  fi
+
   qemu-system-x86_64 \
     "${qemu_base_args[@]}" \
     -display "$QEMU_DISPLAY" &

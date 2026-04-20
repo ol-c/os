@@ -24,8 +24,9 @@ setup_case() {
   cleanup_case
   mkdir -p "$TEST_TMP_ROOT"
   CASE_TMP="$(mktemp -d "${TEST_TMP_ROOT}/launch.XXXXXX")"
-  mkdir -p "${CASE_TMP}/fakebin" "${CASE_TMP}/artifacts"
+  mkdir -p "${CASE_TMP}/fakebin" "${CASE_TMP}/artifacts" "${CASE_TMP}/novnc/core"
   : > "${CASE_TMP}/artifacts/guest.qcow2"
+  : > "${CASE_TMP}/novnc/core/rfb.js"
 
   cat >"${CASE_TMP}/fakebin/qemu-system-x86_64" <<EOF
 #!${TEST_FAKE_BASH}
@@ -34,17 +35,31 @@ printf '%s\n' "\${SDL_VIDEO_HIGHDPI_DISABLED:-}" > "${CASE_TMP}/qemu.sdl-hidpi-d
 printf '%s\n' "\${GDK_SCALE:-}" > "${CASE_TMP}/qemu.gdk-scale"
 printf '%s\n' "\${GDK_DPI_SCALE:-}" > "${CASE_TMP}/qemu.gdk-dpi-scale"
 spice_socket=""
+vnc_enabled=0
 for arg in "\$@"; do
   case "\$arg" in
     unix=on,addr=*)
       spice_socket="\${arg#*addr=}"
       spice_socket="\${spice_socket%%,*}"
       ;;
+    127.0.0.1:*,websocket=127.0.0.1:*)
+      vnc_enabled=1
+      ;;
   esac
 done
 if [[ -n "\$spice_socket" ]]; then
   mkdir -p "\$(dirname "\$spice_socket")"
   : > "\$spice_socket"
+  if [[ "\${OLC_FAKE_QEMU_EXIT_EARLY:-0}" = "1" ]]; then
+    sleep 0.2
+    exit 0
+  fi
+  trap 'printf "%s\n" terminated > "${CASE_TMP}/qemu.terminated"; exit 0' TERM INT
+  while true; do
+    sleep 1
+  done
+fi
+if [[ "\$vnc_enabled" = "1" ]]; then
   if [[ "\${OLC_FAKE_QEMU_EXIT_EARLY:-0}" = "1" ]]; then
     sleep 0.2
     exit 0
@@ -96,13 +111,28 @@ fi
 exit 0
 EOF
 
+  cat >"${CASE_TMP}/fakebin/node" <<EOF
+#!${TEST_FAKE_BASH}
+printf '%s\n' "\$*" > "${CASE_TMP}/node.args"
+printf '%s\n' "\${OLC_NOVNC_DIR:-}" > "${CASE_TMP}/node.novnc-dir"
+printf '%s\n' "\${OLC_VM_SCREEN_VNC_WS_PORT:-}" > "${CASE_TMP}/node.vnc-ws-port"
+printf '%s\n' 'OLC_VM_SCREEN_URL http://127.0.0.1:6080/'
+if [[ "\${OLC_FAKE_VM_SCREEN_WAIT:-0}" != "1" ]]; then
+  exit 0
+fi
+trap 'printf "%s\n" terminated > "${CASE_TMP}/node.terminated"; exit 0' TERM INT
+while true; do
+  sleep 1
+done
+EOF
+
   cat >"${CASE_TMP}/fakebin/build-vm" <<EOF
 #!${TEST_FAKE_BASH}
 printf '%s\n' "\$*" > "${CASE_TMP}/build-vm.args"
 printf '%s\n' "${CASE_TMP}/artifacts/guest.qcow2"
 EOF
 
-  chmod +x "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/fakebin/virtiofsd" "${CASE_TMP}/fakebin/remote-viewer" "${CASE_TMP}/fakebin/build-vm"
+  chmod +x "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/fakebin/virtiofsd" "${CASE_TMP}/fakebin/remote-viewer" "${CASE_TMP}/fakebin/node" "${CASE_TMP}/fakebin/build-vm"
 }
 
 assert_contains() {
@@ -143,6 +173,7 @@ test_requires_remote_viewer_for_spice() {
   output="$(
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_QEMU_FRONTEND=spice \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       2>&1
@@ -154,6 +185,7 @@ test_requires_remote_viewer_for_spice() {
   assert_contains "$output" "required command not found: remote-viewer"
   cleanup_case
 }
+
 
 test_requires_virtiofsd() {
   local output status
@@ -186,6 +218,7 @@ test_requires_kvm_by_default() {
   output="$(
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
       OLC_KVM_DEVICE="${CASE_TMP}/missing-kvm" \
       "${LAUNCH_VM}" \
       2>&1
@@ -198,13 +231,15 @@ test_requires_kvm_by_default() {
   cleanup_case
 }
 
-test_invokes_qemu_with_expected_spice_args() {
-  local output qemu_args viewer_args build_args virtiofsd_args virtiofsd_shared_dir sdl_hidpi_disabled gdk_scale gdk_dpi_scale spice_socket virtiofs_socket
+test_invokes_qemu_with_expected_browser_args_by_default() {
+  local output qemu_args build_args virtiofsd_args virtiofsd_shared_dir sdl_hidpi_disabled gdk_scale gdk_dpi_scale virtiofs_socket node_args node_novnc_dir node_vnc_ws_port
   setup_case
 
   output="$(
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_VM_SCREEN_OPEN_BROWSER=0 \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       --cpus 3 \
@@ -212,20 +247,26 @@ test_invokes_qemu_with_expected_spice_args() {
   )"
 
   qemu_args="$(cat "${CASE_TMP}/qemu.args")"
-  viewer_args="$(cat "${CASE_TMP}/remote-viewer.args")"
   build_args="$(cat "${CASE_TMP}/build-vm.args")"
   virtiofsd_args="$(cat "${CASE_TMP}/virtiofsd.args")"
   virtiofsd_shared_dir="$(cat "${CASE_TMP}/virtiofsd.shared-dir")"
   sdl_hidpi_disabled="$(cat "${CASE_TMP}/qemu.sdl-hidpi-disabled")"
   gdk_scale="$(cat "${CASE_TMP}/qemu.gdk-scale")"
   gdk_dpi_scale="$(cat "${CASE_TMP}/qemu.gdk-dpi-scale")"
+  node_args="$(cat "${CASE_TMP}/node.args")"
+  node_novnc_dir="$(cat "${CASE_TMP}/node.novnc-dir")"
+  node_vnc_ws_port="$(cat "${CASE_TMP}/node.vnc-ws-port")"
   assert_contains "$output" "graphical proof: Firefox launches as the in-guest UI shell"
   assert_contains "$output" "serial output: terminal"
-  assert_contains "$output" "qemu frontend: spice"
+  assert_contains "$output" "qemu frontend: browser"
   assert_contains "$output" "source mount: ${ROOT_DIR} -> /source"
   assert_contains "$output" "virtiofsd sandbox: none"
-  assert_contains "$output" "spice socket:"
-  assert_contains "$output" "viewer: remote-viewer spice+unix://"
+  assert_contains "$output" "viewer: browser tab"
+  assert_contains "$output" "novnc assets: ${CASE_TMP}/novnc"
+  assert_contains "$output" "vnc display: 127.0.0.1:"
+  assert_contains "$output" "vnc websocket: 127.0.0.1:"
+  assert_contains "$output" "browser url: http://127.0.0.1:6080/"
+  assert_contains "$output" "reconnect url: http://localhost:6080/"
   assert_contains "$output" "sdl hidpi disabled: SDL_VIDEO_HIGHDPI_DISABLED=1"
   assert_contains "$output" "gtk scale: GDK_SCALE=1 GDK_DPI_SCALE=1"
   assert_contains "$qemu_args" "-enable-kvm"
@@ -246,12 +287,10 @@ test_invokes_qemu_with_expected_spice_args() {
   assert_contains "$qemu_args" "-device intel-hda"
   assert_contains "$qemu_args" "-device hda-duplex,audiodev=olc-audio"
   assert_contains "$qemu_args" "-display none"
-  assert_contains "$qemu_args" "unix=on,addr="
-  assert_contains "$qemu_args" "disable-ticketing=on"
-  assert_contains "$qemu_args" "agent-mouse=on"
-  assert_contains "$qemu_args" "-device virtio-serial-pci"
-  assert_contains "$qemu_args" "-chardev spicevmc,id=ol-c-vdagent,name=vdagent"
-  assert_contains "$qemu_args" "-device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0"
+  assert_contains "$qemu_args" "-vnc 127.0.0.1:"
+  assert_contains "$qemu_args" "websocket=127.0.0.1:"
+  [[ "$qemu_args" != *"-spice"* ]] || fail "browser frontend should not launch a SPICE server"
+  [[ "$qemu_args" != *"spicevmc"* ]] || fail "browser frontend should not add the SPICE guest channel"
   assert_contains "$qemu_args" "-serial mon:stdio"
   assert_contains "$virtiofsd_args" "--socket-path="
   assert_contains "$virtiofsd_args" "--shared-dir=${ROOT_DIR}"
@@ -259,17 +298,48 @@ test_invokes_qemu_with_expected_spice_args() {
   assert_contains "$virtiofsd_args" "--cache=auto"
   [[ "$virtiofsd_shared_dir" == "$ROOT_DIR" ]] || fail "expected virtiofsd to share repo root, got [$virtiofsd_shared_dir]"
   [[ "$qemu_args" != *"-nographic"* ]] || fail "milestone2 should use a graphical display"
-  assert_contains "$viewer_args" "spice+unix://"
   [[ -z "$build_args" ]] || fail "expected launch-vm to call build-vm without arguments, got [$build_args]"
   [[ "$sdl_hidpi_disabled" == "1" ]] || fail "expected QEMU SDL HiDPI mode to default to disabled, got [$sdl_hidpi_disabled]"
   [[ "$gdk_scale" == "1" ]] || fail "expected QEMU GTK scale to default to 1, got [$gdk_scale]"
   [[ "$gdk_dpi_scale" == "1" ]] || fail "expected QEMU GTK DPI scale to default to 1, got [$gdk_dpi_scale]"
-  [[ -f "${CASE_TMP}/qemu.terminated" ]] || fail "expected viewer exit to terminate QEMU"
+  assert_contains "$node_args" "vm-screen/server.mjs"
+  [[ "$node_novnc_dir" == "${CASE_TMP}/novnc" ]] || fail "expected screen server to use fake noVNC assets, got [$node_novnc_dir]"
+  [[ "$node_vnc_ws_port" =~ ^[0-9]+$ ]] || fail "expected screen server to receive a websocket port, got [$node_vnc_ws_port]"
+  [[ -f "${CASE_TMP}/qemu.terminated" ]] || fail "expected screen server exit to terminate QEMU"
   [[ -f "${CASE_TMP}/virtiofsd.terminated" ]] || fail "expected launcher cleanup to terminate virtiofsd"
-  spice_socket="${viewer_args#spice+unix://}"
-  [[ ! -e "$(dirname "$spice_socket")" ]] || fail "expected SPICE temp directory to be removed"
+  [[ ! -f "${CASE_TMP}/remote-viewer.args" ]] || fail "browser frontend should not launch remote-viewer"
   virtiofs_socket="$(cat "${CASE_TMP}/virtiofsd.socket-path")"
   [[ ! -e "$(dirname "$virtiofs_socket")" ]] || fail "expected virtiofs temp directory to be removed"
+  cleanup_case
+}
+
+test_resolves_nixpkgs_novnc_webapp_layout() {
+  local output qemu_args node_novnc_dir
+  setup_case
+  rm -rf "${CASE_TMP}/novnc"
+  mkdir -p "${CASE_TMP}/novnc-store/share/webapps/novnc/core"
+  : > "${CASE_TMP}/novnc-store/share/webapps/novnc/core/rfb.js"
+
+  cat >"${CASE_TMP}/fakebin/nix" <<EOF
+#!${TEST_FAKE_BASH}
+printf '%s\n' "\$*" > "${CASE_TMP}/nix.args"
+printf '%s\n' "${CASE_TMP}/novnc-store"
+EOF
+  chmod +x "${CASE_TMP}/fakebin/nix"
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}"
+  )"
+
+  qemu_args="$(cat "${CASE_TMP}/qemu.args")"
+  node_novnc_dir="$(cat "${CASE_TMP}/node.novnc-dir")"
+  assert_contains "$output" "novnc assets: ${CASE_TMP}/novnc-store/share/webapps/novnc"
+  assert_contains "$qemu_args" "-vnc 127.0.0.1:"
+  [[ "$node_novnc_dir" == "${CASE_TMP}/novnc-store/share/webapps/novnc" ]] || fail "expected nixpkgs noVNC webapp layout, got [$node_novnc_dir]"
   cleanup_case
 }
 
@@ -280,6 +350,7 @@ test_exits_when_qemu_exits_first() {
   output="$(
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_QEMU_FRONTEND=spice \
       OLC_SKIP_KVM_CHECK=1 \
       OLC_FAKE_QEMU_EXIT_EARLY=1 \
       OLC_FAKE_VIEWER_WAIT=1 \
@@ -403,6 +474,7 @@ EOF
   output="$(
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       2>&1
@@ -419,7 +491,8 @@ test_requires_qemu
 test_requires_remote_viewer_for_spice
 test_requires_virtiofsd
 test_requires_kvm_by_default
-test_invokes_qemu_with_expected_spice_args
+test_invokes_qemu_with_expected_browser_args_by_default
+test_resolves_nixpkgs_novnc_webapp_layout
 test_exits_when_qemu_exits_first
 test_allows_direct_display_backend_override
 test_allows_sdl_frontend_override

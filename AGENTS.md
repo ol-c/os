@@ -172,6 +172,7 @@ Success criteria:
 - The in-VM Firefox source loop records the exact Firefox and nixpkgs identity being tested.
 - A developer can validate Firefox source-tree behavior in the guest before refreshing `patches/firefox/0001-close-last-tab-to-localhost.patch`.
 - The final packaged build path remains the gate for what the distro will ship.
+- The normal host launch path should use a browser tab as the VM display by default, using local-only QEMU VNC WebSocket plus pinned noVNC assets, while keeping SPICE/SDL/GTK as explicit development fallbacks.
 
 Examples of things that may belong here:
 - Build orchestration
@@ -319,6 +320,7 @@ Implementation status:
 - [x] Document the validate-inside-VM, then package-with-Nix workflow for browser-surface changes.
 - [x] Prove synced in-VM development against the host OL-C repo mounted at `/source`.
 - [ ] Move the repo from unsupported `nixos-24.11` to a currently supported NixOS branch and verify the VM still builds and boots.
+- [x] Make the normal host VM launch use a browser tab as the default screen while keeping SPICE, SDL, and GTK available as explicit fallbacks.
 - [ ] Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
 
 Known bugs to track:
