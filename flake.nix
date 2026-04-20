@@ -3,13 +3,9 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    nixos-generators = {
-      url = "github:nix-community/nixos-generators";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = inputs@{ self, nixpkgs, nixos-generators, ... }:
+  outputs = { self, nixpkgs, ... }:
     let
       system = "x86_64-linux";
       firefoxLocalhostPatch = ./patches/firefox/0001-close-last-tab-to-localhost.patch;
@@ -40,20 +36,13 @@
 
       nixosConfigurations."ol-c" = nixpkgs.lib.nixosSystem {
         inherit system;
-        specialArgs = { inherit inputs; };
         modules = [ overlayModule olcModule ];
       };
 
       packages.${system} = {
         firefox-localhost = firefoxPkgs.firefox;
         firefox-localhost-source = firefoxSourcePkgs.firefox;
-
-        "ol-c-image" = nixos-generators.nixosGenerate {
-          inherit system;
-          format = "qcow";
-          pkgs = firefoxPkgs;
-          modules = [ olcModule ];
-        };
+        "ol-c-image" = self.nixosConfigurations."ol-c".config.system.build.images.qemu;
       };
     };
 }
