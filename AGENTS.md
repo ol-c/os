@@ -324,7 +324,7 @@ Implementation status:
 - [x] Prove synced in-VM development against the host OL-C repo mounted at `/source`.
 - [ ] Move the repo from unsupported `nixos-24.11` to a currently supported NixOS branch and verify the VM still builds and boots.
 - [x] Make the normal host VM launch use a browser tab as the default screen while keeping SPICE, SDL, and GTK available as explicit fallbacks.
-- [ ] Prove the first nested in-VM development launch: OL-C can run a child VM from the in-browser terminal using nested KVM, `/vm-images`, and the browser-tab screen flow.
+- [x] Prove the first nested in-VM development launch: OL-C can run a child VM from the in-browser terminal using nested KVM, `/vm-images`, and the browser-tab screen flow.
 - [ ] Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
 
 Known bugs to track:
