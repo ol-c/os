@@ -15,11 +15,15 @@
     matchbox
     nodejs
     openssh
+    novnc
     pulseaudio
+    qemu_kvm
     ripgrep
     spice-vdagent
     ttyd
+    virtiofsd
     wireplumber
+    xdg-utils
     xorg.xinit
     xdotool
   ];

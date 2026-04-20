@@ -154,6 +154,9 @@ Goal:
 Milestone 6 decisions:
 - Keep the Firefox source-tree development loop aligned with the Firefox source selected by the repo's pinned nixpkgs input by default.
 - Define a fixed in-VM Firefox development checkout and build-cache location outside the tracked OL-C repo contents.
+- Use nested KVM on the Ubuntu host for the current in-OL-C VM development proof.
+- Expose the parent VM's boot image directory into the OL-C guest at `/vm-images` so child VM tests can reuse a prebuilt image.
+- Use `/var/lib/ol-c/vms` as the guest-side runtime workspace for child VM launch temp files and logs.
 - Keep the full Firefox source tree and reusable Firefox build artifacts out of this repo.
 - Namespace Firefox source checkouts, build outputs, and reusable cache state by Firefox identity, including version, source URL or source name, source hash, and nixpkgs revision.
 - Provide a mechanism to populate the in-VM Firefox checkout from the pinned nixpkgs Firefox source and to reuse or prebuild artifacts where practical.
@@ -321,6 +324,7 @@ Implementation status:
 - [x] Prove synced in-VM development against the host OL-C repo mounted at `/source`.
 - [ ] Move the repo from unsupported `nixos-24.11` to a currently supported NixOS branch and verify the VM still builds and boots.
 - [x] Make the normal host VM launch use a browser tab as the default screen while keeping SPICE, SDL, and GTK available as explicit fallbacks.
+- [ ] Prove the first nested in-VM development launch: OL-C can run a child VM from the in-browser terminal using nested KVM, `/vm-images`, and the browser-tab screen flow.
 - [ ] Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
 
 Known bugs to track:

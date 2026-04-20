@@ -23,11 +23,27 @@ let
       --dangerously-bypass-approvals-and-sandbox \
       "$@"
   '';
+  olcLaunchTestVm = pkgs.writeShellScriptBin "olc-launch-test-vm" ''
+    export OLC_DEFAULT_NOVNC_DIR="''${OLC_DEFAULT_NOVNC_DIR:-${pkgs.novnc}/share/webapps/novnc}"
+    exec ${pkgs.bash}/bin/bash ${../../olc-launch-test-vm} "$@"
+  '';
 in {
   environment.systemPackages = [
     codexCommand
+    olcLaunchTestVm
     pkgs.sudo
   ];
 
+  nix.settings = {
+    experimental-features = [ "nix-command" "flakes" ];
+    trusted-users = [ "root" "demo" ];
+  };
+
   security.sudo.wheelNeedsPassword = false;
+
+  systemd.tmpfiles.rules = [
+    "d /var/lib/ol-c 0755 root root -"
+    "d /var/lib/ol-c/vms 0775 demo users -"
+    "d /var/lib/ol-c/vms/tmp 0775 demo users -"
+  ];
 }

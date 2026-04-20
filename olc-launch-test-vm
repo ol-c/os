@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+repo_is_olc_virtiofs_mount() {
+  local path="$1"
+
+  if ! command -v findmnt >/dev/null 2>&1; then
+    return 1
+  fi
+
+  while read -r source fs_type; do
+    if [[ "$source" == "ol-c-source" && "$fs_type" == "virtiofs" ]]; then
+      return 0
+    fi
+  done < <(findmnt -T "$path" -n -o SOURCE,FSTYPE 2>/dev/null || true)
+
+  return 1
+}
+
+resolve_source_dir() {
+  if [[ -n "${OLC_SOURCE_DIR:-}" ]]; then
+    printf '%s\n' "$OLC_SOURCE_DIR"
+    return
+  fi
+
+  if [[ -d /source ]] && repo_is_olc_virtiofs_mount /source; then
+    printf '%s\n' /source
+    return
+  fi
+
+  pwd
+}
+
+resolve_image_path() {
+  local image candidate
+
+  if [[ -n "${OLC_VM_IMAGE:-}" ]]; then
+    [[ -f "$OLC_VM_IMAGE" ]] || fail "OLC_VM_IMAGE does not point to a file: $OLC_VM_IMAGE"
+    printf '%s\n' "$OLC_VM_IMAGE"
+    return
+  fi
+
+  if [[ -d "$VM_IMAGES_DIR" ]]; then
+    candidate="$(
+      find "$VM_IMAGES_DIR" -maxdepth 1 -type f \
+        \( -name '*.qcow2' -o -name '*.qcow' -o -name '*.img' -o -name '*.raw' \) \
+        | LC_ALL=C sort \
+        | sed -n '1p'
+    )"
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  fi
+
+  fail "no VM image found. Set OLC_VM_IMAGE=/path/to/image.qcow2 or expose one in ${VM_IMAGES_DIR}."
+}
+
+KVM_DEVICE="${OLC_KVM_DEVICE:-/dev/kvm}"
+VM_IMAGES_DIR="${OLC_VM_IMAGES_DIR:-/vm-images}"
+VM_WORKSPACE="${OLC_VM_WORKSPACE:-/var/lib/ol-c/vms}"
+SOURCE_DIR="$(resolve_source_dir)"
+IMAGE_PATH="$(resolve_image_path)"
+
+[[ -d "$SOURCE_DIR" ]] || fail "source directory not found: $SOURCE_DIR"
+[[ -x "$SOURCE_DIR/launch-vm" ]] || fail "launch-vm not found or not executable in source directory: $SOURCE_DIR"
+
+if [[ ! -e "$KVM_DEVICE" ]]; then
+  fail "${KVM_DEVICE} is required for nested VM development. Enable nested KVM on the Ubuntu host and relaunch OL-C."
+fi
+
+if [[ ! -r "$KVM_DEVICE" || ! -w "$KVM_DEVICE" ]]; then
+  fail "${KVM_DEVICE} is present but not accessible. Ensure the demo user is in the kvm group and relaunch the session."
+fi
+
+mkdir -p "$VM_WORKSPACE/tmp"
+
+export OLC_SOURCE_DIR="$SOURCE_DIR"
+export OLC_VM_IMAGE="$IMAGE_PATH"
+export OLC_QEMU_FRONTEND="${OLC_QEMU_FRONTEND:-browser}"
+export OLC_VM_SCREEN_OPEN_BROWSER="${OLC_VM_SCREEN_OPEN_BROWSER:-1}"
+export TMPDIR="${TMPDIR:-${VM_WORKSPACE}/tmp}"
+
+if [[ -z "${OLC_NOVNC_DIR:-}" && -n "${OLC_DEFAULT_NOVNC_DIR:-}" ]]; then
+  export OLC_NOVNC_DIR="$OLC_DEFAULT_NOVNC_DIR"
+fi
+
+echo "source: $OLC_SOURCE_DIR"
+echo "image: $OLC_VM_IMAGE"
+echo "workspace: $VM_WORKSPACE"
+echo "screen: browser tab"
+
+cd "$SOURCE_DIR"
+exec "$SOURCE_DIR/launch-vm" "$@"

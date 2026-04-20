@@ -11,6 +11,9 @@ Options:
   --help            Show this help text.
 
 Environment:
+  OLC_VM_IMAGE      Existing VM image to boot. Skips build-vm when set.
+  OLC_SHARE_VM_IMAGES
+                          Mount the boot image directory at /vm-images. Default: 1.
   OLC_QEMU_FRONTEND
                           Graphical frontend: browser, spice, sdl, or gtk. Default: browser.
   OLC_QEMU_DISPLAY  Direct QEMU display backend for debugging. Overrides frontend.
@@ -147,11 +150,14 @@ VIRTIOFSD_SANDBOX="${OLC_VIRTIOFSD_SANDBOX:-none}"
 KVM_DEVICE="${OLC_KVM_DEVICE:-/dev/kvm}"
 SPICE_SOCKET_DIR=""
 VIRTIOFS_SOCKET_DIR=""
+VM_IMAGES_SOCKET_DIR=""
 VM_SCREEN_LOG=""
 VIRTIOFSD_PID=""
+VM_IMAGES_VIRTIOFSD_PID=""
 QEMU_PID=""
 VIEWER_PID=""
 VM_SCREEN_PID=""
+SHARE_VM_IMAGES="${OLC_SHARE_VM_IMAGES:-1}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -209,14 +215,25 @@ if [[ ! -e "$KVM_DEVICE" && "${OLC_SKIP_KVM_CHECK:-0}" != "1" ]]; then
 fi
 
 BUILD_VM_BIN="${BUILD_VM_BIN:-./build-vm}"
-IMAGE_PATH="$("$BUILD_VM_BIN")"
-[[ -f "$IMAGE_PATH" ]] || fail "built image not found: $IMAGE_PATH"
+if [[ -n "${OLC_VM_IMAGE:-}" ]]; then
+  IMAGE_PATH="$OLC_VM_IMAGE"
+  [[ -f "$IMAGE_PATH" ]] || fail "OLC_VM_IMAGE does not point to a file: $IMAGE_PATH"
+else
+  IMAGE_PATH="$("$BUILD_VM_BIN")"
+  [[ -f "$IMAGE_PATH" ]] || fail "built image not found: $IMAGE_PATH"
+fi
+IMAGE_DIR="$(CDPATH= cd -- "$(dirname -- "$IMAGE_PATH")" && pwd)"
+IMAGE_BASENAME="$(basename -- "$IMAGE_PATH")"
 
 echo "booting image: $IMAGE_PATH"
 echo "graphical proof: Firefox launches as the in-guest UI shell"
 echo "serial output: terminal"
 echo "qemu frontend: $QEMU_FRONTEND"
 echo "source mount: $SOURCE_DIR -> /source"
+if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
+  echo "image mount: $IMAGE_DIR -> /vm-images"
+  echo "in-guest image: /vm-images/$IMAGE_BASENAME"
+fi
 echo "virtiofsd sandbox: $VIRTIOFSD_SANDBOX"
 if [[ "$QEMU_FRONTEND" == "browser" ]]; then
   echo "viewer: browser tab"
@@ -266,6 +283,15 @@ cleanup() {
   if [[ -n "$VIRTIOFS_SOCKET_DIR" ]]; then
     rm -rf "$VIRTIOFS_SOCKET_DIR"
   fi
+
+  if [[ -n "$VM_IMAGES_VIRTIOFSD_PID" ]] && kill -0 "$VM_IMAGES_VIRTIOFSD_PID" >/dev/null 2>&1; then
+    kill "$VM_IMAGES_VIRTIOFSD_PID" >/dev/null 2>&1 || true
+    wait "$VM_IMAGES_VIRTIOFSD_PID" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -n "$VM_IMAGES_SOCKET_DIR" ]]; then
+    rm -rf "$VM_IMAGES_SOCKET_DIR"
+  fi
 }
 
 trap cleanup EXIT INT TERM
@@ -295,6 +321,38 @@ done
 
 [[ -S "$VIRTIOFS_SOCKET" || -e "$VIRTIOFS_SOCKET" ]] || fail "timed out waiting for virtiofsd socket: $VIRTIOFS_SOCKET"
 
+vm_images_qemu_args=()
+if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
+  VM_IMAGES_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-vm-images.XXXXXX")"
+  VM_IMAGES_SOCKET="${VM_IMAGES_SOCKET_DIR}/vm-images.sock"
+
+  "$VIRTIOFSD" \
+    --socket-path="$VM_IMAGES_SOCKET" \
+    --shared-dir="$IMAGE_DIR" \
+    --sandbox="$VIRTIOFSD_SANDBOX" \
+    --cache=auto &
+  VM_IMAGES_VIRTIOFSD_PID="$!"
+
+  for _ in $(seq 1 100); do
+    if [[ -S "$VM_IMAGES_SOCKET" || -e "$VM_IMAGES_SOCKET" ]]; then
+      break
+    fi
+
+    if ! kill -0 "$VM_IMAGES_VIRTIOFSD_PID" >/dev/null 2>&1; then
+      wait "$VM_IMAGES_VIRTIOFSD_PID" || true
+      fail "virtiofsd exited before creating the VM images socket"
+    fi
+
+    sleep 0.1
+  done
+
+  [[ -S "$VM_IMAGES_SOCKET" || -e "$VM_IMAGES_SOCKET" ]] || fail "timed out waiting for VM images virtiofsd socket: $VM_IMAGES_SOCKET"
+  vm_images_qemu_args=(
+    -chardev "socket,id=ol-c-vm-images,path=${VM_IMAGES_SOCKET}"
+    -device "vhost-user-fs-pci,chardev=ol-c-vm-images,tag=ol-c-vm-images"
+  )
+fi
+
 qemu_base_args=(
   -enable-kvm
   -cpu host
@@ -308,6 +366,7 @@ qemu_base_args=(
   -device virtio-net-pci,netdev=olc-net
   -chardev "socket,id=ol-c-source,path=${VIRTIOFS_SOCKET}"
   -device "vhost-user-fs-pci,chardev=ol-c-source,tag=ol-c-source"
+  "${vm_images_qemu_args[@]}"
   -device virtio-rng-pci
   -device virtio-vga
   -device qemu-xhci,id=ol-c-usb

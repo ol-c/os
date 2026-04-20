@@ -76,9 +76,40 @@ codex
 
 The wrapper uses `npx` to run the pinned `@openai/codex` CLI, defaults to `CODEX_MODEL=gpt-5.4`, and passes `--dangerously-bypass-approvals-and-sandbox` so Codex can make full-system development changes inside this disposable VM. The `demo` user has passwordless `sudo` through the `wheel` group for the same reason. This is a development VM convenience, not the intended production OS security posture.
 
+## Nested In-VM VM Development
+
+With nested KVM enabled on the Ubuntu host, the OL-C guest can start a child OL-C VM from an OL-C terminal tab and view that child VM in another browser tab.
+
+The host launcher exposes the image it booted from to the parent guest at:
+
+```sh
+/vm-images
+```
+
+Inside `https://localhost/terminal`, run:
+
+```sh
+olc-launch-test-vm
+```
+
+The wrapper:
+- uses `/source` as the editable repo when it is the expected `ol-c-source` virtiofs mount
+- uses the first bootable image in `/vm-images` unless `OLC_VM_IMAGE=/path/to/image.qcow2` is set
+- uses `/var/lib/ol-c/vms` for child VM runtime temp files
+- starts the child VM through the same browser-tab display path as host `./launch-vm`
+- prints a reconnect URL for the child VM screen
+
+If you want to test a specific prebuilt image inside the parent guest:
+
+```sh
+OLC_VM_IMAGE=/vm-images/guest.qcow2 olc-launch-test-vm
+```
+
+This proof prefers image reuse over building a full image inside the parent VM. Local in-guest `./build-vm` remains guarded by the `/nix` free-space check.
+
 ## Nix Layout
 
-`vm-screen/server.mjs` is the host-side browser viewer used by the default launcher. It serves a local page and pinned noVNC assets; QEMU provides the VNC WebSocket endpoint directly, so this path does not require `remote-viewer` or `websockify`.
+`vm-screen/server.mjs` is the browser viewer used by the default launcher. It serves a local page and pinned noVNC assets; QEMU provides the VNC WebSocket endpoint directly, so this path does not require `remote-viewer` or `websockify`.
 
 `nix/ol-c.nix` is the current guest entry point. It imports focused modules from `nix/modules/`:
 - `base.nix` owns boot, qemu guest support, serial console, hostname, and NixOS state version
@@ -223,19 +254,52 @@ Ubuntu host prerequisites:
 
 ```sh
 sudo apt update
-sudo apt install -y qemu-system-x86 qemu-utils qemu-kvm virt-viewer virtiofsd
+sudo apt install -y qemu-system-x86 qemu-utils qemu-kvm virtiofsd
 ```
 
-`virt-viewer` provides the `remote-viewer` command used by `./launch-vm` to open the default SPICE VM display. `virtiofsd` provides the host daemon used to mount this repo at `/source` inside the guest. Without either command, the launcher will stop before booting the guest.
+`virtiofsd` provides the host daemon used to mount this repo at `/source` inside the guest and to expose the parent image directory at `/vm-images`. Without it, the launcher will stop before booting the guest.
+
+`virt-viewer` is optional now. Install it only if you want the SPICE fallback:
+
+```sh
+sudo apt install -y virt-viewer
+OLC_QEMU_FRONTEND=spice ./launch-vm
+```
 
 Install Nix using the standard installer for your environment, then confirm the required tools exist:
 
 ```sh
 command -v nix
 command -v qemu-system-x86_64
-command -v remote-viewer
 command -v virtiofsd
 test -e /dev/kvm && echo "/dev/kvm present"
 ```
 
 If `/dev/kvm` exists but is not accessible as your user, add your user to the `kvm` group and start a new shell session.
+
+For nested in-VM VM development, enable nested KVM on the Ubuntu host.
+
+Intel:
+
+```sh
+echo 'options kvm_intel nested=1' | sudo tee /etc/modprobe.d/kvm-intel-nested.conf
+sudo modprobe -r kvm_intel
+sudo modprobe kvm_intel
+cat /sys/module/kvm_intel/parameters/nested
+```
+
+AMD:
+
+```sh
+echo 'options kvm_amd nested=1' | sudo tee /etc/modprobe.d/kvm-amd-nested.conf
+sudo modprobe -r kvm_amd
+sudo modprobe kvm_amd
+cat /sys/module/kvm_amd/parameters/nested
+```
+
+Expected output is `Y` or `1`. After relaunching OL-C, confirm `/dev/kvm` exists inside the guest from `https://localhost/terminal`:
+
+```sh
+test -e /dev/kvm && echo "/dev/kvm present"
+olc-launch-test-vm
+```

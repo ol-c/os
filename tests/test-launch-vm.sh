@@ -74,7 +74,7 @@ EOF
 
   cat >"${CASE_TMP}/fakebin/virtiofsd" <<EOF
 #!${TEST_FAKE_BASH}
-printf '%s\n' "\$*" > "${CASE_TMP}/virtiofsd.args"
+printf '%s\n' "\$*" >> "${CASE_TMP}/virtiofsd.args.all"
 socket_path=""
 shared_dir=""
 for arg in "\$@"; do
@@ -87,13 +87,20 @@ for arg in "\$@"; do
       ;;
   esac
 done
-printf '%s\n' "\$socket_path" > "${CASE_TMP}/virtiofsd.socket-path"
-printf '%s\n' "\$shared_dir" > "${CASE_TMP}/virtiofsd.shared-dir"
+if [[ "\$shared_dir" == "${ROOT_DIR}" ]]; then
+  printf '%s\n' "\$*" > "${CASE_TMP}/virtiofsd.args"
+  printf '%s\n' "\$socket_path" > "${CASE_TMP}/virtiofsd.socket-path"
+  printf '%s\n' "\$shared_dir" > "${CASE_TMP}/virtiofsd.shared-dir"
+else
+  printf '%s\n' "\$*" > "${CASE_TMP}/vm-images-virtiofsd.args"
+  printf '%s\n' "\$socket_path" > "${CASE_TMP}/vm-images-virtiofsd.socket-path"
+  printf '%s\n' "\$shared_dir" > "${CASE_TMP}/vm-images-virtiofsd.shared-dir"
+fi
 if [[ -n "\$socket_path" ]]; then
   mkdir -p "\$(dirname "\$socket_path")"
   : > "\$socket_path"
 fi
-trap 'printf "%s\n" terminated > "${CASE_TMP}/virtiofsd.terminated"; exit 0' TERM INT
+trap 'printf "%s\n" terminated >> "${CASE_TMP}/virtiofsd.terminated"; exit 0' TERM INT
 while true; do
   sleep 1
 done
@@ -232,7 +239,7 @@ test_requires_kvm_by_default() {
 }
 
 test_invokes_qemu_with_expected_browser_args_by_default() {
-  local output qemu_args build_args virtiofsd_args virtiofsd_shared_dir sdl_hidpi_disabled gdk_scale gdk_dpi_scale virtiofs_socket node_args node_novnc_dir node_vnc_ws_port
+  local output qemu_args build_args virtiofsd_args virtiofsd_shared_dir vm_images_virtiofsd_args vm_images_shared_dir sdl_hidpi_disabled gdk_scale gdk_dpi_scale virtiofs_socket vm_images_socket node_args node_novnc_dir node_vnc_ws_port
   setup_case
 
   output="$(
@@ -250,6 +257,8 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   build_args="$(cat "${CASE_TMP}/build-vm.args")"
   virtiofsd_args="$(cat "${CASE_TMP}/virtiofsd.args")"
   virtiofsd_shared_dir="$(cat "${CASE_TMP}/virtiofsd.shared-dir")"
+  vm_images_virtiofsd_args="$(cat "${CASE_TMP}/vm-images-virtiofsd.args")"
+  vm_images_shared_dir="$(cat "${CASE_TMP}/vm-images-virtiofsd.shared-dir")"
   sdl_hidpi_disabled="$(cat "${CASE_TMP}/qemu.sdl-hidpi-disabled")"
   gdk_scale="$(cat "${CASE_TMP}/qemu.gdk-scale")"
   gdk_dpi_scale="$(cat "${CASE_TMP}/qemu.gdk-dpi-scale")"
@@ -260,6 +269,8 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$output" "serial output: terminal"
   assert_contains "$output" "qemu frontend: browser"
   assert_contains "$output" "source mount: ${ROOT_DIR} -> /source"
+  assert_contains "$output" "image mount: ${CASE_TMP}/artifacts -> /vm-images"
+  assert_contains "$output" "in-guest image: /vm-images/guest.qcow2"
   assert_contains "$output" "virtiofsd sandbox: none"
   assert_contains "$output" "viewer: browser tab"
   assert_contains "$output" "novnc assets: ${CASE_TMP}/novnc"
@@ -280,6 +291,8 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$qemu_args" "-device virtio-net-pci,netdev=olc-net"
   assert_contains "$qemu_args" "-chardev socket,id=ol-c-source,path="
   assert_contains "$qemu_args" "-device vhost-user-fs-pci,chardev=ol-c-source,tag=ol-c-source"
+  assert_contains "$qemu_args" "-chardev socket,id=ol-c-vm-images,path="
+  assert_contains "$qemu_args" "-device vhost-user-fs-pci,chardev=ol-c-vm-images,tag=ol-c-vm-images"
   assert_contains "$qemu_args" "-device virtio-vga"
   assert_contains "$qemu_args" "-device qemu-xhci,id=ol-c-usb"
   assert_contains "$qemu_args" "-device usb-tablet,bus=ol-c-usb.0"
@@ -296,7 +309,11 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$virtiofsd_args" "--shared-dir=${ROOT_DIR}"
   assert_contains "$virtiofsd_args" "--sandbox=none"
   assert_contains "$virtiofsd_args" "--cache=auto"
+  assert_contains "$vm_images_virtiofsd_args" "--shared-dir=${CASE_TMP}/artifacts"
+  assert_contains "$vm_images_virtiofsd_args" "--sandbox=none"
+  assert_contains "$vm_images_virtiofsd_args" "--cache=auto"
   [[ "$virtiofsd_shared_dir" == "$ROOT_DIR" ]] || fail "expected virtiofsd to share repo root, got [$virtiofsd_shared_dir]"
+  [[ "$vm_images_shared_dir" == "${CASE_TMP}/artifacts" ]] || fail "expected VM image virtiofsd to share image directory, got [$vm_images_shared_dir]"
   [[ "$qemu_args" != *"-nographic"* ]] || fail "milestone2 should use a graphical display"
   [[ -z "$build_args" ]] || fail "expected launch-vm to call build-vm without arguments, got [$build_args]"
   [[ "$sdl_hidpi_disabled" == "1" ]] || fail "expected QEMU SDL HiDPI mode to default to disabled, got [$sdl_hidpi_disabled]"
@@ -309,7 +326,9 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   [[ -f "${CASE_TMP}/virtiofsd.terminated" ]] || fail "expected launcher cleanup to terminate virtiofsd"
   [[ ! -f "${CASE_TMP}/remote-viewer.args" ]] || fail "browser frontend should not launch remote-viewer"
   virtiofs_socket="$(cat "${CASE_TMP}/virtiofsd.socket-path")"
+  vm_images_socket="$(cat "${CASE_TMP}/vm-images-virtiofsd.socket-path")"
   [[ ! -e "$(dirname "$virtiofs_socket")" ]] || fail "expected virtiofs temp directory to be removed"
+  [[ ! -e "$(dirname "$vm_images_socket")" ]] || fail "expected VM images virtiofs temp directory to be removed"
   cleanup_case
 }
 
@@ -340,6 +359,56 @@ EOF
   assert_contains "$output" "novnc assets: ${CASE_TMP}/novnc-store/share/webapps/novnc"
   assert_contains "$qemu_args" "-vnc 127.0.0.1:"
   [[ "$node_novnc_dir" == "${CASE_TMP}/novnc-store/share/webapps/novnc" ]] || fail "expected nixpkgs noVNC webapp layout, got [$node_novnc_dir]"
+  cleanup_case
+}
+
+test_explicit_vm_image_skips_build() {
+  local output qemu_args vm_images_shared_dir
+  setup_case
+  mkdir -p "${CASE_TMP}/explicit"
+  : > "${CASE_TMP}/explicit/reused.qcow2"
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/does-not-exist" \
+      OLC_VM_IMAGE="${CASE_TMP}/explicit/reused.qcow2" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}"
+  )"
+
+  qemu_args="$(cat "${CASE_TMP}/qemu.args")"
+  vm_images_shared_dir="$(cat "${CASE_TMP}/vm-images-virtiofsd.shared-dir")"
+  assert_contains "$output" "booting image: ${CASE_TMP}/explicit/reused.qcow2"
+  assert_contains "$output" "image mount: ${CASE_TMP}/explicit -> /vm-images"
+  assert_contains "$output" "in-guest image: /vm-images/reused.qcow2"
+  assert_contains "$qemu_args" "if=virtio,format=qcow2,file=${CASE_TMP}/explicit/reused.qcow2"
+  [[ ! -f "${CASE_TMP}/build-vm.args" ]] || fail "expected explicit OLC_VM_IMAGE to skip build-vm"
+  [[ "$vm_images_shared_dir" == "${CASE_TMP}/explicit" ]] || fail "expected explicit image directory to be shared, got [$vm_images_shared_dir]"
+  cleanup_case
+}
+
+test_missing_explicit_vm_image_fails() {
+  local output status
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_VM_IMAGE="${CASE_TMP}/missing.qcow2" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}" \
+      2>&1
+  )"
+  status=$?
+  set -e
+
+  [[ $status -ne 0 ]] || fail "expected missing OLC_VM_IMAGE to fail"
+  assert_contains "$output" "OLC_VM_IMAGE does not point to a file: ${CASE_TMP}/missing.qcow2"
+  [[ ! -f "${CASE_TMP}/build-vm.args" ]] || fail "expected missing OLC_VM_IMAGE to fail before build-vm"
   cleanup_case
 }
 
@@ -493,6 +562,8 @@ test_requires_virtiofsd
 test_requires_kvm_by_default
 test_invokes_qemu_with_expected_browser_args_by_default
 test_resolves_nixpkgs_novnc_webapp_layout
+test_explicit_vm_image_skips_build
+test_missing_explicit_vm_image_fails
 test_exits_when_qemu_exits_first
 test_allows_direct_display_backend_override
 test_allows_sdl_frontend_override

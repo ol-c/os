@@ -7,7 +7,7 @@
     isNormalUser = true;
     uid = 1000;
     initialPassword = "demo";
-    extraGroups = [ "wheel" ];
+    extraGroups = [ "kvm" "wheel" ];
     home = "/home/demo";
   };
 
