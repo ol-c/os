@@ -104,11 +104,11 @@ Question this milestone answers:
 ## Milestone 4: Synced In-VM Development
 
 Goal:
-- Enable practical development from inside the guest against a host-shared OL-C repo.
+- Enable practical development from inside the guest against a host-shared ol-c repo.
 
 Milestone 4 decisions:
 - Use QEMU `virtiofs` as the only supported first shared-directory path.
-- Mount the whole OL-C repo into the guest, read-write.
+- Mount the whole ol-c repo into the guest, read-write.
 - Treat the shared host repo as the durable source of truth.
 - Allow in-guest Codex-assisted development against that mounted repo.
 - Use the in-VM workflow to validate browser-surface changes before updating packaged artifacts.
@@ -153,9 +153,9 @@ Goal:
 
 Milestone 6 decisions:
 - Keep the Firefox source-tree development loop aligned with the Firefox source selected by the repo's pinned nixpkgs input by default.
-- Define a fixed in-VM Firefox development checkout and build-cache location outside the tracked OL-C repo contents.
-- Use nested KVM on the Ubuntu host for the current in-OL-C VM development proof.
-- Expose the parent VM's boot image directory into the OL-C guest at `/vm-images` so child VM tests can reuse a prebuilt image.
+- Define a fixed in-VM Firefox development checkout and build-cache location outside the tracked ol-c repo contents.
+- Use nested KVM on the Ubuntu host for the current in-ol-c VM development proof.
+- Expose the parent VM's boot image directory into the ol-c guest at `/vm-images` so child VM tests can reuse a prebuilt image.
 - Use `/var/lib/ol-c/vms` as the guest-side runtime workspace for child VM launch temp files and logs.
 - Keep the full Firefox source tree and reusable Firefox build artifacts out of this repo.
 - Namespace Firefox source checkouts, build outputs, and reusable cache state by Firefox identity, including version, source URL or source name, source hash, and nixpkgs revision.
@@ -164,7 +164,7 @@ Milestone 6 decisions:
 - After a Firefox source behavior change is validated in the VM, refresh the repo patch artifact and run the packaged Nix gates intentionally.
 - Rely on nixpkgs as the primary Firefox packaging and security-update source for now.
 - Keep newer-than-nixpkgs Firefox support as a future escape hatch only if nixpkgs update latency becomes unacceptable.
-- Do not make OL-C responsible for packaging a newer Firefox than nixpkgs as part of this milestone.
+- Do not make ol-c responsible for packaging a newer Firefox than nixpkgs as part of this milestone.
 - Before relying on nixpkgs for timely security updates, move the repo off unsupported `nixos-24.11` to a currently supported NixOS branch and keep that branch current.
 
 Success criteria:
@@ -236,24 +236,24 @@ Goal:
 - Deliver OS and browser security updates through the browser System page without requiring users to understand or operate NixOS directly.
 
 Milestone 9 decisions:
-- Treat Firefox self-update as incompatible with the OL-C update model; Firefox updates should arrive through OL-C system updates.
+- Treat Firefox self-update as incompatible with the ol-c update model; Firefox updates should arrive through ol-c system updates.
 - Use nixpkgs/NixOS as the primary source for Firefox security updates unless concrete latency problems justify carrying a repo-declared newer Firefox package track.
 - Users should not compile Firefox locally as part of normal updates.
-- OL-C should publish prebuilt, signed or otherwise verified update artifacts before offering an update to users.
+- ol-c should publish prebuilt, signed or otherwise verified update artifacts before offering an update to users.
 - The browser System page is the intended product surface for update availability, install actions, update progress, reboot prompts, and rollback.
 - Rollback should use NixOS generations rather than browser-level self-update state.
-- The update path should make patch drift visible early: if an upstream Firefox update breaks the OL-C Firefox patch, that should block publication in CI/release work rather than silently holding users on an old browser.
+- The update path should make patch drift visible early: if an upstream Firefox update breaks the ol-c Firefox patch, that should block publication in CI/release work rather than silently holding users on an old browser.
 
 Success criteria:
-- The browser System page can show when an OL-C update is available.
+- The browser System page can show when an ol-c update is available.
 - A user can opt in to install an available update without invoking Nix commands.
 - The installed update uses prebuilt artifacts rather than compiling large packages such as Firefox on the user's machine.
 - A user can move back to a previous known system generation if an update is undesirable or broken.
-- The update mechanism records enough version information to explain what Firefox, nixpkgs, and OL-C revision are active.
+- The update mechanism records enough version information to explain what Firefox, nixpkgs, and ol-c revision are active.
 - Automated tests cover the browser-to-update-service contract with deterministic fakes or controlled test hooks.
 
 Question this milestone answers:
-- Can OL-C keep browser and OS security updates user-friendly, timely, and reversible?
+- Can ol-c keep browser and OS security updates user-friendly, timely, and reversible?
 
 # Current Focus
 
@@ -279,16 +279,16 @@ Supported-branch validation next steps:
 - Run `nix build .#firefox-localhost-source --print-build-logs` before considering Firefox patch compatibility proven against the updated nixpkgs Firefox source build path.
 
 In-VM validation note:
-- When Codex is running inside the OL-C guest, it can identify that context with `hostnamectl`, `systemd-detect-virt`, and `findmnt -T /source`.
+- When Codex is running inside the ol-c guest, it can identify that context with `hostnamectl`, `systemd-detect-virt`, and `findmnt -T /source`.
 - If `/source` is mounted from `ol-c-source` with `virtiofs`, Codex should treat edits as host-synced repo edits and can validate browser-surface work directly inside the guest.
 - When a graphical Firefox session is running in the guest, Codex may use available local GUI automation tools such as `xdotool` to actively drive the browser for validation.
 
 Security and update planning note:
 - The repo has been prepped to move from unsupported `nixos-24.11` to `nixos-25.11`; the host build and VM boot still need to prove the update.
-- Relying on nixpkgs for Firefox security updates is the preferred path, but only if OL-C tracks a supported branch promptly.
-- User-facing OL-C updates should eventually be exposed through the browser System page and backed by prebuilt artifacts.
+- Relying on nixpkgs for Firefox security updates is the preferred path, but only if ol-c tracks a supported branch promptly.
+- User-facing ol-c updates should eventually be exposed through the browser System page and backed by prebuilt artifacts.
 - Users should not need to operate NixOS directly or compile Firefox locally to receive browser security updates.
-- Rollback should be exposed as an OL-C product action backed by NixOS generations.
+- Rollback should be exposed as an ol-c product action backed by NixOS generations.
 
 Implementation status:
 - [x] Chose QEMU for the first development backend.
@@ -301,7 +301,7 @@ Implementation status:
 - [x] Verified the full Milestone 2 graphical boot and browser launch on an Ubuntu host with nix and QEMU/KVM installed.
 - [x] Simplified the normal VM launcher so `./launch-vm` always boots the current graphical Milestone 2 guest, with milestone validation handled by build and test scripts.
 - [x] Moved the normal graphical launch path to SPICE with `remote-viewer`, while keeping SDL and GTK as direct-display fallbacks for debugging.
-- [x] Consolidated the historical milestone Nix modules into one canonical OL-C module at `nix/ol-c.nix`.
+- [x] Consolidated the historical milestone Nix modules into one canonical ol-c module at `nix/ol-c.nix`.
 - [x] Proved the current Firefox source-patch flow end to end by building the patched browser, booting the guest with it, and verifying that closing the final tab reopens `https://localhost`.
 - [x] Add a browser terminal proof surface at `https://localhost/terminal` where each visit creates a fresh session.
 - [x] Use a browser terminal frontend and backend path that are robust enough for advanced interactive terminal programs.
@@ -321,10 +321,10 @@ Implementation status:
 - [x] Enable in-guest development against the shared tree with a fixed mount location.
 - [x] Add source-backed preview for localhost UI from `/source`, with terminal sessions owned by a stable service so Codex-driven edits do not kill the active terminal.
 - [x] Document the validate-inside-VM, then package-with-Nix workflow for browser-surface changes.
-- [x] Prove synced in-VM development against the host OL-C repo mounted at `/source`.
+- [x] Prove synced in-VM development against the host ol-c repo mounted at `/source`.
 - [ ] Move the repo from unsupported `nixos-24.11` to a currently supported NixOS branch and verify the VM still builds and boots.
 - [x] Make the normal host VM launch use a browser tab as the default screen while keeping SPICE, SDL, and GTK available as explicit fallbacks.
-- [x] Prove the first nested in-VM development launch: OL-C can run a child VM from the in-browser terminal using nested KVM, `/vm-images`, and the browser-tab screen flow.
+- [x] Prove the first nested in-VM development launch: ol-c can run a child VM from the in-browser terminal using nested KVM, `/vm-images`, and the browser-tab screen flow.
 - [ ] Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
 
 Known bugs to track:

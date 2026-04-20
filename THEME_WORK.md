@@ -2,7 +2,7 @@
 
 ## Live Findings
 
-- Environment-variable and desktop-setting style approaches are not enough for the current OL-C guest.
+- Environment-variable and desktop-setting style approaches are not enough for the current ol-c guest.
 - A temporary `xsettingsd` process with `Gtk/ApplicationPreferDarkTheme 1` did not affect the running Firefox session.
 - With `xsettingsd` active, normal page content still reported:
   - `darkMedia: false`

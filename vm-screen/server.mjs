@@ -74,7 +74,7 @@ function indexHtml() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OL-C VM</title>
+  <title>ol-c VM</title>
   <style>
     html, body {
       width: 100%;

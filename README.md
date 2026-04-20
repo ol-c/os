@@ -1,6 +1,6 @@
-# OL-C Prototype
+# ol-c Prototype
 
-This repo currently has one graphical QEMU/KVM development VM that boots the current OL-C browser surface.
+This repo currently has one graphical QEMU/KVM development VM that boots the current ol-c browser surface.
 
 ## Current VM
 
@@ -43,7 +43,7 @@ OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED=0 ./launch-vm
 OLC_QEMU_GDK_SCALE=2 OLC_QEMU_GDK_DPI_SCALE=0.5 ./launch-vm
 ```
 
-Firefox in the guest is packaged from pinned nixpkgs with a repo-local browser frontend patch. The normal VM uses the fast packaged target, which repacks the pinned nixpkgs Firefox browser chrome assets instead of recompiling Firefox for every JavaScript-only OL-C shell edit.
+Firefox in the guest is packaged from pinned nixpkgs with a repo-local browser frontend patch. The normal VM uses the fast packaged target, which repacks the pinned nixpkgs Firefox browser chrome assets instead of recompiling Firefox for every JavaScript-only ol-c shell edit.
 
 ## Milestone 4 In-VM Development
 
@@ -78,7 +78,7 @@ The wrapper uses `npx` to run the pinned `@openai/codex` CLI, defaults to `CODEX
 
 ## Nested In-VM VM Development
 
-With nested KVM enabled on the Ubuntu host, the OL-C guest can start a child OL-C VM from an OL-C terminal tab and view that child VM in another browser tab.
+With nested KVM enabled on the Ubuntu host, the ol-c guest can start a child ol-c VM from an ol-c terminal tab and view that child VM in another browser tab.
 
 The host launcher exposes the image it booted from to the parent guest at:
 
@@ -130,7 +130,7 @@ Proof of success:
 - common full-screen terminal programs such as `vim`, `less`, and `top` behave correctly enough for normal use
 - the browser tab title shows the executing shell command while a command runs, shows the current directory at an idle shell prompt, and follows title updates from running programs when they emit them
 
-The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The stable OL-C terminal service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps the backend alive while the browser terminal websocket is connected. The reloadable localhost HTTPS UI service only hands off the initial `/terminal` document; terminal assets, token requests, close requests, and websockets use the stable backend origin on port `9443` with short `/session/<token>/...` paths.
+The terminal stack uses a first-party `xterm.js` frontend with `ttyd` kept only as the PTY backend. The stable ol-c terminal service creates a fresh backend instance on each `/terminal` visit, serves the terminal client itself, and keeps the backend alive while the browser terminal websocket is connected. The reloadable localhost HTTPS UI service only hands off the initial `/terminal` document; terminal assets, token requests, close requests, and websockets use the stable backend origin on port `9443` with short `/session/<token>/...` paths.
 
 Session behavior for this proof:
 - `/terminal` always creates a fresh shell
@@ -297,7 +297,7 @@ sudo modprobe kvm_amd
 cat /sys/module/kvm_amd/parameters/nested
 ```
 
-Expected output is `Y` or `1`. After relaunching OL-C, confirm `/dev/kvm` exists inside the guest from `https://localhost/terminal`:
+Expected output is `Y` or `1`. After relaunching ol-c, confirm `/dev/kvm` exists inside the guest from `https://localhost/terminal`:
 
 ```sh
 test -e /dev/kvm && echo "/dev/kvm present"

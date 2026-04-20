@@ -1,5 +1,5 @@
 {
-  description = "OL-C browser-first OS prototype";
+  description = "ol-c browser-first OS prototype";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";

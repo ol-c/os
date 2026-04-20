@@ -7,7 +7,7 @@ usage() {
   cat <<'EOF'
 Usage: build-vm
 
-Builds the current OL-C VM image and prints the image path.
+Builds the current ol-c VM image and prints the image path.
 EOF
 }
 
@@ -62,7 +62,7 @@ check_local_build_capacity() {
   fi
 
   if (( free_mb < min_free_mb )); then
-    fail "local VM image build is unsafe inside the OL-C guest: /nix has ${free_mb} MiB free; need at least ${min_free_mb} MiB. Shut down this VM and run ./build-vm on the host, or set OLC_SKIP_BUILD_CAPACITY_CHECK=1 to override."
+    fail "local VM image build is unsafe inside the ol-c guest: /nix has ${free_mb} MiB free; need at least ${min_free_mb} MiB. Shut down this VM and run ./build-vm on the host, or set OLC_SKIP_BUILD_CAPACITY_CHECK=1 to override."
   fi
 }
 

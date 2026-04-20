@@ -71,7 +71,7 @@ IMAGE_PATH="$(resolve_image_path)"
 [[ -x "$SOURCE_DIR/launch-vm" ]] || fail "launch-vm not found or not executable in source directory: $SOURCE_DIR"
 
 if [[ ! -e "$KVM_DEVICE" ]]; then
-  fail "${KVM_DEVICE} is required for nested VM development. Enable nested KVM on the Ubuntu host and relaunch OL-C."
+  fail "${KVM_DEVICE} is required for nested VM development. Enable nested KVM on the Ubuntu host and relaunch ol-c."
 fi
 
 if [[ ! -r "$KVM_DEVICE" || ! -w "$KVM_DEVICE" ]]; then

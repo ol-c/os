@@ -13,7 +13,7 @@ let
     prompt = no
 
     [dn]
-    CN = OL-C Local CA
+    CN = ol-c Local CA
 
     [v3_ca]
     basicConstraints = critical, CA:true
@@ -69,7 +69,7 @@ in {
     internal = true;
     type = lib.types.package;
     default = olcLocalhostTls;
-    description = "Generated localhost TLS material for the in-guest OL-C UI.";
+    description = "Generated localhost TLS material for the in-guest ol-c UI.";
   };
 
   config = {
@@ -78,7 +78,7 @@ in {
     ];
 
     systemd.services.ol-c-terminal = {
-      description = "OL-C stable browser terminal service";
+      description = "ol-c stable browser terminal service";
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
 
@@ -101,7 +101,7 @@ in {
     };
 
     systemd.services.ol-c-ui = {
-      description = "OL-C local HTTPS UI";
+      description = "ol-c local HTTPS UI";
       after = [ "network.target" "ol-c-terminal.service" ];
       wants = [ "ol-c-terminal.service" ];
       wantedBy = [ "multi-user.target" ];
