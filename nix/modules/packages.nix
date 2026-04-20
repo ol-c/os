@@ -1,6 +1,11 @@
 { pkgs, ... }:
 
 {
+  fonts.packages = with pkgs; [
+    dejavu_fonts
+    inconsolata
+  ];
+
   environment.systemPackages = with pkgs; [
     bash
     coreutils

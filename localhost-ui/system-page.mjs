@@ -255,6 +255,27 @@ export function rootHtml() {
         <p id="appearance-implementation" class="line"></p>
       </section>
 
+      <section aria-labelledby="terminal-heading">
+        <h2 id="terminal-heading">Terminal</h2>
+        <p>
+          Font is
+          <span class="interactor">
+            <label class="proof" for="terminal-font-control">Terminal font</label>
+            <select id="terminal-font-control" disabled></select>
+          </span>
+          and colors are
+          <span class="interactor">
+            <label class="proof" for="terminal-color-scheme-control">Terminal colors</label>
+            <select id="terminal-color-scheme-control" disabled></select>
+          </span>.
+          <span id="terminal-error" class="error" role="status"></span>
+        </p>
+        <p>
+          <button id="open-terminal-control" type="button">Open terminal</button>
+        </p>
+        <p id="terminal-implementation" class="line"></p>
+      </section>
+
       <section aria-labelledby="bluetooth-heading">
         <h2 id="bluetooth-heading">Bluetooth</h2>
         <p id="bluetooth-status">
@@ -271,7 +292,12 @@ export function rootHtml() {
         <p id="bluetooth-implementation" class="line"></p>
       </section>
 
-      <p><a href="/terminal" onclick="window.open('/terminal', '_blank'); return false;">Open terminal</a></p>
+      <section aria-labelledby="browser-heading">
+        <h2 id="browser-heading">Browser</h2>
+        <p id="browser-status">Firefox version is loading.</p>
+        <p id="browser-implementation" class="line"></p>
+      </section>
+
       <p id="proof" class="proof">${marker}</p>
     </main>
 
@@ -298,10 +324,17 @@ export function rootHtml() {
         appearance: document.getElementById('appearance-control'),
         appearanceError: document.getElementById('appearance-error'),
         appearanceImplementation: document.getElementById('appearance-implementation'),
+        terminalFont: document.getElementById('terminal-font-control'),
+        terminalColorScheme: document.getElementById('terminal-color-scheme-control'),
+        openTerminal: document.getElementById('open-terminal-control'),
+        terminalError: document.getElementById('terminal-error'),
+        terminalImplementation: document.getElementById('terminal-implementation'),
         bluetoothStatus: document.getElementById('bluetooth-status'),
         bluetooth: document.getElementById('bluetooth-control'),
         bluetoothError: document.getElementById('bluetooth-error'),
         bluetoothImplementation: document.getElementById('bluetooth-implementation'),
+        browserStatus: document.getElementById('browser-status'),
+        browserImplementation: document.getElementById('browser-implementation'),
       };
 
       function boolText(value, trueText, falseText, unknownText = 'unknown') {
@@ -427,6 +460,24 @@ export function rootHtml() {
         controls.appearance.value = status.appearance.mode;
         controls.appearanceImplementation.textContent = 'Implementation: ' + status.appearance.implementation;
 
+        setControlEnabled(controls.terminalFont, status.terminal.available);
+        setControlEnabled(controls.terminalColorScheme, status.terminal.available);
+        controls.terminalFont.replaceChildren(...(status.terminal.fonts || []).map(choice => {
+          const option = document.createElement('option');
+          option.value = choice.id;
+          option.textContent = choice.label;
+          return option;
+        }));
+        controls.terminalColorScheme.replaceChildren(...(status.terminal.colorSchemes || []).map(choice => {
+          const option = document.createElement('option');
+          option.value = choice.id;
+          option.textContent = choice.label;
+          return option;
+        }));
+        controls.terminalFont.value = status.terminal.font;
+        controls.terminalColorScheme.value = status.terminal.colorScheme;
+        controls.terminalImplementation.textContent = 'Implementation: ' + status.terminal.implementation;
+
         setControlEnabled(controls.bluetooth, status.bluetooth.available);
         controls.bluetooth.value = status.bluetooth.enabled ? 'true' : 'false';
         if (!status.bluetooth.available) {
@@ -437,6 +488,9 @@ export function rootHtml() {
           controls.bluetooth.style.display = '';
         }
         controls.bluetoothImplementation.textContent = 'Implementation: ' + status.bluetooth.implementation;
+
+        controls.browserStatus.textContent = 'Firefox is version ' + (status.browser?.firefoxVersion || 'unknown') + '.';
+        controls.browserImplementation.textContent = 'Implementation: ' + (status.browser?.implementation || 'unavailable');
       }
 
       async function postCommand(path, body, errorElement, control) {
@@ -500,6 +554,15 @@ export function rootHtml() {
           .catch(() => {
             controls.appearance.disabled = false;
           });
+      });
+      controls.terminalFont.addEventListener('change', () => {
+        postCommand('/api/system/terminal', { font: controls.terminalFont.value }, controls.terminalError, controls.terminalFont);
+      });
+      controls.terminalColorScheme.addEventListener('change', () => {
+        postCommand('/api/system/terminal', { colorScheme: controls.terminalColorScheme.value }, controls.terminalError, controls.terminalColorScheme);
+      });
+      controls.openTerminal.addEventListener('click', () => {
+        window.open('/terminal', '_blank');
       });
       controls.bluetooth.addEventListener('change', () => {
         postCommand('/api/system/bluetooth', { enabled: controls.bluetooth.value === 'true' }, controls.bluetoothError, controls.bluetooth);

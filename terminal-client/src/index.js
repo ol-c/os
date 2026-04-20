@@ -2,6 +2,10 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { createSessionLifecycle } from './session-lifecycle.mjs';
 import { terminalThemes } from './terminal-themes.mjs';
+import {
+  defaultTerminalPreferences,
+  findTerminalFont,
+} from '../../localhost-ui/terminal-options.mjs';
 
 const OUTPUT = '0';
 const SET_WINDOW_TITLE = '1';
@@ -14,20 +18,34 @@ const decoder = new TextDecoder();
 const fallbackTitle = 'ol-c terminal';
 const appConfig = window.OLC_TERMINAL_CONFIG;
 const reconnectFailureWindowMs = 10_000;
+const reloadWarningMessage = 'Are you sure? This terminal session will clear.';
 
 const terminalNode = document.getElementById('terminal');
 const statusNode = document.getElementById('terminal-status');
 const darkModeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+let terminalPreferences = { ...defaultTerminalPreferences };
+let appearanceMode = darkModeQuery.matches ? 'dark' : 'light';
 
 function selectedTerminalTheme() {
-  return darkModeQuery.matches ? terminalThemes.dark : terminalThemes.light;
+  return terminalThemes[terminalPreferences.colorScheme]?.[appearanceMode]
+    ?? terminalThemes[defaultTerminalPreferences.colorScheme][appearanceMode];
+}
+
+function selectedTerminalFontFamily() {
+  return findTerminalFont(terminalPreferences.font)?.cssFamily
+    ?? findTerminalFont(defaultTerminalPreferences.font).cssFamily;
+}
+
+function applyTerminalSurfaceTheme(theme) {
+  document.documentElement.style.setProperty('--terminal-bg', theme.background);
+  document.documentElement.style.setProperty('--terminal-fg', theme.foreground);
 }
 
 const terminal = new Terminal({
   allowProposedApi: true,
   cursorBlink: true,
-  fontFamily: 'Consolas, "Liberation Mono", Menlo, Courier, monospace',
-  fontSize: 13,
+  fontFamily: selectedTerminalFontFamily(),
+  fontSize: 14,
   theme: selectedTerminalTheme(),
 });
 const fitAddon = new FitAddon();
@@ -48,11 +66,13 @@ let terminated = false;
 let pageTitle = fallbackTitle;
 let reconnectDelayMs = 1000;
 let firstReconnectFailureAt = null;
+let pageUnloading = false;
 
 class TerminalSessionEndedError extends Error {}
 
 terminal.loadAddon(fitAddon);
 terminal.open(terminalNode);
+applyPreferredTerminalOptions();
 fitAddon.fit();
 terminal.focus();
 document.title = fallbackTitle;
@@ -144,13 +164,68 @@ function applyPreferences(preferences) {
     }
   }
 
-  applyPreferredColorScheme();
+  applyPreferredTerminalOptions();
   fitAddon.fit();
   sendResize();
 }
 
-function applyPreferredColorScheme() {
-  terminal.options.theme = selectedTerminalTheme();
+function applyPreferredTerminalOptions() {
+  const theme = selectedTerminalTheme();
+  terminal.options.fontFamily = selectedTerminalFontFamily();
+  terminal.options.theme = theme;
+  applyTerminalSurfaceTheme(theme);
+}
+
+function applySystemStatus(status) {
+  if (status?.appearance?.mode === 'light' || status?.appearance?.mode === 'dark') {
+    appearanceMode = status.appearance.mode;
+  }
+  if (status?.terminal?.font && status?.terminal?.colorScheme) {
+    terminalPreferences = {
+      font: status.terminal.font,
+      colorScheme: status.terminal.colorScheme,
+    };
+  }
+  applyPreferredTerminalOptions();
+  fitAddon.fit();
+  sendResize();
+}
+
+async function syncSystemStatus() {
+  try {
+    const response = await fetch('/api/system/events', {
+      cache: 'no-store',
+      credentials: 'same-origin',
+    });
+    if (!response.ok || !response.body) {
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const textDecoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return;
+      }
+
+      buffer += textDecoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+      for (const event of events) {
+        if (!event.includes('event: status')) {
+          continue;
+        }
+        const dataLine = event.split('\n').find(line => line.startsWith('data: '));
+        if (dataLine) {
+          applySystemStatus(JSON.parse(dataLine.slice('data: '.length)));
+        }
+      }
+    }
+  } catch {
+    // The terminal remains usable with built-in defaults if the system UI restarts.
+  }
 }
 
 function scheduleReconnect() {
@@ -244,6 +319,9 @@ async function connect() {
       if (terminated) {
         return;
       }
+      if (pageUnloading) {
+        return;
+      }
 
       if (event.code === 1000 || event.code === 1001) {
         closeRootSession();
@@ -303,6 +381,25 @@ window.addEventListener('resize', () => {
   fitAddon.fit();
   sendResize();
 });
-darkModeQuery.addEventListener('change', applyPreferredColorScheme);
+window.addEventListener('beforeunload', () => {
+  pageUnloading = true;
+  window.setTimeout(() => {
+    pageUnloading = false;
+  }, 0);
+});
+window.addEventListener('beforeunload', event => {
+  if (terminated) {
+    return;
+  }
 
+  event.preventDefault();
+  event.returnValue = reloadWarningMessage;
+  return reloadWarningMessage;
+});
+darkModeQuery.addEventListener('change', () => {
+  appearanceMode = darkModeQuery.matches ? 'dark' : 'light';
+  applyPreferredTerminalOptions();
+});
+
+void syncSystemStatus();
 void connect();

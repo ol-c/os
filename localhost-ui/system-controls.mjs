@@ -2,6 +2,13 @@ import { execFile } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
 import { promisify } from 'node:util';
+import {
+  defaultTerminalPreferences,
+  findTerminalColorScheme,
+  findTerminalFont,
+  terminalColorSchemeChoices,
+  terminalFontChoices,
+} from './terminal-options.mjs';
 
 const execFileAsync = promisify(execFile);
 const defaultFakeHardwareTest = 'network,audio,brightness,appearance';
@@ -84,6 +91,7 @@ export function createDefaultSystemStatus(capabilityInput = defaultFakeHardwareT
   const selectedNetwork = hasNetwork
     ? networkChoices.find(choice => choice.id !== 'offline')?.id ?? 'offline'
     : null;
+  const terminalPreferences = { ...defaultTerminalPreferences };
 
   return {
     network: {
@@ -155,6 +163,14 @@ export function createDefaultSystemStatus(capabilityInput = defaultFakeHardwareT
       ),
       discovering: capabilities.has('bluetooth') ? false : null,
     },
+    browser: {
+      firefoxVersion: process.env.OLC_FIREFOX_VERSION || 'test-firefox',
+      implementation: 'Fake hardware test: Firefox version is supplied by the test environment.',
+    },
+    terminal: createTerminalStatus(
+      terminalPreferences,
+      'Fake hardware test: terminal preferences are fake-controllable and applied to new and live terminal pages.',
+    ),
   };
 }
 
@@ -198,6 +214,41 @@ function validateMode(value) {
   }
 }
 
+function validateTerminalFont(value) {
+  if (!findTerminalFont(value)) {
+    throw validationError('font must be one of the available terminal fonts');
+  }
+}
+
+function validateTerminalColorScheme(value) {
+  if (!findTerminalColorScheme(value)) {
+    throw validationError('colorScheme must be one of the available light and dark terminal color schemes');
+  }
+}
+
+function createTerminalStatus(preferences, implementation) {
+  return {
+    available: true,
+    implementation,
+    font: preferences.font,
+    colorScheme: preferences.colorScheme,
+    fonts: terminalFontChoices.map(({ id, label }) => ({ id, label })),
+    colorSchemes: terminalColorSchemeChoices.map(({ id, label }) => ({ id, label })),
+  };
+}
+
+function applyTerminalCommand(preferences, command) {
+  requireObject(command);
+  if (command.font !== undefined) {
+    validateTerminalFont(command.font);
+    preferences.font = command.font;
+  }
+  if (command.colorScheme !== undefined) {
+    validateTerminalColorScheme(command.colorScheme);
+    preferences.colorScheme = command.colorScheme;
+  }
+}
+
 function parsePactlPercent(stdout) {
   const match = stdout.match(/(\d+)%/);
   return match ? Number.parseInt(match[1], 10) : null;
@@ -211,6 +262,11 @@ function parsePactlMute(stdout) {
     return false;
   }
   return null;
+}
+
+function parseFirefoxVersion(stdout) {
+  const match = stdout.match(/Firefox\s+(.+)/i);
+  return match ? match[1].trim() : null;
 }
 
 async function safeExecFile(command, args, options = {}) {
@@ -284,6 +340,11 @@ export function createFakeSystemAdapter(initialStatus = createDefaultSystemStatu
       return clone(state);
     },
 
+    async terminal(command) {
+      applyTerminalCommand(state.terminal, command);
+      return clone(state);
+    },
+
     async bluetooth(command) {
       requireObject(command);
       if (!state.bluetooth.available) {
@@ -299,12 +360,15 @@ export function createFakeSystemAdapter(initialStatus = createDefaultSystemStatu
 
 export function createRealSystemAdapter(options = {}) {
   const pactl = options.pactl ?? process.env.OLC_PACTL ?? 'pactl';
+  const firefoxVersion = options.firefoxVersion ?? process.env.OLC_FIREFOX_VERSION;
+  const firefox = options.firefox ?? process.env.OLC_FIREFOX ?? '/run/current-system/sw/bin/firefox';
   const commandEnv = { ...process.env };
   const pulseServer = options.pulseServer ?? process.env.OLC_PULSE_SERVER;
   if (pulseServer) {
     commandEnv.PULSE_SERVER = pulseServer;
   }
   let appearanceMode = 'light';
+  const terminalPreferences = { ...defaultTerminalPreferences };
 
   async function readNetwork() {
     const nets = networkInterfaces();
@@ -406,13 +470,29 @@ export function createRealSystemAdapter(options = {}) {
     };
   }
 
+  async function readBrowser() {
+    if (firefoxVersion) {
+      return {
+        firefoxVersion,
+        implementation: 'Real guest adapter: Firefox version is supplied by the packaged system service environment.',
+      };
+    }
+
+    const version = await safeExecFile(firefox, [ '--version' ], { env: commandEnv });
+    return {
+      firefoxVersion: version ? parseFirefoxVersion(version.stdout) ?? 'unknown' : 'unknown',
+      implementation: 'Real guest adapter: Firefox version is read from the installed Firefox binary.',
+    };
+  }
+
   async function getStatus() {
-    const [network, power, volume, brightness, bluetooth] = await Promise.all([
+    const [network, power, volume, brightness, bluetooth, browser] = await Promise.all([
       readNetwork(),
       readPower(),
       readVolume(),
       readBrightness(),
       readBluetooth(),
+      readBrowser(),
     ]);
 
     return {
@@ -426,6 +506,11 @@ export function createRealSystemAdapter(options = {}) {
         mode: appearanceMode,
       },
       bluetooth,
+      browser,
+      terminal: createTerminalStatus(
+        terminalPreferences,
+        'Real guest adapter: terminal preferences are process-local and applied to new and live terminal pages.',
+      ),
     };
   }
 
@@ -466,6 +551,11 @@ export function createRealSystemAdapter(options = {}) {
       requireObject(command);
       validateMode(command.mode);
       appearanceMode = command.mode;
+      return getStatus();
+    },
+
+    async terminal(command) {
+      applyTerminalCommand(terminalPreferences, command);
       return getStatus();
     },
 

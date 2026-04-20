@@ -6195,23 +6195,106 @@ WARNING: This link could potentially be dangerous`)) {
     brightWhite: solarized.base3
   });
   var terminalThemes = Object.freeze({
-    light: Object.freeze({
-      ...solarizedAnsi,
-      background: solarized.base3,
-      cursor: solarized.base01,
-      cursorAccent: solarized.base3,
-      foreground: solarized.base00,
-      selectionBackground: solarized.base2
+    solarized: Object.freeze({
+      light: Object.freeze({
+        ...solarizedAnsi,
+        background: solarized.base3,
+        cursor: solarized.base01,
+        cursorAccent: solarized.base3,
+        foreground: solarized.base00,
+        selectionBackground: solarized.base2
+      }),
+      dark: Object.freeze({
+        ...solarizedAnsi,
+        background: solarized.base03,
+        cursor: solarized.base1,
+        cursorAccent: solarized.base03,
+        foreground: solarized.base0,
+        selectionBackground: solarized.base02
+      })
     }),
-    dark: Object.freeze({
-      ...solarizedAnsi,
-      background: solarized.base03,
-      cursor: solarized.base1,
-      cursorAccent: solarized.base03,
-      foreground: solarized.base0,
-      selectionBackground: solarized.base02
+    tango: Object.freeze({
+      light: Object.freeze({
+        black: "#2e3436",
+        red: "#cc0000",
+        green: "#4e9a06",
+        yellow: "#c4a000",
+        blue: "#3465a4",
+        magenta: "#75507b",
+        cyan: "#06989a",
+        white: "#d3d7cf",
+        brightBlack: "#555753",
+        brightRed: "#ef2929",
+        brightGreen: "#8ae234",
+        brightYellow: "#fce94f",
+        brightBlue: "#729fcf",
+        brightMagenta: "#ad7fa8",
+        brightCyan: "#34e2e2",
+        brightWhite: "#eeeeec",
+        background: "#ffffff",
+        cursor: "#2e3436",
+        cursorAccent: "#ffffff",
+        foreground: "#2e3436",
+        selectionBackground: "#d3d7cf"
+      }),
+      dark: Object.freeze({
+        black: "#2e3436",
+        red: "#cc0000",
+        green: "#4e9a06",
+        yellow: "#c4a000",
+        blue: "#3465a4",
+        magenta: "#75507b",
+        cyan: "#06989a",
+        white: "#d3d7cf",
+        brightBlack: "#555753",
+        brightRed: "#ef2929",
+        brightGreen: "#8ae234",
+        brightYellow: "#fce94f",
+        brightBlue: "#729fcf",
+        brightMagenta: "#ad7fa8",
+        brightCyan: "#34e2e2",
+        brightWhite: "#eeeeec",
+        background: "#2e3436",
+        cursor: "#eeeeec",
+        cursorAccent: "#2e3436",
+        foreground: "#d3d7cf",
+        selectionBackground: "#555753"
+      })
     })
   });
+
+  // ../localhost-ui/terminal-options.mjs
+  var terminalFontChoices = Object.freeze([
+    Object.freeze({
+      id: "dejavu-sans-mono",
+      label: "DejaVu Sans Mono",
+      cssFamily: '"DejaVu Sans Mono", "DejaVu Sans Mono Book", monospace'
+    }),
+    Object.freeze({
+      id: "inconsolata",
+      label: "Inconsolata",
+      cssFamily: 'Inconsolata, "DejaVu Sans Mono", monospace'
+    })
+  ]);
+  var terminalColorSchemeChoices = Object.freeze([
+    Object.freeze({
+      id: "solarized",
+      label: "Solarized",
+      variants: Object.freeze(["light", "dark"])
+    }),
+    Object.freeze({
+      id: "tango",
+      label: "Tango",
+      variants: Object.freeze(["light", "dark"])
+    })
+  ]);
+  var defaultTerminalPreferences = Object.freeze({
+    font: "dejavu-sans-mono",
+    colorScheme: "solarized"
+  });
+  function findTerminalFont(id) {
+    return terminalFontChoices.find((choice) => choice.id === id) ?? null;
+  }
 
   // src/index.js
   var OUTPUT = "0";
@@ -6224,17 +6307,27 @@ WARNING: This link could potentially be dangerous`)) {
   var fallbackTitle = "ol-c terminal";
   var appConfig = window.OLC_TERMINAL_CONFIG;
   var reconnectFailureWindowMs = 1e4;
+  var reloadWarningMessage = "Are you sure? This terminal session will clear.";
   var terminalNode = document.getElementById("terminal");
   var statusNode = document.getElementById("terminal-status");
   var darkModeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  var terminalPreferences = { ...defaultTerminalPreferences };
+  var appearanceMode = darkModeQuery.matches ? "dark" : "light";
   function selectedTerminalTheme() {
-    return darkModeQuery.matches ? terminalThemes.dark : terminalThemes.light;
+    return terminalThemes[terminalPreferences.colorScheme]?.[appearanceMode] ?? terminalThemes[defaultTerminalPreferences.colorScheme][appearanceMode];
+  }
+  function selectedTerminalFontFamily() {
+    return findTerminalFont(terminalPreferences.font)?.cssFamily ?? findTerminalFont(defaultTerminalPreferences.font).cssFamily;
+  }
+  function applyTerminalSurfaceTheme(theme) {
+    document.documentElement.style.setProperty("--terminal-bg", theme.background);
+    document.documentElement.style.setProperty("--terminal-fg", theme.foreground);
   }
   var terminal = new import_xterm.Terminal({
     allowProposedApi: true,
     cursorBlink: true,
-    fontFamily: 'Consolas, "Liberation Mono", Menlo, Courier, monospace',
-    fontSize: 13,
+    fontFamily: selectedTerminalFontFamily(),
+    fontSize: 14,
     theme: selectedTerminalTheme()
   });
   var fitAddon = new import_addon_fit.FitAddon();
@@ -6254,10 +6347,12 @@ WARNING: This link could potentially be dangerous`)) {
   var pageTitle = fallbackTitle;
   var reconnectDelayMs = 1e3;
   var firstReconnectFailureAt = null;
+  var pageUnloading = false;
   var TerminalSessionEndedError = class extends Error {
   };
   terminal.loadAddon(fitAddon);
   terminal.open(terminalNode);
+  applyPreferredTerminalOptions();
   fitAddon.fit();
   terminal.focus();
   document.title = fallbackTitle;
@@ -6331,12 +6426,62 @@ WARNING: This link could potentially be dangerous`)) {
         terminal.options[key] = value;
       }
     }
-    applyPreferredColorScheme();
+    applyPreferredTerminalOptions();
     fitAddon.fit();
     sendResize();
   }
-  function applyPreferredColorScheme() {
-    terminal.options.theme = selectedTerminalTheme();
+  function applyPreferredTerminalOptions() {
+    const theme = selectedTerminalTheme();
+    terminal.options.fontFamily = selectedTerminalFontFamily();
+    terminal.options.theme = theme;
+    applyTerminalSurfaceTheme(theme);
+  }
+  function applySystemStatus(status) {
+    if (status?.appearance?.mode === "light" || status?.appearance?.mode === "dark") {
+      appearanceMode = status.appearance.mode;
+    }
+    if (status?.terminal?.font && status?.terminal?.colorScheme) {
+      terminalPreferences = {
+        font: status.terminal.font,
+        colorScheme: status.terminal.colorScheme
+      };
+    }
+    applyPreferredTerminalOptions();
+    fitAddon.fit();
+    sendResize();
+  }
+  async function syncSystemStatus() {
+    try {
+      const response = await fetch("/api/system/events", {
+        cache: "no-store",
+        credentials: "same-origin"
+      });
+      if (!response.ok || !response.body) {
+        return;
+      }
+      const reader = response.body.getReader();
+      const textDecoder = new TextDecoder();
+      let buffer = "";
+      for (; ; ) {
+        const { done, value } = await reader.read();
+        if (done) {
+          return;
+        }
+        buffer += textDecoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+        for (const event of events) {
+          if (!event.includes("event: status")) {
+            continue;
+          }
+          const dataLine = event.split("\n").find((line) => line.startsWith("data: "));
+          if (dataLine) {
+            applySystemStatus(JSON.parse(dataLine.slice("data: ".length)));
+          }
+        }
+      }
+    } catch {
+    }
   }
   function scheduleReconnect() {
     if (terminated || reconnectTimer !== null) {
@@ -6419,6 +6564,9 @@ WARNING: This link could potentially be dangerous`)) {
         if (terminated) {
           return;
         }
+        if (pageUnloading) {
+          return;
+        }
         if (event.code === 1e3 || event.code === 1001) {
           closeRootSession();
           return;
@@ -6466,6 +6614,24 @@ WARNING: This link could potentially be dangerous`)) {
     fitAddon.fit();
     sendResize();
   });
-  darkModeQuery.addEventListener("change", applyPreferredColorScheme);
+  window.addEventListener("beforeunload", () => {
+    pageUnloading = true;
+    window.setTimeout(() => {
+      pageUnloading = false;
+    }, 0);
+  });
+  window.addEventListener("beforeunload", (event) => {
+    if (terminated) {
+      return;
+    }
+    event.preventDefault();
+    event.returnValue = reloadWarningMessage;
+    return reloadWarningMessage;
+  });
+  darkModeQuery.addEventListener("change", () => {
+    appearanceMode = darkModeQuery.matches ? "dark" : "light";
+    applyPreferredTerminalOptions();
+  });
+  void syncSystemStatus();
   void connect();
 })();

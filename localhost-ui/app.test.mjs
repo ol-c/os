@@ -91,6 +91,7 @@ test('root page exposes the system document and inline controls', async () => {
     assert.match(html, /id="sound-heading">Sound/);
     assert.match(html, /id="display-heading">Display/);
     assert.match(html, /id="appearance-heading">Appearance/);
+    assert.match(html, /id="terminal-heading">Terminal/);
     assert.match(html, /id="bluetooth-heading">Bluetooth/);
     assert.match(html, /new EventSource\('\/api\/system\/events'\)/);
     assert.match(html, /id="network-control"/);
@@ -99,9 +100,16 @@ test('root page exposes the system document and inline controls', async () => {
     assert.match(html, /id="volume-implementation"/);
     assert.match(html, /id="brightness-implementation"/);
     assert.match(html, /id="appearance-implementation"/);
+    assert.match(html, /id="terminal-implementation"/);
     assert.match(html, /id="bluetooth-implementation"/);
     assert.match(html, /id="volume-control" type="range"/);
     assert.match(html, /id="appearance-control"/);
+    assert.match(html, /id="terminal-font-control"/);
+    assert.match(html, /id="terminal-color-scheme-control"/);
+    assert.match(html, /id="open-terminal-control" type="button">Open terminal<\/button>/);
+    assert.doesNotMatch(html, /<a href="\/terminal"/);
+    assert.match(html, /postCommand\('\/api\/system\/terminal'/);
+    assert.match(html, /controls\.openTerminal\.addEventListener\('click'/);
     assert.match(html, /WebChannelMessageToChrome/);
     assert.match(html, /olc-appearance/);
     assert.match(html, /setAppearance/);
@@ -118,6 +126,7 @@ test('SSE stream sends the initial status event', async () => {
     await response.body.cancel();
     assert.equal(status.volume.percent, 40);
     assert.equal(status.appearance.mode, 'light');
+    assert.equal(status.terminal.font, 'dejavu-sans-mono');
   });
 });
 
@@ -155,6 +164,20 @@ test('command endpoint returns status and publishes an SSE update', async () => 
   });
 });
 
+test('terminal command endpoint updates font and color scheme', async () => {
+  await withServer(async baseUrl => {
+    const { body, response } = await requestJson(baseUrl, '/api/system/terminal', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ font: 'inconsolata', colorScheme: 'tango' }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(body.terminal.font, 'inconsolata');
+    assert.equal(body.terminal.colorScheme, 'tango');
+  });
+});
+
 test('command endpoint validates request bodies and methods', async () => {
   await withServer(async baseUrl => {
     const badBody = await fetch(`${baseUrl}/api/system/volume`, {
@@ -171,6 +194,14 @@ test('command endpoint validates request bodies and methods', async () => {
     });
     assert.equal(badValue.response.status, 400);
     assert.match(badValue.body.error, /mode must be light or dark/);
+
+    const badTerminal = await requestJson(baseUrl, '/api/system/terminal', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ colorScheme: 'custom' }),
+    });
+    assert.equal(badTerminal.response.status, 400);
+    assert.match(badTerminal.body.error, /light and dark terminal color schemes/);
 
     const wrongMethod = await requestJson(baseUrl, '/api/system/bluetooth');
     assert.equal(wrongMethod.response.status, 405);

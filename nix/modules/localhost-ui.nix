@@ -107,6 +107,8 @@ in {
       wantedBy = [ "multi-user.target" ];
 
       environment = {
+        OLC_FIREFOX = "${pkgs.firefox}/bin/firefox";
+        OLC_FIREFOX_VERSION = pkgs.firefox.version;
         OLC_PACTL = "${pkgs.pulseaudio}/bin/pactl";
         OLC_PULSE_SERVER = "unix:/run/user/1000/pulse/native";
         OLC_TERMINAL_UPSTREAM = "https://127.0.0.1:9443";

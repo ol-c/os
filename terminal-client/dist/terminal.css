@@ -224,13 +224,6 @@
   --terminal-fg: #657b83;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --terminal-bg: #002b36;
-    --terminal-fg: #839496;
-  }
-}
-
 html,
 body {
   width: 100%;

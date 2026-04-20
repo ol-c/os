@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
   createDefaultSystemStatus,
   createFakeSystemAdapter,
+  createRealSystemAdapter,
   createSystemControls,
   listFakeHardwareCapabilityTokens,
   parseFakeHardwareCapabilities,
@@ -54,6 +57,8 @@ test('fake adapter returns a complete initial status', async () => {
     'brightness',
     'appearance',
     'bluetooth',
+    'browser',
+    'terminal',
   ]);
   assert.equal(status.network.connected, true);
   assert.match(status.network.implementation, /Fake hardware test/);
@@ -61,6 +66,12 @@ test('fake adapter returns a complete initial status', async () => {
   assert.match(status.volume.implementation, /Fake hardware test/);
   assert.equal(status.appearance.mode, 'light');
   assert.match(status.appearance.implementation, /Fake hardware test/);
+  assert.equal(status.browser.firefoxVersion, 'test-firefox');
+  assert.match(status.browser.implementation, /Firefox version/);
+  assert.equal(status.terminal.font, 'dejavu-sans-mono');
+  assert.equal(status.terminal.colorScheme, 'solarized');
+  assert.deepEqual(status.terminal.fonts.map(choice => choice.id), [ 'dejavu-sans-mono', 'inconsolata' ]);
+  assert.deepEqual(status.terminal.colorSchemes.map(choice => choice.id), [ 'solarized', 'tango' ]);
 });
 
 test('hardware test capabilities shape facility availability', async () => {
@@ -74,7 +85,38 @@ test('hardware test capabilities shape facility availability', async () => {
   assert.equal(status.brightness.available, false);
   assert.equal(status.appearance.available, true);
   assert.equal(status.bluetooth.available, true);
+  assert.equal(status.browser.firefoxVersion, 'test-firefox');
+  assert.equal(status.terminal.available, true);
   assert.match(status.volume.implementation, /OLC_HARDWARE_TEST=audio/);
+});
+
+test('real adapter reports packaged Firefox version from environment', async () => {
+  const adapter = createRealSystemAdapter({ firefoxVersion: '149.0.2', pactl: '/does/not/exist' });
+  const status = await adapter.getStatus();
+
+  assert.equal(status.browser.firefoxVersion, '149.0.2');
+  assert.match(status.browser.implementation, /packaged system service environment/);
+});
+
+test('real adapter falls back to installed Firefox binary version', async () => {
+  const dir = await mkdtemp(join(process.cwd(), '.tmp-tests', 'ol-c-firefox-version-test-'));
+  const firefox = join(dir, 'firefox');
+  await writeFile(firefox, '#!/usr/bin/env sh\nprintf "%s\\n" "Mozilla Firefox 149.0.2"\n');
+  await chmod(firefox, 0o755);
+  const adapter = createRealSystemAdapter({
+    firefox,
+    firefoxVersion: '',
+    pactl: '/does/not/exist',
+  });
+
+  try {
+    const status = await adapter.getStatus();
+
+    assert.equal(status.browser.firefoxVersion, '149.0.2');
+    assert.match(status.browser.implementation, /installed Firefox binary/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('fake adapter updates mutable controls', async () => {
@@ -84,6 +126,7 @@ test('fake adapter updates mutable controls', async () => {
   await adapter.volume({ muted: true });
   await adapter.brightness({ percent: 25 });
   await adapter.appearance({ mode: 'dark' });
+  await adapter.terminal({ font: 'inconsolata', colorScheme: 'tango' });
   await adapter.bluetooth({ enabled: true });
   await adapter.network({ selected: 'offline' });
 
@@ -92,6 +135,8 @@ test('fake adapter updates mutable controls', async () => {
   assert.equal(status.volume.muted, true);
   assert.equal(status.brightness.percent, 25);
   assert.equal(status.appearance.mode, 'dark');
+  assert.equal(status.terminal.font, 'inconsolata');
+  assert.equal(status.terminal.colorScheme, 'tango');
   assert.equal(status.bluetooth.enabled, true);
   assert.equal(status.network.connected, false);
 });
@@ -123,6 +168,8 @@ test('fake adapter rejects invalid commands', async () => {
   await assert.rejects(() => adapter.volume({ muted: 'yes' }), /muted must be true or false/);
   await assert.rejects(() => adapter.brightness({ percent: -1 }), /integer from 0 to 100/);
   await assert.rejects(() => adapter.appearance({ mode: 'auto' }), /mode must be light or dark/);
+  await assert.rejects(() => adapter.terminal({ font: 'comic-sans' }), /available terminal fonts/);
+  await assert.rejects(() => adapter.terminal({ colorScheme: 'monochrome' }), /light and dark terminal color schemes/);
   await assert.rejects(() => adapter.bluetooth({ enabled: 'true' }), /enabled must be true or false/);
   await assert.rejects(() => adapter.network({ selected: 'wifi' }), /not available/);
 });
