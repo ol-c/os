@@ -102,11 +102,24 @@ function indexHtml() {
       color: #f4f7f8;
       font-size: 13px;
     }
+
+    #clipboard-hint {
+      position: fixed;
+      top: 8px;
+      right: 8px;
+      z-index: 2;
+      padding: 5px 6px;
+      border-radius: 4px;
+      background: rgba(16, 20, 24, 0.78);
+      color: #f4f7f8;
+      font-size: 13px;
+    }
   </style>
 </head>
 <body>
   <div id="screen"></div>
   <div id="status">Connecting</div>
+  <div id="clipboard-hint">Clipboard ready</div>
   <script>window.OLC_VM_SCREEN = ${config};</script>
   <script type="module" src="/screen.js"></script>
 </body>
@@ -118,12 +131,44 @@ function screenJs() {
 
 const screen = document.getElementById('screen');
 const status = document.getElementById('status');
+const clipboardHint = document.getElementById('clipboard-hint');
 const config = window.OLC_VM_SCREEN;
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const url = protocol + '//' + config.host + ':' + config.port + '/';
+let latestVmClipboardText = '';
+let clipboardHintTimer = 0;
 
 function setStatus(message) {
   status.textContent = message;
+}
+
+function setClipboardHint(message) {
+  clipboardHint.textContent = message;
+  window.clearTimeout(clipboardHintTimer);
+  clipboardHintTimer = window.setTimeout(() => {
+    clipboardHint.textContent = 'Clipboard ready';
+  }, 3500);
+}
+
+async function copyLatestVmClipboardToHost() {
+  if (latestVmClipboardText.length === 0) {
+    setClipboardHint('No VM clipboard text');
+    return false;
+  }
+
+  if (!navigator.clipboard?.writeText) {
+    setClipboardHint('Host clipboard unavailable');
+    return false;
+  }
+
+  try {
+    await navigator.clipboard.writeText(latestVmClipboardText);
+    setClipboardHint('Copied from VM');
+    return true;
+  } catch {
+    setClipboardHint('Press Ctrl+Shift+C to copy from VM');
+    return false;
+  }
 }
 
 const rfb = new RFB(screen, url, { credentials: {} });
@@ -137,6 +182,34 @@ rfb.addEventListener('disconnect', event => {
 });
 rfb.addEventListener('credentialsrequired', () => setStatus('Credentials required'));
 rfb.addEventListener('securityfailure', () => setStatus('Security failure'));
+rfb.addEventListener('clipboard', event => {
+  latestVmClipboardText = event.detail?.text || '';
+  if (latestVmClipboardText.length === 0) {
+    setClipboardHint('VM clipboard empty');
+    return;
+  }
+
+  void copyLatestVmClipboardToHost();
+});
+
+window.addEventListener('paste', event => {
+  const text = event.clipboardData?.getData('text/plain') || '';
+  if (text.length === 0) {
+    return;
+  }
+
+  event.preventDefault();
+  rfb.clipboardPasteFrom(text);
+  setClipboardHint('Pasted to VM');
+  rfb.focus();
+});
+
+window.addEventListener('keydown', event => {
+  if (event.ctrlKey && event.shiftKey && event.code === 'KeyC') {
+    event.preventDefault();
+    void copyLatestVmClipboardToHost();
+  }
+});
 
 window.addEventListener('load', () => {
   screen.focus();

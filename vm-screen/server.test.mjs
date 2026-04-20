@@ -74,7 +74,19 @@ test('serves the VM screen without external assets', async () => {
 
     const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
     assert.match(script, /import RFB from '\/novnc\/core\/rfb\.js'/);
+    assert.match(script, /rfb\.clipboardPasteFrom\(text\)/);
+    assert.match(script, /rfb\.addEventListener\('clipboard'/);
+    assert.match(script, /navigator\.clipboard\?\.writeText/);
+    assert.match(script, /window\.addEventListener\('paste'/);
+    assert.match(script, /event\.clipboardData\?\.getData\('text\/plain'\)/);
+    assert.match(script, /window\.addEventListener\('keydown'/);
+    assert.match(script, /event\.ctrlKey && event\.shiftKey && event\.code === 'KeyC'/);
     assert.doesNotMatch(script, /https?:\/\/(?!127\.0\.0\.1)/);
+
+    assert.match(html, /id="clipboard-hint"/);
+    assert.match(html, /Clipboard ready/);
+    assert.doesNotMatch(html, /Paste to VM/);
+    assert.doesNotMatch(html, /Copy from VM/);
 
     const rfb = await fetch(new URL('/novnc/core/rfb.js', url)).then(response => response.text());
     assert.equal(rfb, 'export default class RFB {}\n');

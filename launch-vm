@@ -389,6 +389,9 @@ if [[ "$QEMU_FRONTEND" != "spice" ]]; then
     qemu-system-x86_64 \
       "${qemu_base_args[@]}" \
       -display none \
+      -chardev qemu-vdagent,id=ol-c-vdagent,name=vdagent,clipboard=on \
+      -device virtio-serial-pci \
+      -device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0 \
       -vnc "127.0.0.1:${VNC_DISPLAY},websocket=127.0.0.1:${VNC_WEBSOCKET_PORT}" &
     QEMU_PID="$!"
 
@@ -406,8 +409,11 @@ if [[ "$QEMU_FRONTEND" != "spice" ]]; then
       fi
 
       if ! kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
-        cat "$VM_SCREEN_LOG" >&2 || true
         wait "$VM_SCREEN_PID" || true
+        if grep -q '^OLC_VM_SCREEN_URL ' "$VM_SCREEN_LOG"; then
+          break
+        fi
+        cat "$VM_SCREEN_LOG" >&2 || true
         fail "VM screen server exited before reporting its URL"
       fi
 

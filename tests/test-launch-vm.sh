@@ -302,6 +302,9 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$qemu_args" "-display none"
   assert_contains "$qemu_args" "-vnc 127.0.0.1:"
   assert_contains "$qemu_args" "websocket=127.0.0.1:"
+  assert_contains "$qemu_args" "-chardev qemu-vdagent,id=ol-c-vdagent,name=vdagent,clipboard=on"
+  assert_contains "$qemu_args" "-device virtio-serial-pci"
+  assert_contains "$qemu_args" "-device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0"
   [[ "$qemu_args" != *"-spice"* ]] || fail "browser frontend should not launch a SPICE server"
   [[ "$qemu_args" != *"spicevmc"* ]] || fail "browser frontend should not add the SPICE guest channel"
   assert_contains "$qemu_args" "-serial mon:stdio"
@@ -430,6 +433,8 @@ test_exits_when_qemu_exits_first() {
   viewer_args="$(cat "${CASE_TMP}/remote-viewer.args")"
   assert_contains "$output" "qemu frontend: spice"
   assert_contains "$qemu_args" "-display none"
+  assert_contains "$qemu_args" "-chardev spicevmc,id=ol-c-vdagent,name=vdagent"
+  [[ "$qemu_args" != *"qemu-vdagent"* ]] || fail "SPICE frontend should not use the browser VNC clipboard chardev"
   assert_contains "$viewer_args" "spice+unix://"
   [[ -f "${CASE_TMP}/remote-viewer.terminated" ]] || fail "expected QEMU exit to terminate remote-viewer"
   cleanup_case
