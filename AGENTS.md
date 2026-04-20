@@ -341,3 +341,8 @@ The following are intentionally not locked in yet:
 - Long-term VM backend choice outside these milestones
 
 These decisions should be made when a later milestone actually requires them.
+
+# Quality of life improvements
+
+These are non-priority tasks we can pick up any time as an option for the next thing to do, but are not pressing
+- Current select boxes like mute and light/dark mode should be toggle buttons with appropriate unicode icons
