@@ -129,6 +129,10 @@ test('/edit page serves the browser editor without adding preference endpoints',
     assert.equal(response.status, 200);
     assert.match(html, /<title>Editor<\/title>/);
     assert.match(html, /<script src="\/edit\/assets\/editor\.js"><\/script>/);
+    assert.match(html, /#app \{/);
+    assert.match(html, /overflow: hidden;/);
+    assert.match(html, /#status \{/);
+    assert.match(html, /white-space: nowrap;/);
 
     const asset = await fetch(`${baseUrl}/edit/assets/editor.js`);
     const js = await asset.text();
@@ -137,6 +141,8 @@ test('/edit page serves the browser editor without adding preference endpoints',
     assert.match(js, /\/api\/system\/events/);
     assert.match(js, /status\?\.terminal\?\.font/);
     assert.match(js, /status\?\.terminal\?\.colorScheme/);
+    assert.match(js, /maxHeight: "100%"/);
+    assert.match(js, /overflow: "auto"/);
     assert.doesNotMatch(js, /\/api\/system\/editor/);
   });
 });

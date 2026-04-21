@@ -124,13 +124,19 @@ function themeExtension(theme) {
     EditorView.theme({
       '&': {
         height: '100%',
+        maxHeight: '100%',
         color: theme.foreground,
         backgroundColor: theme.background,
         fontFamily: selectedFontFamily(),
+        overflow: 'hidden',
       },
       '.cm-scroller': {
         fontFamily: selectedFontFamily(),
         lineHeight: '1.45',
+        overflow: 'auto',
+      },
+      '.cm-gutter, .cm-content': {
+        minHeight: '100%',
       },
       '.cm-content': {
         caretColor: theme.accent,

@@ -22551,13 +22551,19 @@
       EditorView.theme({
         "&": {
           height: "100%",
+          maxHeight: "100%",
           color: theme2.foreground,
           backgroundColor: theme2.background,
-          fontFamily: selectedFontFamily()
+          fontFamily: selectedFontFamily(),
+          overflow: "hidden"
         },
         ".cm-scroller": {
           fontFamily: selectedFontFamily(),
-          lineHeight: "1.45"
+          lineHeight: "1.45",
+          overflow: "auto"
+        },
+        ".cm-gutter, .cm-content": {
+          minHeight: "100%"
         },
         ".cm-content": {
           caretColor: theme2.accent

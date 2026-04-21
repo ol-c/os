@@ -118,10 +118,13 @@ export function editorHtml() {
         grid-template-columns: minmax(15rem, 24rem) minmax(0, 1fr);
         width: 100%;
         height: 100%;
+        min-height: 0;
+        overflow: hidden;
       }
 
       #sidebar {
         min-width: 0;
+        min-height: 0;
         border-right: 1px solid var(--editor-line);
         background: var(--editor-panel);
         color: var(--editor-panel-fg);
@@ -204,6 +207,7 @@ export function editorHtml() {
         display: grid;
         grid-template-rows: auto minmax(0, 1fr) auto;
         background: var(--editor-bg);
+        overflow: hidden;
       }
 
       #filebar {
@@ -246,14 +250,21 @@ export function editorHtml() {
       #editor {
         min-width: 0;
         min-height: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
       }
 
       #status {
-        min-height: 2rem;
+        min-width: 0;
+        height: 2rem;
         padding: 0.4rem 0.75rem;
         border-top: 1px solid var(--editor-line);
         color: var(--editor-muted);
         font-size: 0.85rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       #status[data-error="true"] {
