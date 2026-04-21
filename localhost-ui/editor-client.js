@@ -1,5 +1,5 @@
 import { EditorView, basicSetup } from 'codemirror';
-import { EditorState, StateEffect } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import {
@@ -79,22 +79,21 @@ const terminalThemes = Object.freeze({
 });
 
 const nodes = {
+  buffers: document.getElementById('buffers'),
   cwd: document.getElementById('cwd'),
-  dirty: document.getElementById('dirty'),
   editor: document.getElementById('editor'),
-  filename: document.getElementById('filename'),
   filter: document.getElementById('filter'),
-  save: document.getElementById('save'),
-  status: document.getElementById('status'),
   tree: document.getElementById('tree'),
 };
 
 let currentDirectory = '/source';
-let currentFile = null;
-let lastSavedContent = '';
+let initialFile = null;
+let activePath = null;
+const openBuffers = new Map();
 let entries = [];
 let editorPreferences = { ...defaultTerminalPreferences };
 let appearanceMode = 'light';
+const themeCompartment = new Compartment();
 
 function parseInitialLocation() {
   const url = new URL(window.location.href);
@@ -104,7 +103,7 @@ function parseInitialLocation() {
     currentDirectory = root;
   }
   if (path) {
-    currentFile = path;
+    initialFile = path;
     currentDirectory = path.slice(0, path.lastIndexOf('/')) || '/';
   }
 }
@@ -174,12 +173,17 @@ function editorExtensions() {
   return [
     basicSetup,
     EditorView.updateListener.of(update => {
+      const activeBuffer = getActiveBuffer();
+      if (activeBuffer) {
+        activeBuffer.state = update.state;
+      }
       if (update.docChanged) {
         persistDraft();
-        renderDirtyState();
+        renderBuffers();
+        renderTree();
       }
     }),
-    ...themeExtension(selectedTheme()),
+    themeCompartment.of(themeExtension(selectedTheme())),
   ];
 }
 
@@ -192,44 +196,157 @@ const editorView = new EditorView({
 });
 
 function setStatus(message, { error = false } = {}) {
-  nodes.status.textContent = message;
-  nodes.status.dataset.error = error ? 'true' : 'false';
+  if (error) {
+    console.error(message);
+  } else {
+    console.log(message);
+  }
 }
 
 function draftKey(path) {
   return `olc-edit-draft:${path}`;
 }
 
+function getActiveBuffer() {
+  return activePath ? openBuffers.get(activePath) ?? null : null;
+}
+
 function currentContent() {
   return editorView.state.doc.toString();
 }
 
-function replaceDocument(content) {
-  editorView.dispatch({
-    changes: {
-      from: 0,
-      to: editorView.state.doc.length,
-      insert: content,
-    },
-  });
+function bufferContent(buffer) {
+  return buffer.state.doc.toString();
+}
+
+function bufferDirty(buffer) {
+  return bufferContent(buffer) !== buffer.savedContent;
+}
+
+function createBuffer({ path, name, content, mtimeMs }) {
+  const draft = window.localStorage.getItem(draftKey(path));
+  return {
+    path,
+    name,
+    mtimeMs,
+    savedContent: content,
+    restoredDraft: draft !== null,
+    state: EditorState.create({
+      doc: draft ?? content,
+      extensions: editorExtensions(),
+    }),
+  };
+}
+
+function switchToBuffer(path) {
+  const buffer = openBuffers.get(path);
+  if (!buffer) {
+    return;
+  }
+
+  activePath = path;
+  editorView.setState(buffer.state);
+  document.title = `${buffer.name} - Editor`;
+  renderBuffers();
+  renderTree();
+  editorView.focus();
+}
+
+function bufferStateLabel(buffer) {
+  if (buffer.path === activePath) {
+    return bufferDirty(buffer) ? '●' : '◆';
+  }
+  return bufferDirty(buffer) ? '○' : '◇';
+}
+
+function nextBufferPathAfter(path) {
+  const paths = Array.from(openBuffers.keys());
+  const index = paths.indexOf(path);
+  if (index === -1) {
+    return paths[0] ?? null;
+  }
+  return paths[index + 1] ?? paths[index - 1] ?? null;
+}
+
+function closeBuffer(path) {
+  const buffer = openBuffers.get(path);
+  if (!buffer) {
+    return;
+  }
+
+  if (bufferDirty(buffer) && !window.confirm(`Close ${buffer.name} with unsaved edits?`)) {
+    return;
+  }
+
+  const nextPath = path === activePath ? nextBufferPathAfter(path) : activePath;
+  openBuffers.delete(path);
+  if (path === activePath) {
+    activePath = null;
+    if (nextPath && openBuffers.has(nextPath)) {
+      switchToBuffer(nextPath);
+    } else {
+      editorView.setState(EditorState.create({
+        doc: '',
+        extensions: editorExtensions(),
+      }));
+      document.title = 'Editor';
+    }
+  }
+  renderBuffers();
+  renderTree();
+}
+
+function renderBuffers() {
+  const buffers = Array.from(openBuffers.values());
+  if (buffers.length === 0) {
+    nodes.buffers.replaceChildren();
+    return;
+  }
+
+  nodes.buffers.replaceChildren(...buffers.map(buffer => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'buffer-row';
+    row.dataset.active = buffer.path === activePath ? 'true' : 'false';
+    row.title = buffer.path;
+    row.setAttribute('role', 'listitem');
+    row.innerHTML = '<span class="buffer-name"></span><span class="buffer-state"></span><button class="buffer-close" type="button" title="Close">×</button>';
+    row.querySelector('.buffer-name').textContent = buffer.name;
+    row.querySelector('.buffer-state').title = buffer.path === activePath
+      ? bufferDirty(buffer) ? 'selected with unsaved edits' : 'selected'
+      : bufferDirty(buffer) ? 'open with unsaved edits' : 'open';
+    row.querySelector('.buffer-state').textContent = bufferStateLabel(buffer);
+    row.querySelector('.buffer-close').addEventListener('click', event => {
+      event.stopPropagation();
+      closeBuffer(buffer.path);
+    });
+    row.addEventListener('click', () => switchToBuffer(buffer.path));
+    return row;
+  }));
+}
+
+function reconfigureOpenBufferThemes() {
+  const effect = themeCompartment.reconfigure(themeExtension(selectedTheme()));
+  for (const buffer of openBuffers.values()) {
+    const transaction = buffer.state.update({ effects: effect });
+    buffer.state = transaction.state;
+  }
+  if (activePath) {
+    switchToBuffer(activePath);
+  }
 }
 
 function persistDraft() {
-  if (!currentFile) {
+  const activeBuffer = getActiveBuffer();
+  if (!activeBuffer) {
     return;
   }
   const content = currentContent();
-  if (content === lastSavedContent) {
-    window.localStorage.removeItem(draftKey(currentFile));
+  if (content === activeBuffer.savedContent) {
+    window.localStorage.removeItem(draftKey(activeBuffer.path));
     return;
   }
-  window.localStorage.setItem(draftKey(currentFile), content);
-}
-
-function renderDirtyState() {
-  const dirty = currentFile && currentContent() !== lastSavedContent;
-  nodes.dirty.textContent = dirty ? 'unsaved' : '';
-  nodes.save.disabled = !currentFile || !dirty;
+  window.localStorage.setItem(draftKey(activeBuffer.path), content);
 }
 
 function applyTheme() {
@@ -243,9 +360,7 @@ function applyTheme() {
   document.documentElement.style.setProperty('--editor-panel-fg', theme.panelForeground);
   document.documentElement.style.setProperty('--editor-error', theme.error);
   document.documentElement.style.setProperty('--editor-font', selectedFontFamily());
-  editorView.dispatch({
-    effects: StateEffect.reconfigure.of(editorExtensions()),
-  });
+  reconfigureOpenBufferThemes();
 }
 
 async function fetchJson(path, options = {}) {
@@ -265,13 +380,21 @@ function renderTree() {
   const filter = nodes.filter.value.trim().toLowerCase();
   const visible = entries.filter(entry => !filter || entry.name.toLowerCase().includes(filter));
   nodes.tree.replaceChildren(...visible.map(entry => {
+    const buffer = openBuffers.get(entry.path);
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'tree-row';
-    row.dataset.selected = entry.path === currentFile ? 'true' : 'false';
+    row.dataset.selected = entry.path === activePath ? 'true' : 'false';
     row.dataset.kind = entry.kind;
-    row.innerHTML = `<span>${entry.kind === 'directory' ? '/' : ''}</span><span class="tree-name"></span>`;
+    row.innerHTML = `<span>${entry.kind === 'directory' ? '/' : ''}</span><span class="tree-name"></span><span class="tree-state"></span>`;
     row.querySelector('.tree-name').textContent = entry.name;
+    const treeState = row.querySelector('.tree-state');
+    treeState.textContent = buffer ? bufferStateLabel(buffer) : '';
+    treeState.title = buffer
+      ? buffer.path === activePath
+        ? bufferDirty(buffer) ? 'selected with unsaved edits' : 'selected'
+        : bufferDirty(buffer) ? 'open with unsaved edits' : 'open'
+      : '';
     row.addEventListener('click', () => {
       if (entry.kind === 'directory') {
         void loadDirectory(entry.path);
@@ -302,23 +425,25 @@ async function loadDirectory(path) {
 
 async function openFile(path) {
   try {
+    if (openBuffers.has(path)) {
+      switchToBuffer(path);
+      setStatus(`Switched to ${path}`);
+      return;
+    }
+
     const body = await fetchJson(`/api/edit/file?path=${encodeURIComponent(path)}`);
-    currentFile = body.path;
-    lastSavedContent = body.content;
-    const draft = window.localStorage.getItem(draftKey(currentFile));
-    replaceDocument(draft ?? body.content);
-    nodes.filename.textContent = currentFile;
-    document.title = `${body.name} - Editor`;
-    renderDirtyState();
-    renderTree();
-    setStatus(draft === null ? `Opened ${currentFile}` : `Restored unsaved draft for ${currentFile}`);
+    const buffer = createBuffer(body);
+    openBuffers.set(buffer.path, buffer);
+    switchToBuffer(buffer.path);
+    setStatus(buffer.restoredDraft ? `Restored unsaved draft for ${buffer.path}` : `Opened ${buffer.path}`);
   } catch (error) {
     setStatus(error.message, { error: true });
   }
 }
 
 async function saveFile() {
-  if (!currentFile) {
+  const activeBuffer = getActiveBuffer();
+  if (!activeBuffer) {
     return;
   }
 
@@ -326,12 +451,14 @@ async function saveFile() {
     await fetchJson('/api/edit/file', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: currentFile, content: currentContent() }),
+      body: JSON.stringify({ path: activeBuffer.path, content: currentContent() }),
     });
-    lastSavedContent = currentContent();
-    window.localStorage.removeItem(draftKey(currentFile));
-    renderDirtyState();
-    setStatus(`Saved ${currentFile}`);
+    activeBuffer.savedContent = currentContent();
+    activeBuffer.state = editorView.state;
+    window.localStorage.removeItem(draftKey(activeBuffer.path));
+    renderBuffers();
+    renderTree();
+    setStatus(`Saved ${activeBuffer.path}`);
   } catch (error) {
     setStatus(error.message, { error: true });
   }
@@ -390,10 +517,15 @@ async function syncSystemStatus() {
 parseInitialLocation();
 applyTheme();
 nodes.filter.addEventListener('input', renderTree);
-nodes.save.addEventListener('click', () => void saveFile());
+window.addEventListener('keydown', event => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault();
+    void saveFile();
+  }
+});
 void syncSystemStatus();
 void loadDirectory(currentDirectory).then(() => {
-  if (currentFile) {
-    void openFile(currentFile);
+  if (initialFile) {
+    void openFile(initialFile);
   }
 });

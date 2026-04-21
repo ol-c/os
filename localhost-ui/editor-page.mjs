@@ -129,7 +129,7 @@ export function editorHtml() {
         background: var(--editor-panel);
         color: var(--editor-panel-fg);
         display: grid;
-        grid-template-rows: auto auto minmax(0, 1fr);
+        grid-template-rows: auto auto auto minmax(0, 1fr);
       }
 
       #toolbar {
@@ -164,6 +164,73 @@ export function editorHtml() {
         font-size: 0.85rem;
       }
 
+      #buffers {
+        display: grid;
+        gap: 0.25rem;
+        max-height: 32vh;
+        overflow: auto;
+        padding: 0.35rem;
+        border-bottom: 1px solid var(--editor-line);
+      }
+
+      .buffer-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 0.45rem;
+        width: 100%;
+        min-height: 1.85rem;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        font: 14px/1.2 var(--editor-font);
+        text-align: left;
+        padding: 0 0.4rem;
+      }
+
+      .buffer-row:hover,
+      .buffer-row:focus-visible {
+        background: var(--editor-line);
+        outline: 0;
+      }
+
+      .buffer-row[data-active="true"] {
+        background: var(--editor-accent);
+        color: var(--editor-bg);
+      }
+
+      .buffer-name,
+      .tree-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .buffer-state,
+      .tree-state {
+        font: 14px/1 var(--editor-font);
+        opacity: 0.82;
+        white-space: nowrap;
+      }
+
+      .buffer-close {
+        width: 1.5rem;
+        height: 1.5rem;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        font: 15px/1 system-ui, sans-serif;
+        padding: 0;
+      }
+
+      .buffer-close:hover,
+      .buffer-close:focus-visible {
+        background: color-mix(in srgb, currentColor 16%, transparent);
+        outline: 0;
+      }
+
       #tree {
         overflow: auto;
         padding: 0.35rem;
@@ -171,8 +238,9 @@ export function editorHtml() {
 
       .tree-row {
         display: grid;
-        grid-template-columns: 1.25rem minmax(0, 1fr);
+        grid-template-columns: 1.25rem minmax(0, 1fr) auto;
         align-items: center;
+        gap: 0.35rem;
         width: 100%;
         min-height: 1.85rem;
         border: 0;
@@ -195,56 +263,13 @@ export function editorHtml() {
         color: var(--editor-bg);
       }
 
-      .tree-name {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
       #main {
         min-width: 0;
         min-height: 0;
         display: grid;
-        grid-template-rows: auto minmax(0, 1fr) auto;
+        grid-template-rows: minmax(0, 1fr);
         background: var(--editor-bg);
         overflow: hidden;
-      }
-
-      #filebar {
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-        min-width: 0;
-        min-height: 2.75rem;
-        padding: 0.5rem 0.75rem;
-        border-bottom: 1px solid var(--editor-line);
-      }
-
-      #filename {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        flex: 1;
-      }
-
-      #dirty {
-        color: var(--editor-muted);
-        font-size: 0.85rem;
-      }
-
-      #save {
-        min-height: 2rem;
-        border: 1px solid var(--editor-line);
-        border-radius: 6px;
-        background: var(--editor-panel);
-        color: var(--editor-panel-fg);
-        font: 14px/1.2 system-ui, sans-serif;
-        padding: 0 0.65rem;
-      }
-
-      #save:disabled {
-        opacity: 0.6;
       }
 
       #editor {
@@ -253,22 +278,6 @@ export function editorHtml() {
         width: 100%;
         height: 100%;
         overflow: hidden;
-      }
-
-      #status {
-        min-width: 0;
-        height: 2rem;
-        padding: 0.4rem 0.75rem;
-        border-top: 1px solid var(--editor-line);
-        color: var(--editor-muted);
-        font-size: 0.85rem;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      #status[data-error="true"] {
-        color: var(--editor-error);
       }
 
       @media (max-width: 44rem) {
@@ -291,16 +300,11 @@ export function editorHtml() {
           <input id="filter" type="search" placeholder="Filter files" autocomplete="off" />
         </div>
         <div id="cwd"></div>
+        <div id="buffers" role="list" aria-label="Open files"></div>
         <div id="tree" role="listbox" aria-label="Files"></div>
       </aside>
       <main id="main">
-        <div id="filebar">
-          <div id="filename">No file selected</div>
-          <div id="dirty"></div>
-          <button id="save" type="button" disabled>Save</button>
-        </div>
         <div id="editor"></div>
-        <div id="status" role="status">Choose a file to edit.</div>
       </main>
     </div>
     <script src="/edit/assets/editor.js"></script>

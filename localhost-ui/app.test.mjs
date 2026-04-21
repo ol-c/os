@@ -128,11 +128,14 @@ test('/edit page serves the browser editor without adding preference endpoints',
 
     assert.equal(response.status, 200);
     assert.match(html, /<title>Editor<\/title>/);
+    assert.match(html, /id="buffers" role="list"/);
     assert.match(html, /<script src="\/edit\/assets\/editor\.js"><\/script>/);
     assert.match(html, /#app \{/);
     assert.match(html, /overflow: hidden;/);
-    assert.match(html, /#status \{/);
-    assert.match(html, /white-space: nowrap;/);
+    assert.doesNotMatch(html, /id="status"/);
+    assert.doesNotMatch(html, /#status \{/);
+    assert.doesNotMatch(html, /id="filebar"/);
+    assert.doesNotMatch(html, /id="save"/);
 
     const asset = await fetch(`${baseUrl}/edit/assets/editor.js`);
     const js = await asset.text();
@@ -143,6 +146,22 @@ test('/edit page serves the browser editor without adding preference endpoints',
     assert.match(js, /status\?\.terminal\?\.colorScheme/);
     assert.match(js, /maxHeight: "100%"/);
     assert.match(js, /overflow: "auto"/);
+    assert.match(js, /openBuffers = .*new Map/);
+    assert.match(js, /themeCompartment = new Compartment/);
+    assert.match(js, /setState/);
+    assert.match(js, /activeBuffer\.state = update\.state/);
+    assert.match(js, /bufferStateLabel/);
+    assert.match(js, /\\u25CF/);
+    assert.match(js, /\\u25C6/);
+    assert.match(js, /\\u25CB/);
+    assert.match(js, /\\u25C7/);
+    assert.match(js, /Close \$\{buffer\.name\} with unsaved edits\?/);
+    assert.match(js, /window\.confirm/);
+    assert.match(js, /buffer-close/);
+    assert.match(js, /\\xD7/);
+    assert.match(js, /event\.key\.toLowerCase\(\) === "s"/);
+    assert.match(js, /preventDefault/);
+    assert.doesNotMatch(js, /from: 0,\s*to: editorView\.state\.doc\.length,\s*insert: content/);
     assert.doesNotMatch(js, /\/api\/system\/editor/);
   });
 });
