@@ -346,3 +346,4 @@ These decisions should be made when a later milestone actually requires them.
 
 These are non-priority tasks we can pick up any time as an option for the next thing to do, but are not pressing
 - Current select boxes like mute and light/dark mode should be toggle buttons with appropriate unicode icons
+- highlight URL bar when opening new tab (this was a regression from default behavior)
