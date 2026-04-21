@@ -1,5 +1,6 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { createSessionLifecycle } from './session-lifecycle.mjs';
 import { terminalThemes } from './terminal-themes.mjs';
 import {
@@ -49,6 +50,7 @@ const terminal = new Terminal({
   theme: selectedTerminalTheme(),
 });
 const fitAddon = new FitAddon();
+const unicode11Addon = new Unicode11Addon();
 const sessionLifecycle = createSessionLifecycle({
   windowRef: window,
   terminalNode,
@@ -70,6 +72,8 @@ let pageUnloading = false;
 
 class TerminalSessionEndedError extends Error {}
 
+terminal.loadAddon(unicode11Addon);
+terminal.unicode.activeVersion = '11';
 terminal.loadAddon(fitAddon);
 terminal.open(terminalNode);
 applyPreferredTerminalOptions();
