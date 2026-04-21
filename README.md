@@ -67,6 +67,21 @@ That rebuilds `dist/terminal.js` as `src` changes. The rebuilt assets are used b
 
 The terminal service is intentionally stable and separate from the reloadable UI preview service. `https://localhost/terminal` remains the user-facing entry point, but the terminal page loads assets and connects its backend websocket directly to the stable terminal backend on `https://localhost:9443`. Existing terminal tabs keep running while `ol-c-ui` restarts. Rebuilt terminal client assets apply to newly opened `/terminal` tabs after the VM image or stable terminal service is updated. Firefox binary and browser chrome package changes still use the intentional packaged workflow below.
 
+The guest also exposes a basic browser text editor at:
+
+```sh
+https://localhost/edit
+```
+
+From `https://localhost/terminal`, run:
+
+```sh
+edit
+edit localhost-ui/server.mjs
+```
+
+`edit` opens a new `/edit` browser tab rooted at the current directory. `edit <path>` opens that file, resolving relative paths from the current directory. The editor uses CodeMirror 6, stores unsaved drafts in browser local storage, reads and writes with the demo user's filesystem permissions, and follows the existing terminal font/color-scheme settings plus the global light/dark appearance mode. It intentionally reuses the terminal settings contract rather than adding separate editor preferences.
+
 The guest includes a `codex` command for in-VM development. From `https://localhost/terminal`, run:
 
 ```sh

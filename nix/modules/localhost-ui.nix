@@ -118,6 +118,11 @@ in {
 
       serviceConfig = {
         ExecStart = "${pkgs.nodejs}/bin/node ${../../localhost-ui}/dev-supervisor.mjs";
+        User = "demo";
+        Group = "users";
+        AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
+        CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
+        NoNewPrivileges = true;
         Restart = "on-failure";
         RestartSec = "1s";
       };

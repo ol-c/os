@@ -19,6 +19,8 @@ LOCALHOST_UI_DEV_SUPERVISOR="${ROOT_DIR}/localhost-ui/dev-supervisor.mjs"
 LOCALHOST_UI_TERMINAL_APP="${ROOT_DIR}/localhost-ui/terminal-app.mjs"
 LOCALHOST_UI_TERMINAL_SERVER="${ROOT_DIR}/localhost-ui/terminal-server.mjs"
 LOCALHOST_UI_APP="${ROOT_DIR}/localhost-ui/app.mjs"
+LOCALHOST_UI_EDITOR_CLIENT="${ROOT_DIR}/localhost-ui/editor-client.js"
+LOCALHOST_UI_EDITOR_PAGE="${ROOT_DIR}/localhost-ui/editor-page.mjs"
 LOCALHOST_UI_SYSTEM_CONTROLS="${ROOT_DIR}/localhost-ui/system-controls.mjs"
 LOCALHOST_UI_SYSTEM_PAGE="${ROOT_DIR}/localhost-ui/system-page.mjs"
 LOCALHOST_UI_TERMINAL_OPTIONS="${ROOT_DIR}/localhost-ui/terminal-options.mjs"
@@ -216,6 +218,8 @@ test_vm_runs_firefox_borderless_and_maximized() {
       "${LOCALHOST_UI_TERMINAL_SERVER}" \
       "${LOCALHOST_UI_SERVER}" \
       "${LOCALHOST_UI_APP}" \
+      "${LOCALHOST_UI_EDITOR_CLIENT}" \
+      "${LOCALHOST_UI_EDITOR_PAGE}" \
       "${LOCALHOST_UI_SYSTEM_CONTROLS}" \
       "${LOCALHOST_UI_TERMINAL_OPTIONS}" \
       "${LOCALHOST_UI_SYSTEM_PAGE}" \
@@ -274,6 +278,8 @@ test_vm_runs_firefox_borderless_and_maximized() {
   [[ "$contents" == *"security.sudo.wheelNeedsPassword = false;"* ]] || fail "expected VM demo user to have passwordless sudo for development"
   [[ "$contents" == *"OLC_LOCALHOST_UI_OK"* ]] || fail "expected VM to define an ol-c localhost UI success marker"
   [[ "$contents" == *"dev-supervisor.mjs"* ]] || fail "expected VM localhost UI service to run through the source preview supervisor"
+  [[ "$contents" == *"User = \"demo\";"* ]] || fail "expected VM localhost UI service to run with demo-user permissions"
+  [[ "$contents" == *"CAP_NET_BIND_SERVICE"* ]] || fail "expected VM localhost UI service to bind port 443 without root filesystem permissions"
   [[ "$contents" == *"systemd.services.ol-c-terminal"* ]] || fail "expected VM to run a stable terminal service"
   [[ "$contents" == *"terminal-server.mjs"* ]] || fail "expected VM stable terminal service to use the terminal server entrypoint"
   [[ "$contents" == *"OLC_TERMINAL_SERVER_OK"* ]] || fail "expected VM stable terminal service to expose a readiness marker"
@@ -299,11 +305,20 @@ test_vm_runs_firefox_borderless_and_maximized() {
   [[ "$contents" == *"'/api/system/volume'"* ]] || fail "expected VM localhost UI to expose the volume command endpoint"
   [[ "$contents" == *"'/api/system/appearance'"* ]] || fail "expected VM localhost UI to expose the appearance command endpoint"
   [[ "$contents" == *"'/api/system/terminal'"* ]] || fail "expected VM localhost UI to expose the terminal preferences command endpoint"
+  [[ "$contents" != *"'/api/system/editor'"* ]] || fail "expected VM editor to reuse terminal preferences instead of adding an editor preference endpoint"
+  [[ "$contents" == *"reqUrl.pathname === '/edit'"* ]] || fail "expected VM localhost UI to expose the browser editor route"
+  [[ "$contents" == *"reqUrl.pathname.startsWith('/api/edit/')"* ]] || fail "expected VM localhost UI to expose editor file API routes"
+  [[ "$contents" == *"handleEditorApi(req, res, reqUrl)"* ]] || fail "expected VM localhost UI to delegate editor file API requests"
+  [[ "$contents" == *"Store unsaved draft"* || "$contents" == *"window.localStorage.setItem(draftKey(currentFile), content)"* ]] || fail "expected VM editor to keep unsaved drafts in browser local storage"
+  [[ "$contents" == *"status?.terminal?.font"* && "$contents" == *"status?.terminal?.colorScheme"* ]] || fail "expected VM editor to reuse terminal font and color scheme settings"
+  [[ "$contents" == *"status?.appearance?.mode"* ]] || fail "expected VM editor to follow the global light/dark appearance mode"
+  [[ "$contents" == *"from 'codemirror'"* ]] || fail "expected VM editor to use CodeMirror 6"
   [[ "$contents" == *"input id=\"volume-control\" type=\"range\""* ]] || fail "expected VM localhost UI to render an inline volume slider"
   [[ "$contents" == *"select id=\"appearance-control\""* ]] || fail "expected VM localhost UI to render an inline appearance picker"
   [[ "$contents" == *"select id=\"terminal-font-control\""* ]] || fail "expected VM localhost UI to render an inline terminal font picker"
   [[ "$contents" == *"select id=\"terminal-color-scheme-control\""* ]] || fail "expected VM localhost UI to render an inline terminal color scheme picker"
   [[ "$contents" == *"button id=\"open-terminal-control\" type=\"button\">Open terminal</button>"* ]] || fail "expected VM localhost UI to render the terminal launcher as a button"
+  [[ "$contents" == *"button id=\"open-editor-control\" type=\"button\">Open editor</button>"* ]] || fail "expected VM localhost UI to render the editor launcher as a button"
   [[ "$contents" == *"terminalFontChoices"* && "$contents" == *"DejaVu Sans Mono"* && "$contents" == *"Inconsolata"* ]] || fail "expected VM localhost UI to publish terminal font choices"
   [[ "$contents" == *"\"DejaVu Sans Mono\", \"DejaVu Sans Mono Book\", monospace"* && "$contents" == *"Inconsolata, \"DejaVu Sans Mono\", monospace"* ]] || fail "expected VM terminal font stacks to keep a generic monospace fallback"
   [[ "$contents" == *"terminalColorSchemeChoices"* && "$contents" == *"Solarized"* && "$contents" == *"Tango"* ]] || fail "expected VM localhost UI to publish terminal color scheme choices"
@@ -321,6 +336,7 @@ test_vm_runs_firefox_borderless_and_maximized() {
   [[ "$contents" == *"Implementation: "* ]] || fail "expected VM localhost UI to label facility implementation status"
   [[ "$contents" != *"Open terminal</a>"* ]] || fail "expected VM localhost UI not to render the terminal launcher as a link"
   [[ "$contents" == *"window.open('/terminal', '_blank')"* ]] || fail "expected VM localhost UI to open terminal sessions in closable tabs"
+  [[ "$contents" == *"window.open('/edit?root=/source', '_blank')"* ]] || fail "expected VM localhost UI to open the editor in a closable tab"
   [[ "$contents" == *"reqUrl.pathname.startsWith('/terminal')"* ]] || fail "expected VM localhost UI to proxy initial /terminal page requests"
   [[ "$contents" == *"proxyTerminalRequest(req, res)"* ]] || fail "expected VM localhost UI to delegate terminal requests to the stable service"
   [[ "$contents" != *"connection: 'upgrade'"* ]] || fail "expected VM localhost UI not to proxy terminal websocket upgrades"
@@ -409,6 +425,11 @@ test_vm_runs_firefox_borderless_and_maximized() {
   [[ "$contents" == *"olc_command_title()"* ]] || fail "expected VM shell to define a command title helper"
   [[ "$contents" == *"PROMPT_COMMAND='olc_prompt_title'"* ]] || fail "expected VM shell prompt to report the current directory as the terminal title"
   [[ "$contents" == *"trap 'olc_command_title' DEBUG"* ]] || fail "expected VM shell to report the executing command as the terminal title"
+  [[ "$contents" == *"edit() {"* ]] || fail "expected VM shell to define an edit helper"
+  [[ "$contents" == *"new URL(\"https://localhost/edit\")"* ]] || fail "expected VM edit helper to open the localhost editor"
+  [[ "$contents" == *"url.searchParams.set(\"root\", root)"* ]] || fail "expected VM edit helper to root the editor at the current directory"
+  [[ "$contents" == *"path.resolve(root, target)"* ]] || fail "expected VM edit helper to resolve edit filename arguments from the current directory"
+  [[ "$contents" == *"firefox --new-tab \"\$url\""* ]] || fail "expected VM edit helper to open the editor in Firefox"
   [[ "$contents" == *"printf '\\033]0;%s\\007' \"\$title\""* ]] || fail "expected VM shell to emit standard OSC title sequences"
   [[ "$contents" == *"local dir=\"''\${PWD/#\$HOME/~}\""* ]] || fail "expected VM shell title to shorten the home directory to tilde"
   [[ "$contents" == *"PS1='[\\u@\\h:\\w]\\$ '"* ]] || fail "expected VM to use a single-line bash prompt without the extra blank line"

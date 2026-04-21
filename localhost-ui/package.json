@@ -1,0 +1,19 @@
+{
+  "name": "ol-c-localhost-ui",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build:editor": "esbuild editor-client.js --bundle --format=iife --target=es2022 --platform=browser --outfile=editor-client.bundle.js",
+    "test": "node --test *.test.mjs"
+  },
+  "dependencies": {
+    "@codemirror/language": "^6.11.3",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.38.8",
+    "@lezer/highlight": "^1.2.3",
+    "codemirror": "^6.0.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.3"
+  }
+}

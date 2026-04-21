@@ -162,6 +162,14 @@ Milestone 6 decisions:
 - Provide a mechanism to populate the in-VM Firefox checkout from the pinned nixpkgs Firefox source and to reuse or prebuild artifacts where practical.
 - Treat the in-VM Firefox source loop as a proof and development loop, not as the distro packaging source of truth.
 - After a Firefox source behavior change is validated in the VM, refresh the repo patch artifact and run the packaged Nix gates intentionally.
+- Add `https://localhost/edit` as a basic browser text editor proof for in-VM development.
+- Use CodeMirror 6 for the browser editor.
+- Allow the editor to browse, open, edit, and save local files using the demo user's filesystem permissions; permission failures should be visible in the browser.
+- Allow `edit` from an in-browser terminal to open a new `/edit` tab rooted at the current directory, and `edit <path>` to open that file.
+- Store unsaved editor drafts in browser local storage.
+- Start with a simple file tree while keeping a broot-inspired file browser interaction model as the intended direction.
+- Reuse the existing terminal font and color scheme settings for the editor; do not add separate editor preference endpoints.
+- Make editor light and dark rendering follow the global appearance mode, using the active terminal color scheme's light or dark variant.
 - Rely on nixpkgs as the primary Firefox packaging and security-update source for now.
 - Keep newer-than-nixpkgs Firefox support as a future escape hatch only if nixpkgs update latency becomes unacceptable.
 - Do not make ol-c responsible for packaging a newer Firefox than nixpkgs as part of this milestone.
@@ -174,6 +182,9 @@ Success criteria:
 - The workflow supports fast iteration without undermining reproducibility.
 - The in-VM Firefox source loop records the exact Firefox and nixpkgs identity being tested.
 - A developer can validate Firefox source-tree behavior in the guest before refreshing `patches/firefox/0001-close-last-tab-to-localhost.patch`.
+- A developer can use `https://localhost/edit` to browse files, edit a writable file, save it, and recover unsaved drafts after a refresh.
+- A developer can launch the editor from the browser terminal with `edit` or `edit <path>`.
+- The editor follows the same terminal font, color scheme, and global light or dark appearance settings as the terminal.
 - The final packaged build path remains the gate for what the distro will ship.
 - The normal host launch path should use a browser tab as the VM display by default, using local-only QEMU VNC WebSocket plus pinned noVNC assets, while keeping SPICE/SDL/GTK as explicit development fallbacks.
 
@@ -183,6 +194,7 @@ Examples of things that may belong here:
 - Overlays or snapshots
 - Better launch scripts
 - Efficiently launching a Firefox source-tree build from inside the VM to test patch edits before refreshing `patches/firefox/0001-close-last-tab-to-localhost.patch`
+- Browser text editor at `https://localhost/edit` for in-VM file editing, launched from the terminal with `edit`
 - Updating the pinned NixOS branch as part of keeping development and security assumptions honest
 - Recording Firefox source identity and build-output identity for source-tree test runs
 - Future explicit support for a repo-declared newer Firefox track, if nixpkgs update latency proves unacceptable
@@ -325,6 +337,7 @@ Implementation status:
 - [ ] Move the repo from unsupported `nixos-24.11` to a currently supported NixOS branch and verify the VM still builds and boots.
 - [x] Make the normal host VM launch use a browser tab as the default screen while keeping SPICE, SDL, and GTK available as explicit fallbacks.
 - [x] Prove the first nested in-VM development launch: ol-c can run a child VM from the in-browser terminal using nested KVM, `/vm-images`, and the browser-tab screen flow.
+- [x] Add a basic localhost text editor at `https://localhost/edit` with terminal launch integration and terminal setting reuse.
 - [ ] Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
 
 Known bugs to track:
@@ -347,3 +360,4 @@ These decisions should be made when a later milestone actually requires them.
 These are non-priority tasks we can pick up any time as an option for the next thing to do, but are not pressing
 - Current select boxes like mute and light/dark mode should be toggle buttons with appropriate unicode icons
 - highlight URL bar when opening new tab (this was a regression from default behavior)
+- Ctrl+S crashes firefox

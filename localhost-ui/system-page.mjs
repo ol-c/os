@@ -272,6 +272,7 @@ export function rootHtml() {
         </p>
         <p>
           <button id="open-terminal-control" type="button">Open terminal</button>
+          <button id="open-editor-control" type="button">Open editor</button>
         </p>
         <p id="terminal-implementation" class="line"></p>
       </section>
@@ -327,6 +328,7 @@ export function rootHtml() {
         terminalFont: document.getElementById('terminal-font-control'),
         terminalColorScheme: document.getElementById('terminal-color-scheme-control'),
         openTerminal: document.getElementById('open-terminal-control'),
+        openEditor: document.getElementById('open-editor-control'),
         terminalError: document.getElementById('terminal-error'),
         terminalImplementation: document.getElementById('terminal-implementation'),
         bluetoothStatus: document.getElementById('bluetooth-status'),
@@ -563,6 +565,9 @@ export function rootHtml() {
       });
       controls.openTerminal.addEventListener('click', () => {
         window.open('/terminal', '_blank');
+      });
+      controls.openEditor.addEventListener('click', () => {
+        window.open('/edit?root=/source', '_blank');
       });
       controls.bluetooth.addEventListener('change', () => {
         postCommand('/api/system/bluetooth', { enabled: controls.bluetooth.value === 'true' }, controls.bluetoothError, controls.bluetooth);

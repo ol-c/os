@@ -1,7 +1,14 @@
 import http from 'node:http';
 import https from 'node:https';
+import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { editorHtml, handleEditorApi } from './editor-page.mjs';
 import { rootHtml } from './system-page.mjs';
+
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const editorClientJs = readFileSync(join(moduleDir, 'editor-client.bundle.js'), 'utf8');
 
 const commandPaths = new Map([
   [ '/api/system/network', 'network' ],
@@ -210,6 +217,29 @@ export function createOlcApp(options) {
 
     if (reqUrl.pathname.startsWith('/terminal')) {
       proxyTerminalRequest(req, res);
+      return;
+    }
+
+    if (reqUrl.pathname === '/edit') {
+      setNoStore(res);
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+      });
+      res.end(editorHtml());
+      return;
+    }
+
+    if (reqUrl.pathname === '/edit/assets/editor.js') {
+      setNoStore(res);
+      res.writeHead(200, {
+        'content-type': 'text/javascript; charset=utf-8',
+      });
+      res.end(editorClientJs);
+      return;
+    }
+
+    if (reqUrl.pathname.startsWith('/api/edit/')) {
+      await handleEditorApi(req, res, reqUrl);
       return;
     }
 

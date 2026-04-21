@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 import { createOlcApp } from './app.mjs';
 import { createDefaultSystemStatus, createFakeSystemAdapter, createSystemControls } from './system-controls.mjs';
@@ -107,12 +110,80 @@ test('root page exposes the system document and inline controls', async () => {
     assert.match(html, /id="terminal-font-control"/);
     assert.match(html, /id="terminal-color-scheme-control"/);
     assert.match(html, /id="open-terminal-control" type="button">Open terminal<\/button>/);
+    assert.match(html, /id="open-editor-control" type="button">Open editor<\/button>/);
     assert.doesNotMatch(html, /<a href="\/terminal"/);
     assert.match(html, /postCommand\('\/api\/system\/terminal'/);
     assert.match(html, /controls\.openTerminal\.addEventListener\('click'/);
+    assert.match(html, /window\.open\('\/edit\?root=\/source', '_blank'\)/);
     assert.match(html, /WebChannelMessageToChrome/);
     assert.match(html, /olc-appearance/);
     assert.match(html, /setAppearance/);
+  });
+});
+
+test('/edit page serves the browser editor without adding preference endpoints', async () => {
+  await withServer(async baseUrl => {
+    const response = await fetch(`${baseUrl}/edit`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /<title>Editor<\/title>/);
+    assert.match(html, /<script src="\/edit\/assets\/editor\.js"><\/script>/);
+
+    const asset = await fetch(`${baseUrl}/edit/assets/editor.js`);
+    const js = await asset.text();
+    assert.equal(asset.status, 200);
+    assert.match(js, /codemirror/);
+    assert.match(js, /\/api\/system\/events/);
+    assert.match(js, /status\?\.terminal\?\.font/);
+    assert.match(js, /status\?\.terminal\?\.colorScheme/);
+    assert.doesNotMatch(js, /\/api\/system\/editor/);
+  });
+});
+
+test('editor API lists, reads, and saves demo-user visible files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'olc-edit-'));
+  const file = join(root, 'note.txt');
+  await writeFile(file, 'first draft', 'utf8');
+
+  await withServer(async baseUrl => {
+    const listed = await requestJson(baseUrl, `/api/edit/list?path=${encodeURIComponent(root)}`);
+    assert.equal(listed.response.status, 200);
+    assert.equal(listed.body.path, root);
+    assert.deepEqual(listed.body.entries.map(entry => [entry.name, entry.kind]), [
+      ['note.txt', 'file'],
+    ]);
+
+    const read = await requestJson(baseUrl, `/api/edit/file?path=${encodeURIComponent(file)}`);
+    assert.equal(read.response.status, 200);
+    assert.equal(read.body.content, 'first draft');
+
+    const saved = await requestJson(baseUrl, '/api/edit/file', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: file, content: 'saved draft' }),
+    });
+    assert.equal(saved.response.status, 200);
+    assert.equal(await readFile(file, 'utf8'), 'saved draft');
+  });
+});
+
+test('editor API rejects malformed paths and wrong methods', async () => {
+  await withServer(async baseUrl => {
+    const relativeList = await requestJson(baseUrl, '/api/edit/list?path=relative');
+    assert.equal(relativeList.response.status, 400);
+    assert.match(relativeList.body.error, /absolute/);
+
+    const missingContent = await requestJson(baseUrl, '/api/edit/file', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: '/tmp/olc-edit-missing-content' }),
+    });
+    assert.equal(missingContent.response.status, 400);
+    assert.match(missingContent.body.error, /content must be a string/);
+
+    const wrongMethod = await fetch(`${baseUrl}/api/edit/list`, { method: 'POST' });
+    assert.equal(wrongMethod.status, 405);
   });
 });
 
