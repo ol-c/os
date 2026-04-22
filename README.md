@@ -23,6 +23,32 @@ Build and launch it with:
 ./launch-vm
 ```
 
+## Firefox Build Paths
+
+ol-c uses pinned nixpkgs Firefox for both browser package paths. We do not carry a separate Firefox source or version.
+
+| Path | Use it for | What it proves |
+| --- | --- | --- |
+| `.#firefox-localhost` | Normal VM and packaged browser checks | The guest can run the patched browser chrome used by `.#ol-c-image` without a full Firefox source compile. |
+| `.#firefox-localhost-source` | Final source-build compatibility gate | The repo patch still applies through the pinned nixpkgs Firefox source build pipeline. |
+
+Normal VM validation:
+
+```sh
+nix build .#firefox-localhost --print-build-logs
+./build-vm
+./launch-vm
+```
+
+Heavy source-build validation:
+
+```sh
+./build-firefox-source-remote
+nix build .#firefox-localhost-source --print-build-logs
+```
+
+The source gate is intentionally slower. It appends the repo patch to pinned nixpkgs `firefox-unwrapped` before Firefox is built. The remote wrapper moves that heavy compile off the local machine and imports the resulting Nix closure; the follow-up local `nix build` should reuse that imported result for the same repo state.
+
 `launch-vm` uses a browser tab as the default VM display. QEMU exposes the VM display through a local-only VNC WebSocket endpoint, and a small repo-owned viewer page uses pinned noVNC assets to render the VM screen in the browser. It also mounts this repo read-write inside the guest at `/source` using QEMU virtiofs, so the in-browser terminal can edit the same source tree that is visible on the host.
 
 The browser display path uses the repo-pinned patched QEMU package exposed as `.#qemu-olc`. The patch preserves horizontal wheel events from noVNC/QEMU VNC and carries them through the USB HID tablet path as AC Pan events. The browser frontend keeps QEMU vdagent clipboard support enabled, disables vdagent mouse forwarding, and disables legacy PS/2/vmport input so VNC pointer input reaches the patched USB tablet path. This build is separate from the VM image and can be built explicitly:
@@ -62,8 +88,6 @@ The SDL and GTK scaling knobs are also overrideable for direct-display debugging
 OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED=0 ./launch-vm
 OLC_QEMU_GDK_SCALE=2 OLC_QEMU_GDK_DPI_SCALE=0.5 ./launch-vm
 ```
-
-Firefox in the guest is packaged from pinned nixpkgs with a repo-local browser frontend patch. The normal VM uses the fast packaged target, which repacks the pinned nixpkgs Firefox browser chrome assets instead of recompiling Firefox for every JavaScript-only ol-c shell edit.
 
 ## Milestone 4 In-VM Development
 
@@ -213,11 +237,11 @@ bash tests/test-launch-vm.sh
 
 ## Firefox Patch Workflow
 
-The repo has three distinct Firefox gates. Use them for different purposes.
+The build-path roles are summarized in [Firefox Build Paths](#firefox-build-paths). Use this section for the patch-specific workflow details.
 
 ### 1. Fast packaged path
 
-Use this when you need a deterministic Nix package and VM image for browser frontend edits without waiting for a full Firefox source compile.
+Use this after browser frontend patch edits to package and boot the normal VM path.
 
 ```sh
 git add README.md flake.nix nix/firefox-localhost-fast.nix nix/modules/graphical-session.nix tests/test-build-vm.sh patches/firefox/0001-close-last-tab-to-localhost.patch AGENTS.md
@@ -227,7 +251,7 @@ nix build .#firefox-localhost --print-build-logs
 
 Then validate inside the VM by closing the final Firefox tab with the tab close button or `Ctrl+W` and confirming that Firefox stays open on `https://localhost`.
 
-`.#firefox-localhost` is the default packaged target used by `.#ol-c-image`. It starts from pinned nixpkgs Firefox and applies the runtime browser chrome hunks from `patches/firefox/0001-close-last-tab-to-localhost.patch` into the Firefox `omni.ja` archives that contain the matching runtime assets. The rewritten jars are normal zip-format jars for fast local packaging. The fast package removes packaged startup/script caches, writes Firefox `.purgecaches` markers, and the VM launches Firefox with `MOZ_PURGE_CACHES=1` so patched chrome JavaScript is loaded instead of stale bytecode. Use the full source compatibility path when optimized Firefox packaging behavior itself matters. The fast path is intentionally limited to browser frontend assets such as `browser-commands.js`, `browser.js`, and `tabbrowser.js`.
+`.#firefox-localhost` is the default packaged target used by `.#ol-c-image`. It applies the runtime browser chrome hunks from `patches/firefox/0001-close-last-tab-to-localhost.patch` into the Firefox `omni.ja` archives that contain the matching runtime assets. This fast path is intentionally limited to browser frontend assets such as `browser-commands.js`, `browser.js`, and `tabbrowser.js`.
 
 The overlay rebuilds both `firefox-unwrapped` and the `firefox` wrapper. This matters because the wrapper records the unwrapped store path it launches; overriding only `firefox-unwrapped` can leave the visible browser process running the original unwrapped Firefox.
 
@@ -243,13 +267,14 @@ cat /run/current-system/sw/lib/firefox/ol-c-localhost-patch.txt
 
 ### 2. Full source compatibility path
 
-Use this when you need to prove that the repo-local Firefox patch still applies through the nixpkgs Firefox source build pipeline.
+Use this when the patch or Firefox version changes.
 
 ```sh
+./build-firefox-source-remote
 nix build .#firefox-localhost-source --print-build-logs
 ```
 
-This is slower because it appends the repo patch to `firefox-unwrapped` before Firefox is built. Keep it as the final compatibility gate for Firefox updates, source patch drift, and any patch that touches C++, Rust, WebIDL, build files, generated interfaces, preprocessing-sensitive files, or test registration.
+Keep this as the final compatibility gate for Firefox updates, source patch drift, and any patch that touches C++, Rust, WebIDL, build files, generated interfaces, preprocessing-sensitive files, or test registration.
 
 ### 3. Fast Firefox source iteration
 
@@ -261,12 +286,6 @@ The intended inner loop is:
 - validate the behavior change in that faster loop first
 - once the behavior is correct, export or refresh the repo patch at `patches/firefox/0001-close-last-tab-to-localhost.patch`
 - rerun the fast packaged path above, then use the full source compatibility path as the source-build gate
-
-The next Firefox packaging proof is no longer the immediate next milestone task. The current next milestone proof is the browser terminal at `https://localhost/terminal`. After that lands, the same split still applies: validate Firefox source changes in the fast loop first, then use the packaged build as the final gate.
-
-The next Firefox behavior target after the terminal proof is:
-- opening a new tab should load `https://localhost/`
-- closing the final tab must continue to reopen `https://localhost`
 
 The new-tab behavior is additive. It should not replace or weaken the existing last-tab reopen behavior.
 

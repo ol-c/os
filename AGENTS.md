@@ -136,7 +136,8 @@ Milestone 9 decisions:
 - Treat Firefox self-update as incompatible with the ol-c update model; Firefox updates should arrive through ol-c system updates.
 - Use nixpkgs/NixOS as the primary source for Firefox security updates unless concrete latency problems justify carrying a repo-declared newer Firefox package track.
 - Users should not compile Firefox locally as part of normal updates.
-- ol-c should publish prebuilt, signed or otherwise verified update artifacts before offering an update to users.
+- ol-c should consume prebuilt, signed or otherwise verified update artifacts before offering an update to users.
+- Depend on the release artifact and binary distribution proofs before treating browser-facing updates as a user-ready product path.
 - The browser System page is the intended product surface for update availability, install actions, update progress, reboot prompts, and rollback.
 - Rollback should use NixOS generations rather than browser-level self-update state.
 - The update path should make patch drift visible early: if an upstream Firefox update breaks the ol-c Firefox patch, that should block publication in CI/release work rather than silently holding users on an old browser.
@@ -151,6 +152,51 @@ Success criteria:
 
 Question this milestone answers:
 - Can ol-c keep browser and OS security updates user-friendly, timely, and reversible?
+
+## Milestone 10: Prebuilt Release Artifacts
+
+Goal:
+- Produce ol-c release artifacts that users can install or boot without running `nix build`.
+
+Success criteria:
+- A trusted local or CI builder can produce the current `.#ol-c-image` release artifact from a validated repo state.
+- The release output records the ol-c revision, nixpkgs revision, Firefox version, image output path, artifact hashes, and build logs.
+- The release path proves the Firefox patch gates and VM boot gate before an artifact is considered publishable.
+- The release artifact can be consumed by a downstream install or boot workflow without rebuilding Firefox or the OS on the user's machine.
+- Automated tests cover the release manifest contract with deterministic local artifacts or fakes.
+
+Question this milestone answers:
+- Can ol-c turn a validated repo state into a reusable downstream install artifact?
+
+## Milestone 11: Verified Binary Distribution
+
+Goal:
+- Publish verifiable ol-c artifacts and Nix closures so user machines download trusted binaries instead of compiling Firefox or the OS.
+
+Success criteria:
+- Published artifacts include hashes and signatures or an equivalent verification mechanism.
+- A fresh machine can verify artifact provenance before install or update.
+- Missing, mismatched, or untrusted verification data prevents install or update.
+- The distribution path can provide the Nix closure needed by the release artifact without requiring local source builds.
+- Automated tests cover verification success and failure cases with deterministic local fixtures.
+
+Question this milestone answers:
+- Can users safely consume ol-c builds without trusting local compilation?
+
+## Milestone 12: Installer and First Install Path
+
+Goal:
+- Provide a first install flow that consumes a prebuilt verified ol-c release artifact.
+
+Success criteria:
+- A user can install or boot ol-c from a published release artifact without invoking Nix commands.
+- The first install path does not compile Firefox or other large OS packages on the user's machine.
+- Installed machine state remains compatible with first-time setup and persistence.
+- The installer records enough version information to explain what ol-c revision, nixpkgs revision, and Firefox version were installed.
+- Automated tests cover the installer contract using local fake artifacts or controlled test hooks.
+
+Question this milestone answers:
+- Can a non-developer get ol-c onto hardware or a VM quickly and repeatably?
 
 # Current Capabilities
 
@@ -185,7 +231,7 @@ Supported-branch validation next steps:
 - Run `./build-vm` as the minimum real Nix build gate for the NixOS branch update.
   - Current Firefox status: the patched packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`; the store output includes the ol-c localhost patch marker for the patched runtime assets.
 - Run `./launch-vm` as the VM smoke proof that the rebuilt image still boots into the graphical browser surface.
-- Run `nix build .#firefox-localhost-source --print-build-logs` before considering Firefox patch compatibility proven against the updated nixpkgs Firefox source build path.
+- Run `./build-firefox-source-remote`, then `nix build .#firefox-localhost-source --print-build-logs` after fetching the remote result, before considering Firefox patch compatibility proven against the updated nixpkgs Firefox source build path.
 
 In-VM validation note:
 - When Codex is running inside the ol-c guest, it can identify that context with `hostnamectl`, `systemd-detect-virt`, and `findmnt -T /source`.
@@ -195,7 +241,8 @@ In-VM validation note:
 Security and update planning note:
 - The repo has been prepped to move from unsupported `nixos-24.11` to `nixos-25.11`; the host build and VM boot still need to prove the update.
 - Relying on nixpkgs for Firefox security updates is the preferred path, but only if ol-c tracks a supported branch promptly.
-- User-facing ol-c updates should eventually be exposed through the browser System page and backed by prebuilt artifacts.
+- Distribution-system work is now explicitly split into prebuilt release artifacts, verified binary distribution, first install, and browser-facing updates.
+- User-facing ol-c updates should eventually be exposed through the browser System page and backed by prebuilt verified artifacts.
 - Users should not need to operate NixOS directly or compile Firefox locally to receive browser security updates.
 - Rollback should be exposed as an ol-c product action backed by NixOS generations.
 
@@ -256,3 +303,5 @@ These are non-priority tasks we can pick up any time as an option for the next t
 - Current select boxes like mute and light/dark mode should be toggle buttons with appropriate unicode icons
 - highlight URL bar when opening new tab (this was a regression from default behavior)
 - Ctrl+S crashes firefox
+- Future paste-into-VM fix: copy out of the browser-launched VM already works well. Paste should keep using the existing noVNC plus QEMU `qemu-vdagent` clipboard path, but keyboard paste needs to intercept `Ctrl+V` and host `Cmd+V` in capture phase before noVNC handles them, read host clipboard text during that user gesture, call `rfb.clipboardPasteFrom(text)`, then synthesize guest `Ctrl+V` so the active guest app actually pastes. Browser clipboard reads may be permission or prompt gated, so failure should show a concise hint.
+- Ctrl+Shift+C should not open dev tools in vm, we should make that copy

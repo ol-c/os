@@ -31,8 +31,8 @@ TERMINAL_CLIENT_DIST_CSS="${ROOT_DIR}/terminal-client/dist/terminal.css"
 TERMINAL_CLIENT_BUILD="${ROOT_DIR}/terminal-client/build.mjs"
 FIREFOX_PATCH="${ROOT_DIR}/patches/firefox/0001-close-last-tab-to-localhost.patch"
 TEST_TMP_ROOT="${OLC_TEST_TMP_ROOT:-${ROOT_DIR}/.tmp-tests}"
-TEST_SYSTEM_PATH="${OLC_TEST_SYSTEM_PATH:-/usr/bin:/bin}"
 TEST_FAKE_BASH="${OLC_TEST_FAKE_BASH:-$(command -v bash)}"
+TEST_SYSTEM_PATH="${OLC_TEST_SYSTEM_PATH:-$(dirname -- "$TEST_FAKE_BASH"):/usr/bin:/bin}"
 CASE_TMP=""
 
 fail() {

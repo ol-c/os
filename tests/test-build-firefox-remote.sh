@@ -3,9 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 REMOTE_BUILD="${ROOT_DIR}/build-firefox-remote"
+SOURCE_REMOTE_BUILD="${ROOT_DIR}/build-firefox-source-remote"
 TEST_TMP_ROOT="${OLC_TEST_TMP_ROOT:-${ROOT_DIR}/.tmp-tests}"
-TEST_SYSTEM_PATH="${OLC_TEST_SYSTEM_PATH:-/usr/bin:/bin}"
 TEST_FAKE_BASH="${OLC_TEST_FAKE_BASH:-$(command -v bash)}"
+TEST_SYSTEM_PATH="${OLC_TEST_SYSTEM_PATH:-$(dirname -- "$TEST_FAKE_BASH"):/usr/bin:/bin}"
 CASE_TMP=""
 
 fail() {
@@ -20,6 +21,7 @@ cleanup_case() {
   CASE_TMP=""
   unset OLC_GCP_LOCAL_BUILDS_DIR
   unset OLC_GCP_RESULT_LINK
+  unset OLC_GCP_TIMEOUT
 }
 
 setup_case() {
@@ -272,6 +274,55 @@ test_dry_run_allows_target_override() {
 
   assert_contains "$output" "target:       .#ol-c-image"
   assert_contains "$output" '.#ol-c-image'
+  cleanup_case
+}
+
+test_source_remote_dry_run_uses_source_target() {
+  local output
+  setup_case
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      "${SOURCE_REMOTE_BUILD}" --dry-run
+  )"
+
+  assert_contains "$output" "target:       .#firefox-localhost-source"
+  assert_contains "$output" "timeout:      1h"
+  assert_contains "$output" '.#firefox-localhost-source'
+  assert_contains "$output" 'nix build "$BUILD_TARGET" --print-build-logs'
+  cleanup_case
+}
+
+test_source_remote_respects_timeout_override() {
+  local output
+  setup_case
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      OLC_GCP_TIMEOUT=45m \
+      "${SOURCE_REMOTE_BUILD}" --dry-run
+  )"
+
+  assert_contains "$output" "target:       .#firefox-localhost-source"
+  assert_contains "$output" "timeout:      45m"
+  assert_contains "$output" "--max-run-duration=45m"
+  cleanup_case
+}
+
+test_source_remote_management_does_not_append_target() {
+  local output calls
+  setup_case
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      "${SOURCE_REMOTE_BUILD}" --status ol-c-firefox-test
+  )"
+  calls="$(cat "${CASE_TMP}/calls/gcloud" 2>/dev/null || true)"
+
+  assert_contains "$output" "Job: ol-c-firefox-test"
+  assert_contains "$output" "Progress: 63% nix-build: building Firefox"
+  [[ "$output" != *"TARGET can only be used"* ]] || fail "source remote should not append target in management mode"
+  [[ "$calls" != *"compute instances create"* ]] || fail "source remote status mode should not create a VM"
   cleanup_case
 }
 
@@ -722,6 +773,9 @@ test_submit_fails_without_project_when_noninteractive
 test_management_mode_does_not_launch_login
 test_dry_run_uses_safe_defaults
 test_dry_run_allows_target_override
+test_source_remote_dry_run_uses_source_target
+test_source_remote_respects_timeout_override
+test_source_remote_management_does_not_append_target
 test_bucket_override_still_wins
 test_no_wait_submits_without_fetching_result
 test_invalid_timeout_fails_before_bucket_creation

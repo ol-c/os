@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REMOTE_BUILD="${ROOT_DIR}/build-firefox-remote"
+TARGET=".#firefox-localhost-source"
+
+export OLC_GCP_RESULT_LINK="${OLC_GCP_RESULT_LINK:-${ROOT_DIR}/result-gcp-firefox-localhost-source}"
+export OLC_GCP_TIMEOUT="${OLC_GCP_TIMEOUT:-1h}"
+
+case "${1:-}" in
+  --logs|--status|--fetch|--kill|--cleanup)
+    exec "$REMOTE_BUILD" "$@"
+    ;;
+  *)
+    exec "$REMOTE_BUILD" "$@" "$TARGET"
+    ;;
+esac
