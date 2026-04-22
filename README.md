@@ -25,6 +25,26 @@ Build and launch it with:
 
 `launch-vm` uses a browser tab as the default VM display. QEMU exposes the VM display through a local-only VNC WebSocket endpoint, and a small repo-owned viewer page uses pinned noVNC assets to render the VM screen in the browser. It also mounts this repo read-write inside the guest at `/source` using QEMU virtiofs, so the in-browser terminal can edit the same source tree that is visible on the host.
 
+The browser display path uses the repo-pinned patched QEMU package exposed as `.#qemu-olc`. The patch preserves horizontal wheel events from noVNC/QEMU VNC and carries them through the USB HID tablet path as AC Pan events. The browser frontend keeps QEMU vdagent clipboard support enabled, disables vdagent mouse forwarding, and disables legacy PS/2/vmport input so VNC pointer input reaches the patched USB tablet path. This build is separate from the VM image and can be built explicitly:
+
+```sh
+nix build .#qemu-olc --print-out-paths --no-link
+```
+
+For debugging with an already-built QEMU binary:
+
+```sh
+OLC_QEMU_BIN=/path/to/qemu-system-x86_64 ./launch-vm
+```
+
+`launch-vm` boots from a disposable qcow2 overlay whose virtual size defaults to `64G`, so the guest has enough temporary `/nix` space for development builds without mutating the built base image. Override it when needed:
+
+```sh
+OLC_VM_DISK_SIZE=96G ./launch-vm
+```
+
+Before booting, `launch-vm` also verifies that the host source directory can create files and directories. If that check fails, the guest would mount `/source` in a state where existing files may be editable but new files cannot be created, which is not a valid synced-development setup. When the host `virtiofsd` supports it, the launcher maps guest `demo` UID/GID `1000:1000` to the host launcher UID/GID so in-guest edits create host-owned files instead of depending on matching numeric IDs.
+
 The browser display path is local development only for now: the viewer server and QEMU VNC WebSocket listener bind to `127.0.0.1`. If the browser does not open automatically, use the printed `browser url:` line.
 
 SPICE remains available as an explicit fallback, and SDL/GTK remain available as direct QEMU display fallbacks:
@@ -53,7 +73,7 @@ Firefox in the guest is packaged from pinned nixpkgs with a repo-local browser f
 /source
 ```
 
-The mount is read-write. The `demo` user is pinned to UID `1000`, which matches the normal first-user UID on Ubuntu hosts and keeps host-owned repo files writable from the guest in the common development setup. If the host repo owner is not UID `1000`, writes from inside the guest may need host-side ownership or permission adjustment.
+The mount is read-write. The `demo` user is pinned to UID `1000` and primary GID `1000`. When the host `virtiofsd` supports ID translation, `./launch-vm` maps that guest identity to the host user running the launcher so in-guest file creation works even when the host repo owner uses a different numeric UID or GID. If `virtiofsd` does not support ID translation, the host repo still needs permissions that allow the guest numeric identity to create files and directories.
 
 The localhost UI service uses the packaged Nix store source by default, but when `/source/localhost-ui/server.mjs` exists it runs the service from `/source` instead. The source preview supervisor watches `/source/localhost-ui`; when those files change it restarts the HTTPS UI service. Refresh `https://localhost/` in Firefox to see server-side UI updates.
 

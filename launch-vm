@@ -12,11 +12,15 @@ Options:
 
 Environment:
   OLC_VM_IMAGE      Existing VM image to boot. Skips build-vm when set.
+  OLC_VM_DISK_SIZE  Disposable overlay disk virtual size. Default: 64G.
   OLC_SHARE_VM_IMAGES
                           Mount the boot image directory at /vm-images. Default: 1.
   OLC_QEMU_FRONTEND
                           Graphical frontend: browser, spice, sdl, or gtk. Default: browser.
   OLC_QEMU_DISPLAY  Direct QEMU display backend for debugging. Overrides frontend.
+  OLC_QEMU_BIN      QEMU executable path. Default: built from .#qemu-olc for
+                    browser frontend, otherwise first qemu-system-x86_64 in PATH.
+  OLC_QEMU_PACKAGE  Nix package for browser frontend QEMU. Default: .#qemu-olc.
   OLC_NOVNC_DIR           noVNC asset directory. Default: built from .#novnc.
   OLC_VM_SCREEN_OPEN_BROWSER
                           Open the browser viewer with xdg-open. Default: 1.
@@ -30,7 +34,14 @@ Environment:
   OLC_SOURCE_DIR          Host source tree to mount at /source. Default: this repo.
   OLC_VIRTIOFSD           virtiofsd executable path. Default: first virtiofsd in PATH.
   OLC_VIRTIOFSD_SANDBOX   virtiofsd sandbox mode. Default: none.
+  OLC_VIRTIOFSD_TRANSLATE_IDS
+                          Map guest demo UID/GID to launcher UID/GID when
+                          supported by virtiofsd. Default: 1.
+  OLC_VIRTIOFSD_HOST_UID  Host UID for guest demo writes. Default: id -u.
+  OLC_VIRTIOFSD_HOST_GID  Host GID for guest demo writes. Default: id -g.
   OLC_KVM_DEVICE          KVM device path. Default: /dev/kvm.
+  OLC_SKIP_SOURCE_WRITE_CHECK
+                          Skip source directory create/delete validation. Default: 0.
 EOF
 }
 
@@ -59,6 +70,27 @@ require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     fail "required command not found: $1"
   fi
+}
+
+check_source_dir_writable() {
+  local test_path test_dir
+
+  if [[ "${OLC_SKIP_SOURCE_WRITE_CHECK:-0}" == "1" ]]; then
+    return
+  fi
+
+  test_path="${SOURCE_DIR}/.olc-source-write-test.$$"
+  test_dir="${SOURCE_DIR}/.olc-source-write-test-dir.$$"
+
+  if ! : > "$test_path" 2>/dev/null; then
+    fail "source directory does not allow creating files: $SOURCE_DIR. Fix host permissions or the virtiofs export before launching, or set OLC_SKIP_SOURCE_WRITE_CHECK=1 to bypass."
+  fi
+  rm -f "$test_path"
+
+  if ! mkdir "$test_dir" 2>/dev/null; then
+    fail "source directory does not allow creating directories: $SOURCE_DIR. Fix host permissions or the virtiofs export before launching, or set OLC_SKIP_SOURCE_WRITE_CHECK=1 to bypass."
+  fi
+  rmdir "$test_dir"
 }
 
 resolve_command() {
@@ -106,6 +138,39 @@ resolve_novnc_dir() {
   fail "unable to locate noVNC core/rfb.js in nix build output: $out_path"
 }
 
+resolve_qemu_binary() {
+  local out_path candidate
+
+  if [[ -n "${OLC_QEMU_BIN:-}" ]]; then
+    [[ -x "$OLC_QEMU_BIN" ]] || fail "OLC_QEMU_BIN is not executable: $OLC_QEMU_BIN"
+    printf '%s\n' "$OLC_QEMU_BIN"
+    return
+  fi
+
+  if [[ "$QEMU_FRONTEND" == "browser" ]]; then
+    require_command nix
+    out_path="$(nix build "${OLC_QEMU_PACKAGE:-.#qemu-olc}" --print-out-paths --no-link)"
+    for candidate in \
+      "$out_path/bin/qemu-system-x86_64" \
+      "$out_path/bin/qemu-kvm"; do
+      if [[ -x "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return
+      fi
+    done
+
+    fail "unable to locate qemu-system-x86_64 in patched QEMU build output: $out_path"
+  fi
+
+  candidate="$(resolve_command qemu-system-x86_64)"
+  [[ -n "$candidate" ]] || fail "required command not found: qemu-system-x86_64"
+  printf '%s\n' "$candidate"
+}
+
+virtiofsd_supports_translate_ids() {
+  "$VIRTIOFSD" --help 2>&1 | grep -q -- '--translate-uid'
+}
+
 port_is_open() {
   local port="$1"
 
@@ -147,6 +212,9 @@ VM_SCREEN_OPEN_BROWSER="${OLC_VM_SCREEN_OPEN_BROWSER:-1}"
 VM_SCREEN_PORT="${OLC_VM_SCREEN_PORT:-0}"
 SOURCE_DIR="${OLC_SOURCE_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
 VIRTIOFSD_SANDBOX="${OLC_VIRTIOFSD_SANDBOX:-none}"
+VIRTIOFSD_TRANSLATE_IDS="${OLC_VIRTIOFSD_TRANSLATE_IDS:-1}"
+VIRTIOFSD_HOST_UID="${OLC_VIRTIOFSD_HOST_UID:-$(id -u)}"
+VIRTIOFSD_HOST_GID="${OLC_VIRTIOFSD_HOST_GID:-$(id -g)}"
 KVM_DEVICE="${OLC_KVM_DEVICE:-/dev/kvm}"
 SPICE_SOCKET_DIR=""
 VIRTIOFS_SOCKET_DIR=""
@@ -158,6 +226,8 @@ QEMU_PID=""
 VIEWER_PID=""
 VM_SCREEN_PID=""
 SHARE_VM_IMAGES="${OLC_SHARE_VM_IMAGES:-1}"
+VM_DISK_SIZE="${OLC_VM_DISK_SIZE:-64G}"
+VM_DISK_OVERLAY=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -181,10 +251,23 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-require_command qemu-system-x86_64
 VIRTIOFSD="${OLC_VIRTIOFSD:-$(resolve_virtiofsd)}"
 [[ -n "$VIRTIOFSD" ]] || fail_missing_virtiofsd
+[[ -x "$VIRTIOFSD" ]] || fail "OLC_VIRTIOFSD is not executable: $VIRTIOFSD"
 [[ -d "$SOURCE_DIR" ]] || fail "source directory not found: $SOURCE_DIR"
+check_source_dir_writable
+
+virtiofsd_id_args=()
+if [[ "$VIRTIOFSD_TRANSLATE_IDS" == "1" ]]; then
+  if virtiofsd_supports_translate_ids; then
+    virtiofsd_id_args=(
+      "--translate-uid=map:1000:${VIRTIOFSD_HOST_UID}:1"
+      "--translate-gid=map:1000:${VIRTIOFSD_HOST_GID}:1"
+    )
+  else
+    echo "warning: virtiofsd does not support --translate-uid; /source writes may require matching host UID/GID" >&2
+  fi
+fi
 
 case "$QEMU_FRONTEND" in
   browser|spice|sdl|gtk)
@@ -210,6 +293,8 @@ elif [[ "$QEMU_FRONTEND" == "browser" ]]; then
   [[ -f "$NOVNC_DIR/core/rfb.js" ]] || fail "noVNC asset directory does not contain core/rfb.js: $NOVNC_DIR"
 fi
 
+QEMU_BIN="$(resolve_qemu_binary)"
+
 if [[ ! -e "$KVM_DEVICE" && "${OLC_SKIP_KVM_CHECK:-0}" != "1" ]]; then
   fail "${KVM_DEVICE} is required"
 fi
@@ -225,16 +310,32 @@ fi
 IMAGE_DIR="$(CDPATH= cd -- "$(dirname -- "$IMAGE_PATH")" && pwd)"
 IMAGE_BASENAME="$(basename -- "$IMAGE_PATH")"
 
+require_command qemu-img
+VM_DISK_OVERLAY="$(mktemp "${TMPDIR:-/tmp}/ol-c-disk.XXXXXX.qcow2")"
+rm -f "$VM_DISK_OVERLAY"
+qemu-img create -q \
+  -f qcow2 \
+  -F qcow2 \
+  -b "$IMAGE_PATH" \
+  "$VM_DISK_OVERLAY" \
+  "$VM_DISK_SIZE"
+
 echo "booting image: $IMAGE_PATH"
+echo "runtime disk overlay: $VM_DISK_OVERLAY"
+echo "runtime disk size: $VM_DISK_SIZE"
 echo "graphical proof: Firefox launches as the in-guest UI shell"
 echo "serial output: terminal"
 echo "qemu frontend: $QEMU_FRONTEND"
+echo "qemu binary: $QEMU_BIN"
 echo "source mount: $SOURCE_DIR -> /source"
 if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
   echo "image mount: $IMAGE_DIR -> /vm-images"
   echo "in-guest image: /vm-images/$IMAGE_BASENAME"
 fi
 echo "virtiofsd sandbox: $VIRTIOFSD_SANDBOX"
+if [[ "${#virtiofsd_id_args[@]}" -gt 0 ]]; then
+  echo "virtiofsd id mapping: guest 1000:1000 -> host ${VIRTIOFSD_HOST_UID}:${VIRTIOFSD_HOST_GID}"
+fi
 if [[ "$QEMU_FRONTEND" == "browser" ]]; then
   echo "viewer: browser tab"
   echo "novnc assets: $NOVNC_DIR"
@@ -274,6 +375,9 @@ cleanup() {
   if [[ -n "$VM_SCREEN_LOG" ]]; then
     rm -f "$VM_SCREEN_LOG"
   fi
+  if [[ -n "$VM_DISK_OVERLAY" ]]; then
+    rm -f "$VM_DISK_OVERLAY"
+  fi
 
   if [[ -n "$VIRTIOFSD_PID" ]] && kill -0 "$VIRTIOFSD_PID" >/dev/null 2>&1; then
     kill "$VIRTIOFSD_PID" >/dev/null 2>&1 || true
@@ -303,6 +407,7 @@ VIRTIOFS_SOCKET="${VIRTIOFS_SOCKET_DIR}/source.sock"
   --socket-path="$VIRTIOFS_SOCKET" \
   --shared-dir="$SOURCE_DIR" \
   --sandbox="$VIRTIOFSD_SANDBOX" \
+  "${virtiofsd_id_args[@]}" \
   --cache=auto &
 VIRTIOFSD_PID="$!"
 
@@ -330,6 +435,7 @@ if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
     --socket-path="$VM_IMAGES_SOCKET" \
     --shared-dir="$IMAGE_DIR" \
     --sandbox="$VIRTIOFSD_SANDBOX" \
+    "${virtiofsd_id_args[@]}" \
     --cache=auto &
   VM_IMAGES_VIRTIOFSD_PID="$!"
 
@@ -354,14 +460,14 @@ if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
 fi
 
 qemu_base_args=(
+  -machine pc,vmport=off,i8042=off
   -enable-kvm
   -cpu host
   -smp "$CPUS"
   -m "$MEMORY_MB"
   -object "memory-backend-memfd,id=olc-mem,size=${MEMORY_MB}M,share=on"
   -numa "node,memdev=olc-mem"
-  -drive "if=virtio,format=qcow2,file=$IMAGE_PATH"
-  -snapshot
+  -drive "if=virtio,format=qcow2,file=$VM_DISK_OVERLAY"
   -netdev user,id=olc-net
   -device virtio-net-pci,netdev=olc-net
   -chardev "socket,id=ol-c-source,path=${VIRTIOFS_SOCKET}"
@@ -370,6 +476,7 @@ qemu_base_args=(
   -device virtio-rng-pci
   -device virtio-vga
   -device qemu-xhci,id=ol-c-usb
+  -device usb-kbd,bus=ol-c-usb.0
   -device usb-tablet,bus=ol-c-usb.0
   -audiodev none,id=olc-audio
   -device intel-hda
@@ -386,10 +493,10 @@ if [[ "$QEMU_FRONTEND" != "spice" ]]; then
     echo "vnc display: 127.0.0.1:${VNC_DISPLAY}"
     echo "vnc websocket: 127.0.0.1:${VNC_WEBSOCKET_PORT}"
 
-    qemu-system-x86_64 \
+    "$QEMU_BIN" \
       "${qemu_base_args[@]}" \
       -display none \
-      -chardev qemu-vdagent,id=ol-c-vdagent,name=vdagent,clipboard=on \
+      -chardev qemu-vdagent,id=ol-c-vdagent,name=vdagent,clipboard=on,mouse=off \
       -device virtio-serial-pci \
       -device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0 \
       -vnc "127.0.0.1:${VNC_DISPLAY},websocket=127.0.0.1:${VNC_WEBSOCKET_PORT}" &
@@ -465,7 +572,7 @@ if [[ "$QEMU_FRONTEND" != "spice" ]]; then
     done
   fi
 
-  qemu-system-x86_64 \
+  "$QEMU_BIN" \
     "${qemu_base_args[@]}" \
     -display "$QEMU_DISPLAY" &
   QEMU_PID="$!"
@@ -480,7 +587,7 @@ SPICE_URI="spice+unix://${SPICE_SOCKET}"
 
 echo "spice socket: $SPICE_SOCKET"
 
-qemu-system-x86_64 \
+"$QEMU_BIN" \
   "${qemu_base_args[@]}" \
   -display none \
   -spice "unix=on,addr=${SPICE_SOCKET},disable-ticketing=on,agent-mouse=on,gl=off" \

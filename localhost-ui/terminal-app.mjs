@@ -585,7 +585,18 @@ export function createTerminalApp(options) {
     proxy.end();
   }
 
+  function cleanup() {
+    for (const token of Array.from(terminalBackends.keys())) {
+      terminateBackend(token);
+    }
+
+    for (const token of Array.from(terminalBackendExits.keys())) {
+      forgetBackendExit(token);
+    }
+  }
+
   return {
+    cleanup,
     handleRequest,
     handleUpgrade,
   };

@@ -3,9 +3,12 @@
 {
   users.users.root.initialPassword = "root";
 
+  users.groups.demo.gid = 1000;
+
   users.users.demo = {
     isNormalUser = true;
     uid = 1000;
+    group = "demo";
     initialPassword = "demo";
     extraGroups = [ "kvm" "wheel" ];
     home = "/home/demo";

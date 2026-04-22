@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import {
@@ -99,7 +100,7 @@ test('real adapter reports packaged Firefox version from environment', async () 
 });
 
 test('real adapter falls back to installed Firefox binary version', async () => {
-  const dir = await mkdtemp(join(process.cwd(), '.tmp-tests', 'ol-c-firefox-version-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'ol-c-firefox-version-test-'));
   const firefox = join(dir, 'firefox');
   await writeFile(firefox, '#!/usr/bin/env sh\nprintf "%s\\n" "Mozilla Firefox 149.0.2"\n');
   await chmod(firefox, 0o755);

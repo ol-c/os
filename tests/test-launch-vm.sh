@@ -24,7 +24,7 @@ setup_case() {
   cleanup_case
   mkdir -p "$TEST_TMP_ROOT"
   CASE_TMP="$(mktemp -d "${TEST_TMP_ROOT}/launch.XXXXXX")"
-  mkdir -p "${CASE_TMP}/fakebin" "${CASE_TMP}/artifacts" "${CASE_TMP}/novnc/core"
+  mkdir -p "${CASE_TMP}/fakebin" "${CASE_TMP}/artifacts" "${CASE_TMP}/novnc/core" "${CASE_TMP}/qemu-store/bin"
   : > "${CASE_TMP}/artifacts/guest.qcow2"
   : > "${CASE_TMP}/novnc/core/rfb.js"
 
@@ -74,6 +74,10 @@ EOF
 
   cat >"${CASE_TMP}/fakebin/virtiofsd" <<EOF
 #!${TEST_FAKE_BASH}
+if [[ "\${1:-}" == "--help" ]]; then
+  printf '%s\n' 'Usage: virtiofsd --translate-uid --translate-gid'
+  exit 0
+fi
 printf '%s\n' "\$*" >> "${CASE_TMP}/virtiofsd.args.all"
 socket_path=""
 shared_dir=""
@@ -139,7 +143,41 @@ printf '%s\n' "\$*" > "${CASE_TMP}/build-vm.args"
 printf '%s\n' "${CASE_TMP}/artifacts/guest.qcow2"
 EOF
 
-  chmod +x "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/fakebin/virtiofsd" "${CASE_TMP}/fakebin/remote-viewer" "${CASE_TMP}/fakebin/node" "${CASE_TMP}/fakebin/build-vm"
+  cat >"${CASE_TMP}/fakebin/qemu-img" <<EOF
+#!${TEST_FAKE_BASH}
+printf '%s\n' "\$*" > "${CASE_TMP}/qemu-img.args"
+overlay=""
+for arg in "\$@"; do
+  case "\$arg" in
+    *.qcow2)
+      overlay="\$arg"
+      ;;
+  esac
+done
+if [[ -n "\$overlay" ]]; then
+  mkdir -p "\$(dirname "\$overlay")"
+  : > "\$overlay"
+fi
+EOF
+
+  cat >"${CASE_TMP}/fakebin/nix" <<EOF
+#!${TEST_FAKE_BASH}
+printf '%s\n' "\$*" >> "${CASE_TMP}/nix.args.all"
+case " \$* " in
+  *" .#qemu-olc "*)
+    printf '%s\n' "${CASE_TMP}/qemu-store"
+    ;;
+  *" .#novnc "*)
+    printf '%s\n' "${CASE_TMP}/novnc-store"
+    ;;
+  *)
+    printf '%s\n' "${CASE_TMP}/unknown-store"
+    ;;
+esac
+EOF
+
+  chmod +x "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/fakebin/qemu-img" "${CASE_TMP}/fakebin/virtiofsd" "${CASE_TMP}/fakebin/remote-viewer" "${CASE_TMP}/fakebin/node" "${CASE_TMP}/fakebin/build-vm" "${CASE_TMP}/fakebin/nix"
+  cp "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/qemu-store/bin/qemu-system-x86_64"
 }
 
 assert_contains() {
@@ -150,15 +188,17 @@ assert_contains() {
 
 trap cleanup_case EXIT
 
-test_requires_qemu() {
+test_requires_patched_qemu_build_for_browser() {
   local output status
   setup_case
-  rm -f "${CASE_TMP}/fakebin/qemu-system-x86_64"
+  rm -f "${CASE_TMP}/qemu-store/bin/qemu-system-x86_64"
 
   set +e
   output="$(
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       2>&1
@@ -166,8 +206,31 @@ test_requires_qemu() {
   status=$?
   set -e
 
-  [[ $status -ne 0 ]] || fail "expected launch-vm to fail without qemu"
-  assert_contains "$output" "required command not found: qemu-system-x86_64"
+  [[ $status -ne 0 ]] || fail "expected launch-vm to fail without patched qemu"
+  assert_contains "$output" "unable to locate qemu-system-x86_64 in patched QEMU build output: ${CASE_TMP}/qemu-store"
+  cleanup_case
+}
+
+test_rejects_bad_qemu_bin_override() {
+  local output status
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_QEMU_FRONTEND=sdl \
+      OLC_QEMU_BIN="${CASE_TMP}/missing-qemu" \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}" \
+      2>&1
+  )"
+  status=$?
+  set -e
+
+  [[ $status -ne 0 ]] || fail "expected launch-vm to fail for a bad QEMU override"
+  assert_contains "$output" "OLC_QEMU_BIN is not executable: ${CASE_TMP}/missing-qemu"
   cleanup_case
 }
 
@@ -181,6 +244,7 @@ test_requires_remote_viewer_for_spice() {
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_QEMU_FRONTEND=spice \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       2>&1
@@ -197,12 +261,13 @@ test_requires_remote_viewer_for_spice() {
 test_requires_virtiofsd() {
   local output status
   setup_case
-  rm -f "${CASE_TMP}/fakebin/virtiofsd"
 
   set +e
   output="$(
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_VIRTIOFSD="${CASE_TMP}/missing-virtiofsd" \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       2>&1
@@ -211,9 +276,7 @@ test_requires_virtiofsd() {
   set -e
 
   [[ $status -ne 0 ]] || fail "expected launch-vm to fail without virtiofsd"
-  assert_contains "$output" "required command not found: virtiofsd"
-  assert_contains "$output" "sudo apt install -y virtiofsd"
-  assert_contains "$output" "OLC_VIRTIOFSD=/path/to/virtiofsd ./launch-vm"
+  assert_contains "$output" "OLC_VIRTIOFSD is not executable: ${CASE_TMP}/missing-virtiofsd"
   cleanup_case
 }
 
@@ -227,6 +290,7 @@ test_requires_kvm_by_default() {
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
       OLC_KVM_DEVICE="${CASE_TMP}/missing-kvm" \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       "${LAUNCH_VM}" \
       2>&1
   )"
@@ -238,8 +302,34 @@ test_requires_kvm_by_default() {
   cleanup_case
 }
 
+test_requires_source_directory_create_permissions() {
+  local output status source_dir
+  setup_case
+  source_dir="${CASE_TMP}/readonly-source"
+  mkdir -p "$source_dir"
+  chmod 0555 "$source_dir"
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_SOURCE_DIR="$source_dir" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}" \
+      2>&1
+  )"
+  status=$?
+  set -e
+
+  [[ $status -ne 0 ]] || fail "expected launch-vm to fail for a non-creatable source directory"
+  assert_contains "$output" "source directory does not allow creating files: $source_dir"
+  [[ ! -f "${CASE_TMP}/build-vm.args" ]] || fail "expected source write check to fail before building the VM"
+  cleanup_case
+}
+
 test_invokes_qemu_with_expected_browser_args_by_default() {
-  local output qemu_args build_args virtiofsd_args virtiofsd_shared_dir vm_images_virtiofsd_args vm_images_shared_dir sdl_hidpi_disabled gdk_scale gdk_dpi_scale virtiofs_socket vm_images_socket node_args node_novnc_dir node_vnc_ws_port
+  local output qemu_args build_args qemu_img_args virtiofsd_args virtiofsd_shared_dir vm_images_virtiofsd_args vm_images_shared_dir sdl_hidpi_disabled gdk_scale gdk_dpi_scale virtiofs_socket vm_images_socket node_args node_novnc_dir node_vnc_ws_port nix_args
   setup_case
 
   output="$(
@@ -247,6 +337,7 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
       OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       --cpus 3 \
@@ -255,6 +346,7 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
 
   qemu_args="$(cat "${CASE_TMP}/qemu.args")"
   build_args="$(cat "${CASE_TMP}/build-vm.args")"
+  qemu_img_args="$(cat "${CASE_TMP}/qemu-img.args")"
   virtiofsd_args="$(cat "${CASE_TMP}/virtiofsd.args")"
   virtiofsd_shared_dir="$(cat "${CASE_TMP}/virtiofsd.shared-dir")"
   vm_images_virtiofsd_args="$(cat "${CASE_TMP}/vm-images-virtiofsd.args")"
@@ -265,13 +357,18 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   node_args="$(cat "${CASE_TMP}/node.args")"
   node_novnc_dir="$(cat "${CASE_TMP}/node.novnc-dir")"
   node_vnc_ws_port="$(cat "${CASE_TMP}/node.vnc-ws-port")"
+  nix_args="$(cat "${CASE_TMP}/nix.args.all")"
   assert_contains "$output" "graphical proof: Firefox launches as the in-guest UI shell"
   assert_contains "$output" "serial output: terminal"
   assert_contains "$output" "qemu frontend: browser"
+  assert_contains "$output" "qemu binary: ${CASE_TMP}/qemu-store/bin/qemu-system-x86_64"
+  assert_contains "$output" "runtime disk overlay: "
+  assert_contains "$output" "runtime disk size: 64G"
   assert_contains "$output" "source mount: ${ROOT_DIR} -> /source"
   assert_contains "$output" "image mount: ${CASE_TMP}/artifacts -> /vm-images"
   assert_contains "$output" "in-guest image: /vm-images/guest.qcow2"
   assert_contains "$output" "virtiofsd sandbox: none"
+  assert_contains "$output" "virtiofsd id mapping: guest 1000:1000 -> host "
   assert_contains "$output" "viewer: browser tab"
   assert_contains "$output" "novnc assets: ${CASE_TMP}/novnc"
   assert_contains "$output" "vnc display: 127.0.0.1:"
@@ -286,7 +383,11 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$qemu_args" "-m 3072"
   assert_contains "$qemu_args" "-object memory-backend-memfd,id=olc-mem,size=3072M,share=on"
   assert_contains "$qemu_args" "-numa node,memdev=olc-mem"
-  assert_contains "$qemu_args" "if=virtio,format=qcow2,file=${CASE_TMP}/artifacts/guest.qcow2"
+  assert_contains "$qemu_args" "-machine pc,vmport=off,i8042=off"
+  assert_contains "$qemu_args" "if=virtio,format=qcow2,file=/tmp/ol-c-disk."
+  [[ "$qemu_args" != *" -snapshot"* ]] || fail "expected launch-vm to use an explicit disposable overlay instead of QEMU -snapshot"
+  assert_contains "$qemu_img_args" "create -q -f qcow2 -F qcow2 -b ${CASE_TMP}/artifacts/guest.qcow2"
+  assert_contains "$qemu_img_args" "64G"
   assert_contains "$qemu_args" "-netdev user,id=olc-net"
   assert_contains "$qemu_args" "-device virtio-net-pci,netdev=olc-net"
   assert_contains "$qemu_args" "-chardev socket,id=ol-c-source,path="
@@ -295,6 +396,7 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$qemu_args" "-device vhost-user-fs-pci,chardev=ol-c-vm-images,tag=ol-c-vm-images"
   assert_contains "$qemu_args" "-device virtio-vga"
   assert_contains "$qemu_args" "-device qemu-xhci,id=ol-c-usb"
+  assert_contains "$qemu_args" "-device usb-kbd,bus=ol-c-usb.0"
   assert_contains "$qemu_args" "-device usb-tablet,bus=ol-c-usb.0"
   assert_contains "$qemu_args" "-audiodev none,id=olc-audio"
   assert_contains "$qemu_args" "-device intel-hda"
@@ -302,18 +404,23 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$qemu_args" "-display none"
   assert_contains "$qemu_args" "-vnc 127.0.0.1:"
   assert_contains "$qemu_args" "websocket=127.0.0.1:"
-  assert_contains "$qemu_args" "-chardev qemu-vdagent,id=ol-c-vdagent,name=vdagent,clipboard=on"
+  assert_contains "$qemu_args" "-chardev qemu-vdagent,id=ol-c-vdagent,name=vdagent,clipboard=on,mouse=off"
   assert_contains "$qemu_args" "-device virtio-serial-pci"
   assert_contains "$qemu_args" "-device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0"
   [[ "$qemu_args" != *"-spice"* ]] || fail "browser frontend should not launch a SPICE server"
   [[ "$qemu_args" != *"spicevmc"* ]] || fail "browser frontend should not add the SPICE guest channel"
   assert_contains "$qemu_args" "-serial mon:stdio"
+  assert_contains "$nix_args" "build .#qemu-olc --print-out-paths --no-link"
   assert_contains "$virtiofsd_args" "--socket-path="
   assert_contains "$virtiofsd_args" "--shared-dir=${ROOT_DIR}"
   assert_contains "$virtiofsd_args" "--sandbox=none"
+  assert_contains "$virtiofsd_args" "--translate-uid=map:1000:"
+  assert_contains "$virtiofsd_args" "--translate-gid=map:1000:"
   assert_contains "$virtiofsd_args" "--cache=auto"
   assert_contains "$vm_images_virtiofsd_args" "--shared-dir=${CASE_TMP}/artifacts"
   assert_contains "$vm_images_virtiofsd_args" "--sandbox=none"
+  assert_contains "$vm_images_virtiofsd_args" "--translate-uid=map:1000:"
+  assert_contains "$vm_images_virtiofsd_args" "--translate-gid=map:1000:"
   assert_contains "$vm_images_virtiofsd_args" "--cache=auto"
   [[ "$virtiofsd_shared_dir" == "$ROOT_DIR" ]] || fail "expected virtiofsd to share repo root, got [$virtiofsd_shared_dir]"
   [[ "$vm_images_shared_dir" == "${CASE_TMP}/artifacts" ]] || fail "expected VM image virtiofsd to share image directory, got [$vm_images_shared_dir]"
@@ -344,8 +451,18 @@ test_resolves_nixpkgs_novnc_webapp_layout() {
 
   cat >"${CASE_TMP}/fakebin/nix" <<EOF
 #!${TEST_FAKE_BASH}
-printf '%s\n' "\$*" > "${CASE_TMP}/nix.args"
-printf '%s\n' "${CASE_TMP}/novnc-store"
+printf '%s\n' "\$*" >> "${CASE_TMP}/nix.args.all"
+case " \$* " in
+  *" .#qemu-olc "*)
+    printf '%s\n' "${CASE_TMP}/qemu-store"
+    ;;
+  *" .#novnc "*)
+    printf '%s\n' "${CASE_TMP}/novnc-store"
+    ;;
+  *)
+    printf '%s\n' "${CASE_TMP}/unknown-store"
+    ;;
+esac
 EOF
   chmod +x "${CASE_TMP}/fakebin/nix"
 
@@ -353,6 +470,7 @@ EOF
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}"
   )"
@@ -377,6 +495,7 @@ test_explicit_vm_image_skips_build() {
       OLC_VM_IMAGE="${CASE_TMP}/explicit/reused.qcow2" \
       OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
       OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}"
   )"
@@ -386,7 +505,7 @@ test_explicit_vm_image_skips_build() {
   assert_contains "$output" "booting image: ${CASE_TMP}/explicit/reused.qcow2"
   assert_contains "$output" "image mount: ${CASE_TMP}/explicit -> /vm-images"
   assert_contains "$output" "in-guest image: /vm-images/reused.qcow2"
-  assert_contains "$qemu_args" "if=virtio,format=qcow2,file=${CASE_TMP}/explicit/reused.qcow2"
+  assert_contains "$qemu_args" "if=virtio,format=qcow2,file=/tmp/ol-c-disk."
   [[ ! -f "${CASE_TMP}/build-vm.args" ]] || fail "expected explicit OLC_VM_IMAGE to skip build-vm"
   [[ "$vm_images_shared_dir" == "${CASE_TMP}/explicit" ]] || fail "expected explicit image directory to be shared, got [$vm_images_shared_dir]"
   cleanup_case
@@ -402,6 +521,7 @@ test_missing_explicit_vm_image_fails() {
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_VM_IMAGE="${CASE_TMP}/missing.qcow2" \
       OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       2>&1
@@ -424,6 +544,7 @@ test_exits_when_qemu_exits_first() {
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_QEMU_FRONTEND=spice \
       OLC_SKIP_KVM_CHECK=1 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_FAKE_QEMU_EXIT_EARLY=1 \
       OLC_FAKE_VIEWER_WAIT=1 \
       "${LAUNCH_VM}"
@@ -448,6 +569,7 @@ test_allows_direct_display_backend_override() {
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_QEMU_DISPLAY="gtk,gl=off,zoom-to-fit=off" \
       OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED="0" \
       OLC_QEMU_GDK_SCALE="2" \
@@ -479,6 +601,7 @@ test_allows_sdl_frontend_override() {
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_QEMU_FRONTEND=sdl \
       "${LAUNCH_VM}"
   )"
@@ -500,6 +623,7 @@ test_rejects_milestone_argument() {
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       "${LAUNCH_VM}" \
       --milestone milestone1 \
       2>&1
@@ -521,6 +645,7 @@ test_requires_option_values() {
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_SKIP_KVM_CHECK=1 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       "${LAUNCH_VM}" \
       --cpus \
       2>&1
@@ -549,6 +674,7 @@ EOF
     PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
       BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
       OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
       2>&1
@@ -561,10 +687,12 @@ EOF
   cleanup_case
 }
 
-test_requires_qemu
+test_requires_patched_qemu_build_for_browser
+test_rejects_bad_qemu_bin_override
 test_requires_remote_viewer_for_spice
 test_requires_virtiofsd
 test_requires_kvm_by_default
+test_requires_source_directory_create_permissions
 test_invokes_qemu_with_expected_browser_args_by_default
 test_resolves_nixpkgs_novnc_webapp_layout
 test_explicit_vm_image_skips_build

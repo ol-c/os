@@ -43,7 +43,7 @@ in {
 
   systemd.tmpfiles.rules = [
     "d /var/lib/ol-c 0755 root root -"
-    "d /var/lib/ol-c/vms 0775 demo users -"
-    "d /var/lib/ol-c/vms/tmp 0775 demo users -"
+    "d /var/lib/ol-c/vms 0775 demo demo -"
+    "d /var/lib/ol-c/vms/tmp 0775 demo demo -"
   ];
 }

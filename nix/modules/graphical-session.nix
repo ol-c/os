@@ -89,8 +89,8 @@ in {
     done
     wait
     EOF
-    chown -R demo:users /home/demo/.mozilla
-    chown demo:users /home/demo/.xinitrc
+    chown -R demo:demo /home/demo/.mozilla
+    chown demo:demo /home/demo/.xinitrc
     chmod 0755 /home/demo/.mozilla /home/demo/.mozilla/firefox /home/demo/.mozilla/firefox/ol-c.default
     chmod 0644 /home/demo/.mozilla/firefox/profiles.ini
     chmod 0644 /home/demo/.mozilla/firefox/ol-c.default/user.js

@@ -44,10 +44,10 @@ function createFakeTtydSpawner() {
 }
 
 async function withTerminalServer(fn) {
-  const { spawnProcess, cleanup } = createFakeTtydSpawner();
+  const { spawnProcess, cleanup: cleanupSpawner } = createFakeTtydSpawner();
   const app = createTerminalApp({
     bashBin: '/bin/bash',
-    demoUser: { uid: '1000', gid: '100' },
+    demoUser: { uid: '1000', gid: '1000' },
     spawnProcess,
     terminalClientCss: '/* terminal css */',
     terminalClientJs: '/* terminal js */',
@@ -63,7 +63,8 @@ async function withTerminalServer(fn) {
     await fn(`http://127.0.0.1:${port}`);
   } finally {
     await new Promise(resolve => server.close(resolve));
-    cleanup();
+    app.cleanup();
+    cleanupSpawner();
   }
 }
 
@@ -144,7 +145,7 @@ test('terminal token endpoint reports a recent backend exit reason', async () =>
   const spawner = createFakeTtydSpawner();
   const app = createTerminalApp({
     bashBin: '/bin/bash',
-    demoUser: { uid: '1000', gid: '100' },
+    demoUser: { uid: '1000', gid: '1000' },
     spawnProcess: spawner.spawnProcess,
     terminalClientCss: '/* terminal css */',
     terminalClientJs: '/* terminal js */',
@@ -174,6 +175,7 @@ test('terminal token endpoint reports a recent backend exit reason', async () =>
     assert.match(body.error, /No space left on device/);
   } finally {
     await new Promise(resolve => server.close(resolve));
+    app.cleanup();
     spawner.cleanup();
   }
 });

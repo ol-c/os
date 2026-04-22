@@ -65,7 +65,12 @@ EOF
 exit 1
 EOF
 
-  chmod +x "${CASE_TMP}/fakebin/nix" "${CASE_TMP}/fakebin/findmnt"
+  cat >"${CASE_TMP}/fakebin/dirname" <<EOF
+#!${TEST_FAKE_BASH}
+printf '%s\n' "${ROOT_DIR}"
+EOF
+
+  chmod +x "${CASE_TMP}/fakebin/nix" "${CASE_TMP}/fakebin/findmnt" "${CASE_TMP}/fakebin/dirname"
 }
 
 assert_eq() {
@@ -83,8 +88,8 @@ test_requires_nix() {
 
   set +e
   output="$(
-    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
-      "${BUILD_VM}" \
+    PATH="${CASE_TMP}/fakebin" \
+      "${TEST_FAKE_BASH}" "${BUILD_VM}" \
       2>&1
   )"
   status=$?
@@ -248,7 +253,9 @@ test_vm_runs_firefox_borderless_and_maximized() {
   [[ "$contents" == *"fileSystems.\"/vm-images\""* ]] || fail "expected VM to mount the parent-provided image directory at /vm-images"
   [[ "$contents" == *"device = \"ol-c-vm-images\";"* ]] || fail "expected VM image mount to use the QEMU virtiofs tag"
   [[ "$contents" == *"\"ro\""* ]] || fail "expected VM image mount to be read-only inside the guest"
+  [[ "$contents" == *"users.groups.demo.gid = 1000;"* ]] || fail "expected demo group GID to be fixed for host shared repo writes"
   [[ "$contents" == *"uid = 1000;"* ]] || fail "expected demo user UID to be fixed for host shared repo writes"
+  [[ "$contents" == *"group = \"demo\";"* ]] || fail "expected demo user's primary group to be fixed for host shared repo writes"
   [[ "$contents" == *"extraGroups = [ \"kvm\" \"wheel\" ];"* ]] || fail "expected demo user to be in the kvm group for nested VM development"
   [[ "$contents" == *"git"* ]] || fail "expected VM to include git for in-guest development"
   [[ "$contents" == *"ripgrep"* ]] || fail "expected VM to include ripgrep for in-guest development"
@@ -266,7 +273,7 @@ test_vm_runs_firefox_borderless_and_maximized() {
   [[ "$contents" == *"Enable nested KVM on the Ubuntu host"* ]] || fail "expected nested VM launch wrapper to guide nested KVM setup"
   [[ "$contents" == *"experimental-features = [ \"nix-command\" \"flakes\" ];"* ]] || fail "expected VM development profile to enable nix-command and flakes"
   [[ "$contents" == *"trusted-users = [ \"root\" \"demo\" ];"* ]] || fail "expected VM development profile to trust demo for development Nix work"
-  [[ "$contents" == *"d /var/lib/ol-c/vms 0775 demo users -"* ]] || fail "expected VM to create a writable nested VM workspace"
+  [[ "$contents" == *"d /var/lib/ol-c/vms 0775 demo demo -"* ]] || fail "expected VM to create a writable nested VM workspace"
   [[ "$contents" == *"codexVersion = \"0.120.0\";"* ]] || fail "expected VM codex wrapper to pin the Codex CLI version"
   [[ "$contents" == *"@openai/codex@\${codexVersion}"* ]] || fail "expected VM codex wrapper to use the pinned Codex CLI version"
   [[ "$contents" == *"--dangerously-bypass-approvals-and-sandbox"* ]] || fail "expected VM codex wrapper to run with full development permissions"
@@ -485,6 +492,22 @@ test_packages_firefox_with_localhost_patch() {
   patch_contents="$(cat "${FIREFOX_PATCH}")"
 
   [[ "$flake_contents" == *"firefoxLocalhostPatch = ./patches/firefox/0001-close-last-tab-to-localhost.patch;"* ]] || fail "expected flake to define the repo-local Firefox patch"
+  [[ "$flake_contents" == *"qemuInputPatch = builtins.toFile \"qemu-vnc-hid-horizontal-wheel.patch\""* ]] || fail "expected flake to define the repo-local QEMU input patch"
+  [[ "$flake_contents" == *"qemuInputOverlay = final: prev: {"* ]] || fail "expected flake to define the patched QEMU overlay"
+  [[ "$flake_contents" == *"qemu_kvm = prev.qemu_kvm.overrideAttrs"* ]] || fail "expected flake to override nixpkgs qemu_kvm"
+  [[ "$flake_contents" == *"patches = (old.patches or []) ++ [ qemuInputPatch ];"* ]] || fail "expected flake to append the QEMU input patch"
+  [[ "$flake_contents" == *"qemuPkgs = import nixpkgs {"* ]] || fail "expected flake to define the patched QEMU package set"
+  [[ "$flake_contents" == *"overlays = [ qemuInputOverlay ];"* ]] || fail "expected patched QEMU package set to use the QEMU input overlay"
+  [[ "$flake_contents" == *"overlays.qemu-input = qemuInputOverlay;"* ]] || fail "expected flake to expose the QEMU input overlay"
+  [[ "$flake_contents" == *"qemu-olc = qemuPkgs.qemu_kvm;"* ]] || fail "expected flake to expose the patched QEMU package"
+  [[ "$flake_contents" == *"[INPUT_BUTTON_WHEEL_LEFT] = 0x20"* ]] || fail "expected QEMU patch to map VNC horizontal wheel-left button bits"
+  [[ "$flake_contents" == *"[INPUT_BUTTON_WHEEL_RIGHT] = 0x40"* ]] || fail "expected QEMU patch to map VNC horizontal wheel-right button bits"
+  [[ "$flake_contents" == *"btn->button == INPUT_BUTTON_WHEEL_LEFT"* ]] || fail "expected QEMU patch to carry wheel-left into HID pan state"
+  [[ "$flake_contents" == *"btn->button == INPUT_BUTTON_WHEEL_RIGHT"* ]] || fail "expected QEMU patch to carry wheel-right into HID pan state"
+  [[ "$flake_contents" == *"int32_t pan;"* ]] || fail "expected QEMU patch to add a pan field to HID pointer events"
+  [[ "$flake_contents" == *"Usage (AC Pan)"* ]] || fail "expected QEMU patch to advertise AC Pan in USB HID descriptors"
+  [[ "$flake_contents" == *"67, 0,         /*  u16 len */"* ]] || fail "expected QEMU patch to extend the mouse HID report descriptor length"
+  [[ "$flake_contents" == *"89, 0,         /*  u16 len */"* ]] || fail "expected QEMU patch to extend the tablet HID report descriptor length"
   [[ "$flake_contents" != *"nixos-generators"* ]] || fail "expected flake to avoid deprecated nixos-generators"
   [[ "$flake_contents" == *"firefoxFastOverlay = import ./nix/firefox-localhost-fast.nix"* ]] || fail "expected flake to define the fast Firefox repack overlay"
   [[ "$flake_contents" == *"firefoxSourceOverlay = final: prev: {"* ]] || fail "expected flake to keep the full source Firefox overlay"
