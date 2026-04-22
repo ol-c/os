@@ -21,116 +21,14 @@ That means:
 
 # Milestones
 
-## Milestone 1: Reproducible Guest Boot
+## Completed Milestones
 
-Goal:
-- Boot a reproducible nixOS-based guest on an Ubuntu host.
+Milestones 1, 2, 3, and 4 are complete. The implementation checklist below is the retained history for completed work.
 
-Milestone 1 decisions:
-- Use QEMU as a development backend for fast local iteration.
-- Use a minimal custom nixOS guest owned by this repo.
-- Require KVM acceleration on the Ubuntu host.
-- Boot a normal disk image rather than using direct kernel boot.
-- Treat serial output as the proof surface for success.
-
-Success criteria:
-- There is one documented host setup path.
-- There is one documented command to build and boot the guest.
-- The guest boots successfully in a repeatable way.
-- Serial output includes a deterministic success marker: `MILESTONE1_BOOT_OK`.
-
-Out of scope:
-- Browser UI
-- First-time setup flow
-- Persistent machine state
-- Self-hosted development inside the guest
-- VM backend abstraction
-- Auto-build manifests, overlays, and snapshot management beyond the minimum needed to boot
-
-Question this milestone answers:
-- Can we reliably build and run the base OS at all?
-
-## Milestone 2: In-Guest Browser UI
-
-Goal:
-- Boot a graphical guest session and launch a real browser inside the VM.
-
-Milestone 2 decisions:
-- Use the same QEMU development backend as Milestone 1.
-- Keep the browser inside the VM rather than using the host browser.
-- Use a graphical QEMU window instead of a serial-only boot flow.
-- Autologin into a lightweight graphical session and start Firefox automatically.
-- Use Firefox itself as the visible UI shell for the guest session.
-
-Success criteria:
-- The guest boots into a graphical session.
-- QEMU opens a visible VM display window on the host.
-- Firefox launches automatically inside the guest.
-- Firefox opens as a normal interactive browser session and fills the VM display.
-
-Out of scope:
-- Remote browser access from the host
-- Full onboarding
-- Durable setup state
-- Rich product behavior beyond proving the browser surface exists
-
-Question this milestone answers:
-- Can the OS launch and visibly present a real browser inside the guest itself?
-
-## Milestone 3: Browser-Based System Controls
-
-Goal:
-- Expose the core computer management controls through the browser interface inside the guest.
-
-Milestone 3 decisions:
-- Keep the browser as the primary control surface rather than introducing a separate native settings app.
-- Use `https://localhost` inside the guest as the initial Milestone 3 browser origin, served locally by a Node.js process on port `443`.
-- Use `https://localhost/terminal` as the next Milestone 3 proof surface: each access should create a fresh in-guest browser terminal session.
-- Keep the Firefox localhost patch work, including opening new tabs to `https://localhost`, as a deferred follow-on after the browser terminal proof.
-- Focus on the basic machine controls users expect immediately: Wi-Fi and general network state, battery and power status, volume, display brightness, appearance mode such as light mode and dark mode, and Bluetooth.
-- Prioritize proving visibility and control of live system state over polishing the final information architecture.
-- Prefer the minimum guest-side services and browser UI needed to demonstrate these controls end to end.
-
-Success criteria:
-- The browser UI shows current state for the core device utilities we care about.
-- The browser UI can trigger changes for the controls that are meant to be interactive.
-- At minimum, the milestone demonstrates browser-accessible management for Wi-Fi or network state, battery or power status when available, volume, brightness, appearance mode, and Bluetooth state.
-- The guest reflects user-triggered changes in a way that is observable and testable.
-- Automated tests cover the browser-to-system control contract with deterministic fakes or controlled test hooks where direct hardware access is not reliable.
-
-Question this milestone answers:
-- Can the browser act as the basic control panel for managing the computer itself?
-
-## Milestone 4: Synced In-VM Development
-
-Goal:
-- Enable practical development from inside the guest against a host-shared ol-c repo.
-
-Milestone 4 decisions:
-- Use QEMU `virtiofs` as the only supported first shared-directory path.
-- Mount the whole ol-c repo into the guest, read-write.
-- Treat the shared host repo as the durable source of truth.
-- Allow in-guest Codex-assisted development against that mounted repo.
-- Use the in-VM workflow to validate browser-surface changes before updating packaged artifacts.
-- Defer efficient Firefox source-tree launch and patch validation from inside the VM to a later development-loop milestone.
-- Keep final Nix packaging and VM-image integration as a separate explicit step after in-VM validation.
-
-Success criteria:
-- There is one documented host setup path for synced in-VM development.
-- There is one documented command to launch the VM with the shared repo mounted.
-- The mounted repo is visible and writable inside the guest at a fixed path.
-- A developer can edit files inside the VM and see those changes immediately on the host.
-- A developer can validate a browser-surface change inside the VM without rebuilding the full Nix-packaged image on every source edit.
-- After validation, the developer can update the repo patch artifact and run the final packaged build path intentionally.
-
-Out of scope:
-- Replacing the final Nix packaging path
-- Multiple shared-folder backends
-- Full self-hosting as the primary development model
-- Multi-user sync, remote sync, or networked dev environments
-
-Question this milestone answers:
-- Can we make browser and Firefox development practical by working inside the VM against a shared repo, while keeping the host repo and Nix packaging as the final source of truth?
+- Milestone 1 proved a reproducible NixOS guest boot on an Ubuntu host.
+- Milestone 2 proved an in-guest graphical browser UI.
+- Milestone 3 proved browser-based system controls.
+- Milestone 4 proved synced in-VM development against a host-shared repo.
 
 ## Milestone 5: First-Time Setup and Persistence
 
@@ -162,19 +60,10 @@ Milestone 6 decisions:
 - Provide a mechanism to populate the in-VM Firefox checkout from the pinned nixpkgs Firefox source and to reuse or prebuild artifacts where practical.
 - Treat the in-VM Firefox source loop as a proof and development loop, not as the distro packaging source of truth.
 - After a Firefox source behavior change is validated in the VM, refresh the repo patch artifact and run the packaged Nix gates intentionally.
-- Add `https://localhost/edit` as a basic browser text editor proof for in-VM development.
-- Use CodeMirror 6 for the browser editor.
-- Allow the editor to browse, open, edit, and save local files using the demo user's filesystem permissions; permission failures should be visible in the browser.
-- Allow `edit` from an in-browser terminal to open a new `/edit` tab rooted at the current directory, and `edit <path>` to open that file.
-- Store unsaved editor drafts in browser local storage.
-- Start with a simple file tree while keeping a broot-inspired file browser interaction model as the intended direction.
-- Reuse the existing terminal font and color scheme settings for the editor; do not add separate editor preference endpoints.
-- Make editor light and dark rendering follow the global appearance mode, using the active terminal color scheme's light or dark variant.
 - Rely on nixpkgs as the primary Firefox packaging and security-update source for now.
 - Keep newer-than-nixpkgs Firefox support as a future escape hatch only if nixpkgs update latency becomes unacceptable.
 - Do not make ol-c responsible for packaging a newer Firefox than nixpkgs as part of this milestone.
 - Before relying on nixpkgs for timely security updates, move the repo off unsupported `nixos-24.11` to a currently supported NixOS branch and keep that branch current.
-- The browser-tab VM display should preserve wheel input quality better than noVNC's default coarse step handling where practical.
 
 Success criteria:
 - The build flow is predictable.
@@ -183,12 +72,7 @@ Success criteria:
 - The workflow supports fast iteration without undermining reproducibility.
 - The in-VM Firefox source loop records the exact Firefox and nixpkgs identity being tested.
 - A developer can validate Firefox source-tree behavior in the guest before refreshing `patches/firefox/0001-close-last-tab-to-localhost.patch`.
-- A developer can use `https://localhost/edit` to browse files, edit a writable file, save it, and recover unsaved drafts after a refresh.
-- A developer can launch the editor from the browser terminal with `edit` or `edit <path>`.
-- The editor follows the same terminal font, color scheme, and global light or dark appearance settings as the terminal.
 - The final packaged build path remains the gate for what the distro will ship.
-- The normal host launch path should use a browser tab as the VM display by default, using local-only QEMU VNC WebSocket plus pinned noVNC assets, while keeping SPICE/SDL/GTK as explicit development fallbacks.
-- Horizontal and vertical wheel input through the browser-tab VM display handles small repeated deltas, large deltas, diagonal scroll, and leftover accumulated delta without avoidable loss before reaching QEMU.
 
 Examples of things that may belong here:
 - Build orchestration
@@ -196,11 +80,9 @@ Examples of things that may belong here:
 - Overlays or snapshots
 - Better launch scripts
 - Efficiently launching a Firefox source-tree build from inside the VM to test patch edits before refreshing `patches/firefox/0001-close-last-tab-to-localhost.patch`
-- Browser text editor at `https://localhost/edit` for in-VM file editing, launched from the terminal with `edit`
 - Updating the pinned NixOS branch as part of keeping development and security assumptions honest
 - Recording Firefox source identity and build-output identity for source-tree test runs
 - Future explicit support for a repo-declared newer Firefox track, if nixpkgs update latency proves unacceptable
-- Improving or wrapping noVNC wheel capture so accumulated wheel deltas drain in repeated VNC wheel steps and preserve remainder
 
 Question this milestone answers:
 - Do we have a development workflow that is practical and repeatable?
@@ -270,6 +152,19 @@ Success criteria:
 Question this milestone answers:
 - Can ol-c keep browser and OS security updates user-friendly, timely, and reversible?
 
+# Current Capabilities
+
+These are implemented capabilities that should remain visible even when the active work has moved on:
+- `https://localhost/terminal` provides fresh in-browser terminal sessions.
+- `https://localhost/edit` provides a browser text editor for local files using the demo user's filesystem permissions.
+- The editor uses CodeMirror 6, stores unsaved drafts in browser local storage, and follows the shared terminal font, color scheme, and global light or dark appearance.
+- `edit` from an in-browser terminal opens a new `/edit` tab rooted at the current directory, and `edit <path>` opens that file.
+- The normal host launch path uses a browser tab as the default VM display, backed by local-only QEMU VNC WebSocket plus pinned noVNC assets.
+- SPICE, SDL, and GTK remain explicit development display fallbacks.
+- Browser-tab wheel capture preserves horizontal and vertical repeated steps and leftover delta before reaching QEMU.
+- Firefox localhost shell behavior opens new tabs to `https://localhost/` and replaces last-tab closure with a localhost tab.
+- In-VM development can use a host-shared repo mounted at `/source` through QEMU `virtiofs`.
+
 # Current Focus
 
 Milestones 1, 2, 3, and 4 are complete.
@@ -279,7 +174,6 @@ We are currently focused on Milestone 6.
 Immediate next task:
 - Rerun the supported-branch validation build and boot checks now that the patched Firefox build succeeds for Firefox `149.0.2`.
 - After the supported-branch update is proven, add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
-- Browser-tab wheel capture now preserves horizontal and vertical repeated steps and leftover delta before reaching QEMU.
 
 Supported-branch validation next steps:
 - Run the fast deterministic contract checks:
@@ -343,9 +237,6 @@ Implementation status:
 - [x] Add a basic localhost text editor at `https://localhost/edit` with terminal launch integration and terminal setting reuse.
 - [ ] Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
 - [x] Improve browser-tab VM wheel capture so horizontal and vertical scroll preserve repeated steps and leftover delta before reaching QEMU.
-
-Known bugs to track:
-- [x] Firefox localhost replacement is too fragile: when the last terminal tab closes itself after root shell exit, Firefox does not open a replacement `https://localhost` tab. The terminal page should not own this; fix the browser shell patch so all last-tab closure paths get the localhost replacement behavior.
 
 # Deferred Decisions
 
