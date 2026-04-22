@@ -218,20 +218,20 @@ Milestones 1, 2, 3, and 4 are complete.
 We are currently focused on Milestone 6.
 
 Immediate next task:
-- Rerun the supported-branch validation build and boot checks now that the patched Firefox build succeeds for Firefox `149.0.2`.
-- After the supported-branch update is proven, add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
+- Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
 
-Supported-branch validation next steps:
-- Run the fast deterministic contract checks:
+Supported-branch validation status:
+- The repo has moved from unsupported `nixos-24.11` to `nixos-25.11`.
+- The fast deterministic contract checks pass:
   - `node --test localhost-ui/*.test.mjs`
   - `cd terminal-client && npm test && npm run build`
   - `bash tests/test-build-vm.sh`
   - `bash tests/test-launch-vm.sh`
   - `bash tests/test-build-firefox-remote.sh`
-- Run `./build-vm` as the minimum real Nix build gate for the NixOS branch update.
-  - Current Firefox status: the patched packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`; the store output includes the ol-c localhost patch marker for the patched runtime assets.
-- Run `./launch-vm` as the VM smoke proof that the rebuilt image still boots into the graphical browser surface.
-- Run `./build-firefox-source-remote`, then `nix build .#firefox-localhost-source --print-build-logs` after fetching the remote result, before considering Firefox patch compatibility proven against the updated nixpkgs Firefox source build path.
+- `./build-vm` succeeds as the minimum real Nix build gate for the NixOS branch update.
+- `./launch-vm` boots into the graphical browser surface and loads the localhost UI.
+- The patched packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`; the store output includes the ol-c localhost patch marker for the patched runtime assets.
+- `./build-firefox-source-remote`, fetch, and `nix build .#firefox-localhost-source --print-build-logs` succeed, and subsequent runs reuse the local Nix store output quickly.
 
 In-VM validation note:
 - When Codex is running inside the ol-c guest, it can identify that context with `hostnamectl`, `systemd-detect-virt`, and `findmnt -T /source`.
@@ -239,7 +239,7 @@ In-VM validation note:
 - When a graphical Firefox session is running in the guest, Codex may use available local GUI automation tools such as `xdotool` to actively drive the browser for validation.
 
 Security and update planning note:
-- The repo has been prepped to move from unsupported `nixos-24.11` to `nixos-25.11`; the host build and VM boot still need to prove the update.
+- The repo has moved from unsupported `nixos-24.11` to `nixos-25.11`, with host build and VM boot validation complete.
 - Relying on nixpkgs for Firefox security updates is the preferred path, but only if ol-c tracks a supported branch promptly.
 - Distribution-system work is now explicitly split into prebuilt release artifacts, verified binary distribution, first install, and browser-facing updates.
 - User-facing ol-c updates should eventually be exposed through the browser System page and backed by prebuilt verified artifacts.
@@ -278,7 +278,7 @@ Implementation status:
 - [x] Add source-backed preview for localhost UI from `/source`, with terminal sessions owned by a stable service so Codex-driven edits do not kill the active terminal.
 - [x] Document the validate-inside-VM, then package-with-Nix workflow for browser-surface changes.
 - [x] Prove synced in-VM development against the host ol-c repo mounted at `/source`.
-- [ ] Move the repo from unsupported `nixos-24.11` to a currently supported NixOS branch and verify the VM still builds and boots.
+- [x] Move the repo from unsupported `nixos-24.11` to a currently supported NixOS branch and verify the VM still builds and boots.
 - [x] Make the normal host VM launch use a browser tab as the default screen while keeping SPICE, SDL, and GTK available as explicit fallbacks.
 - [x] Prove the first nested in-VM development launch: ol-c can run a child VM from the in-browser terminal using nested KVM, `/vm-images`, and the browser-tab screen flow.
 - [x] Add a basic localhost text editor at `https://localhost/edit` with terminal launch integration and terminal setting reuse.
