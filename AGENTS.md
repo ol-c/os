@@ -277,8 +277,7 @@ Milestones 1, 2, 3, and 4 are complete.
 We are currently focused on Milestone 6.
 
 Immediate next task:
-- Refresh `patches/firefox/0001-close-last-tab-to-localhost.patch` for Firefox `149.0.2` from the `nixos-25.11` update; the current build fails because the `browser/base/content/browser.js` hunk no longer matches the extracted runtime asset.
-- After the Firefox patch refresh, rerun the supported-branch validation build and boot checks.
+- Rerun the supported-branch validation build and boot checks now that the patched Firefox build succeeds for Firefox `149.0.2`.
 - After the supported-branch update is proven, add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
 - Browser-tab wheel capture now preserves horizontal and vertical repeated steps and leftover delta before reaching QEMU.
 
@@ -290,7 +289,7 @@ Supported-branch validation next steps:
   - `bash tests/test-launch-vm.sh`
   - `bash tests/test-build-firefox-remote.sh`
 - Run `./build-vm` as the minimum real Nix build gate for the NixOS branch update.
-  - Current known blocker: Firefox `149.0.2` patch drift in `browser/base/content/browser.js`; refresh the repo patch before rerunning this gate.
+  - Current Firefox status: the patched packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`; the store output includes the ol-c localhost patch marker for the patched runtime assets.
 - Run `./launch-vm` as the VM smoke proof that the rebuilt image still boots into the graphical browser surface.
 - Run `nix build .#firefox-localhost-source --print-build-logs` before considering Firefox patch compatibility proven against the updated nixpkgs Firefox source build path.
 
