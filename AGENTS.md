@@ -280,7 +280,7 @@ Immediate next task:
 - Refresh `patches/firefox/0001-close-last-tab-to-localhost.patch` for Firefox `149.0.2` from the `nixos-25.11` update; the current build fails because the `browser/base/content/browser.js` hunk no longer matches the extracted runtime asset.
 - After the Firefox patch refresh, rerun the supported-branch validation build and boot checks.
 - After the supported-branch update is proven, add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
-- After validating the horizontal-scroll routing fix, add the browser-tab wheel-capture fidelity proof.
+- Browser-tab wheel capture now preserves horizontal and vertical repeated steps and leftover delta before reaching QEMU.
 
 Supported-branch validation next steps:
 - Run the fast deterministic contract checks:
@@ -343,7 +343,7 @@ Implementation status:
 - [x] Prove the first nested in-VM development launch: ol-c can run a child VM from the in-browser terminal using nested KVM, `/vm-images`, and the browser-tab screen flow.
 - [x] Add a basic localhost text editor at `https://localhost/edit` with terminal launch integration and terminal setting reuse.
 - [ ] Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
-- [ ] Improve browser-tab VM wheel capture so horizontal and vertical scroll preserve repeated steps and leftover delta before reaching QEMU.
+- [x] Improve browser-tab VM wheel capture so horizontal and vertical scroll preserve repeated steps and leftover delta before reaching QEMU.
 
 Known bugs to track:
 - [x] Firefox localhost replacement is too fragile: when the last terminal tab closes itself after root shell exit, Firefox does not open a replacement `https://localhost` tab. The terminal page should not own this; fix the browser shell patch so all last-tab closure paths get the localhost replacement behavior.

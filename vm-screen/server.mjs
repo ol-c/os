@@ -137,6 +137,9 @@ const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const url = protocol + '//' + config.host + ':' + config.port + '/';
 let latestVmClipboardText = '';
 let clipboardHintTimer = 0;
+const wheelState = { x: 0, y: 0 };
+const wheelStep = 50;
+const wheelLineHeight = 19;
 
 function setStatus(message) {
   status.textContent = message;
@@ -148,6 +151,54 @@ function setClipboardHint(message) {
   clipboardHintTimer = window.setTimeout(() => {
     clipboardHint.textContent = 'Clipboard ready';
   }, 3500);
+}
+
+function pointerPosition(event, element) {
+  const bounds = element.getBoundingClientRect();
+  return {
+    x: Math.max(0, Math.min(bounds.width - 1, event.clientX - bounds.left)),
+    y: Math.max(0, Math.min(bounds.height - 1, event.clientY - bounds.top)),
+  };
+}
+
+function buttonMaskFromMouseButtons(buttons) {
+  let mask = 0;
+  if (buttons & 1) mask |= 1;
+  if (buttons & 2) mask |= 4;
+  if (buttons & 4) mask |= 2;
+  if (buttons & 8) mask |= 128;
+  if (buttons & 16) mask |= 256;
+  return mask;
+}
+
+function normalizeWheelDelta(event) {
+  let scale = 1;
+  if (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) {
+    scale = wheelLineHeight;
+  }
+
+  return {
+    x: event.deltaX * scale,
+    y: event.deltaY * scale,
+  };
+}
+
+function emitWheelButton(pos, baseMask, wheelMask) {
+  rfb._handleMouseButton(pos.x, pos.y, baseMask | wheelMask);
+  rfb._handleMouseButton(pos.x, pos.y, baseMask);
+}
+
+function drainWheelAxis(pos, baseMask, axis, negativeMask, positiveMask) {
+  const steps = Math.trunc(wheelState[axis] / wheelStep);
+  if (steps === 0) {
+    return;
+  }
+
+  const wheelMask = steps < 0 ? negativeMask : positiveMask;
+  for (let step = 0; step < Math.abs(steps); step += 1) {
+    emitWheelButton(pos, baseMask, wheelMask);
+  }
+  wheelState[axis] -= steps * wheelStep;
 }
 
 async function copyLatestVmClipboardToHost() {
@@ -175,6 +226,25 @@ const rfb = new RFB(screen, url, { credentials: {} });
 rfb.scaleViewport = true;
 rfb.resizeSession = false;
 rfb.focusOnClick = true;
+
+screen.addEventListener('wheel', event => {
+  if (rfb._rfbConnectionState !== 'connected' || rfb._viewOnly) {
+    return;
+  }
+
+  event.stopPropagation();
+  event.preventDefault();
+
+  const canvas = rfb._canvas || event.target;
+  const pos = pointerPosition(event, canvas);
+  const baseMask = buttonMaskFromMouseButtons(event.buttons);
+  const delta = normalizeWheelDelta(event);
+  wheelState.x += delta.x;
+  wheelState.y += delta.y;
+
+  drainWheelAxis(pos, baseMask, 'x', 1 << 5, 1 << 6);
+  drainWheelAxis(pos, baseMask, 'y', 1 << 3, 1 << 4);
+}, { capture: true, passive: false });
 
 rfb.addEventListener('connect', () => setStatus('Connected'));
 rfb.addEventListener('disconnect', event => {
