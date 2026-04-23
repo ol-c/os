@@ -108,6 +108,80 @@ let
       extracted_omnis+=("$omni:$extract_dir")
     }
 
+    find_runtime_asset() {
+      local basename="$1"
+      local validation_pattern="$2"
+      local matched_path=""
+      local matched_omni=""
+      local entry
+      local omni
+      local extract_dir
+      local candidate_path
+
+      for entry in "''${extracted_omnis[@]}"; do
+        omni="''${entry%%:*}"
+        extract_dir="''${entry#*:}"
+
+        while IFS= read -r candidate_path; do
+          if "$grep_bin" -Fq "$validation_pattern" "$extract_dir/$candidate_path"; then
+            if [ -n "$matched_path" ]; then
+              echo "error: Firefox runtime matched multiple $basename assets while validating the packaged baseline:" >&2
+              echo "  $matched_omni:$matched_path" >&2
+              echo "  $omni:$candidate_path" >&2
+              exit 1
+            fi
+
+            matched_path="$candidate_path"
+            matched_omni="$omni"
+          fi
+        done < <(
+          "$find_bin" "$extract_dir" -type f -name "$basename" \
+            | "$sed_bin" "s#^$extract_dir/##" \
+            | "$coreutils_bin/sort"
+        )
+      done
+
+      if [ -z "$matched_path" ]; then
+        echo "error: Firefox runtime is missing the expected packaged baseline marker for $basename" >&2
+        echo "missing pattern: $validation_pattern" >&2
+        echo "available $basename candidates:" >&2
+        for entry in "''${extracted_omnis[@]}"; do
+          omni="''${entry%%:*}"
+          extract_dir="''${entry#*:}"
+          "$find_bin" "$extract_dir" -type f -name "$basename" \
+            | "$sed_bin" "s#^$extract_dir/#  $omni:#" >&2 || true
+        done
+        exit 1
+      fi
+
+      printf '%s\n' "$matched_path"
+    }
+
+    validate_packaged_firefox_baseline() {
+      local browser_commands_path
+      local tabbrowser_path
+      local browser_js_path
+
+      browser_commands_path="$(find_runtime_asset browser-commands.js 'SECUREOS_LOCALHOST_URL')"
+      tabbrowser_path="$(find_runtime_asset tabbrowser.js 'SECUREOS_LOCALHOST_URL')"
+      browser_js_path="$(find_runtime_asset browser.js 'gSecureOSAppearanceBridge.init()')"
+
+      if "$grep_bin" -Fq 'url ??= BROWSER_NEW_TAB_URL;' "$work_dir/omnis/browser_omni.ja/$browser_commands_path" 2>/dev/null; then
+        echo "error: Firefox runtime browser-commands.js does not reflect the packaged localhost baseline" >&2
+        exit 1
+      fi
+      if ! "$grep_bin" -Fq 'olc-fxa-sync-ui-hidden' "$work_dir/omnis/browser_omni.ja/$browser_js_path" 2>/dev/null \
+        && ! "$grep_bin" -Fq 'olc-fxa-sync-ui-hidden' "$work_dir/omnis/omni.ja/$browser_js_path" 2>/dev/null; then
+        echo "error: Firefox runtime browser.js is missing the packaged Sync/FxA baseline marker" >&2
+        exit 1
+      fi
+      if ! "$grep_bin" -Fq 'this.addTrustedTab(SECUREOS_LOCALHOST_URL' "$work_dir/omnis/browser_omni.ja/$tabbrowser_path" 2>/dev/null \
+        && ! "$grep_bin" -Fq 'this.addTrustedTab(SECUREOS_LOCALHOST_URL' "$work_dir/omnis/omni.ja/$tabbrowser_path" 2>/dev/null; then
+        echo "error: Firefox runtime tabbrowser.js is missing the packaged localhost last-tab baseline" >&2
+        exit 1
+      fi
+    }
+
     apply_source_patch_to_runtime_asset() {
       local patch_file="$1"
       local source_path="$2"
@@ -196,7 +270,9 @@ let
       extract_omni "$omni"
     done
 
-    for patch_file in "''${patches[@]}"; do
+    validate_packaged_firefox_baseline
+
+    for patch_file in "''${pending_patches[@]}"; do
       case "$("$coreutils_bin/basename" "$patch_file")" in
         0001-close-last-tab-to-localhost.patch)
           apply_source_patch_to_runtime_asset "$patch_file" browser/base/content/browser-commands.js browser-commands.js SECUREOS_LOCALHOST_URL
@@ -231,8 +307,8 @@ let
       printf 'base_runtime=%s\n' "$base_runtime"
       printf 'packaged_patch_dir=%s\n' "$packaged_patch_dir"
       printf 'pending_patch_dir=%s\n' "$pending_patch_dir"
-      printf 'packaged_patches=%s\n' "''${packaged_patches[*]}"
-      printf 'pending_patches=%s\n' "''${pending_patches[*]}"
+      printf 'validated_packaged_patches=%s\n' "''${packaged_patches[*]}"
+      printf 'applied_pending_patches=%s\n' "''${pending_patches[*]}"
       printf 'patches=%s\n' "''${patches[*]}"
       printf 'runtime=%s\n' "$generation"
     } > "$generation/ol-c-patched-firefox.txt"
