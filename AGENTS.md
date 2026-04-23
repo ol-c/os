@@ -218,7 +218,17 @@ Milestones 1, 2, 3, and 4 are complete.
 We are currently focused on Milestone 6.
 
 Immediate next task:
-- Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
+- Decide whether Milestone 6 is complete enough to close, or define the next development-loop proof gap.
+
+Next steps from the patched-Firefox fast-loop attempt:
+- Preserve the useful decision that `patched-firefox` should be the one-command operator path for launching a patched Firefox from inside the VM.
+- Keep the useful finding that the command must not evaluate the local `/source` flake on the launch path, because that causes Nix to copy the dirty source tree into the store before the browser can start.
+- Keep the useful finding that a source-checkout workflow and an operator fast-launch workflow should be separate paths: source identity, checkout population, and full patch refresh are useful, but they should not sit on the critical path for `patched-firefox`.
+- Keep the useful finding that the fast runtime should use the installed Firefox runtime, symlink unchanged runtime files, and copy only mutable `omni.ja` files before repacking browser chrome assets.
+- Keep the useful finding that the current running VM may not have `zip` and `unzip` in the active system profile even when they exist in the Nix store, so the next implementation should either depend on a rebuilt VM image that includes them or resolve tool paths explicitly.
+- Keep the useful finding that browser terminal sessions may not export `DISPLAY` even when the root X session is active at `/tmp/.X11-unix/X0`; the operator launch command should infer `DISPLAY=:0` when appropriate.
+- The Sync UI removal did not validate because no `patches/firefox/0002-...` Sync-removal patch artifact existed; the only patch in `patches/firefox/` was the existing localhost patch, which the packaged Firefox runtime already contained.
+- Next attempt should start by adding a small explicit Sync/FxA UI patch file to the Firefox patch stack, then validate that specific patch through the simplest possible `patched-firefox` path.
 
 Supported-branch validation status:
 - The repo has moved from unsupported `nixos-24.11` to `nixos-25.11`.
@@ -228,7 +238,9 @@ Supported-branch validation status:
   - `bash tests/test-build-vm.sh`
   - `bash tests/test-launch-vm.sh`
   - `bash tests/test-build-firefox-remote.sh`
+  - `bash tests/test-olc-firefox-dev.sh`
 - `./build-vm` succeeds as the minimum real Nix build gate for the NixOS branch update.
+- `./build-vm` also succeeds after adding the in-guest Firefox development-loop tooling.
 - `./launch-vm` boots into the graphical browser surface and loads the localhost UI.
 - The patched packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`; the store output includes the ol-c localhost patch marker for the patched runtime assets.
 - `./build-firefox-source-remote`, fetch, and `nix build .#firefox-localhost-source --print-build-logs` succeed, and subsequent runs reuse the local Nix store output quickly.
