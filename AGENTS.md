@@ -71,7 +71,7 @@ Success criteria:
 - Rebuild versus reuse behavior is explicit.
 - The workflow supports fast iteration without undermining reproducibility.
 - The in-VM Firefox source loop records the exact Firefox and nixpkgs identity being tested.
-- A developer can validate Firefox source-tree behavior in the guest before refreshing `patches/firefox/0001-close-last-tab-to-localhost.patch`.
+- A developer can validate Firefox source-tree behavior in the guest before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`.
 - The final packaged build path remains the gate for what the distro will ship.
 
 Examples of things that may belong here:
@@ -79,7 +79,7 @@ Examples of things that may belong here:
 - Artifact manifests
 - Overlays or snapshots
 - Better launch scripts
-- Efficiently launching a Firefox source-tree build from inside the VM to test patch edits before refreshing `patches/firefox/0001-close-last-tab-to-localhost.patch`
+- Efficiently launching a Firefox source-tree build from inside the VM to test patch edits before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`
 - Updating the pinned NixOS branch as part of keeping development and security assumptions honest
 - Recording Firefox source identity and build-output identity for source-tree test runs
 - Future explicit support for a repo-declared newer Firefox track, if nixpkgs update latency proves unacceptable
@@ -218,20 +218,22 @@ Milestones 1, 2, 3, and 4 are complete.
 We are currently focused on Milestone 6.
 
 Immediate next task:
-- Decide and implement the development-patch boundary: in-development Firefox patches should not be applied by the normal `./launch-vm` path, and should be applied only by the explicit `patched-firefox` operator path.
+- Record exact Firefox and nixpkgs identity for `patched-firefox` runs so developers can prove what runtime they validated before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`.
 
 Next steps from the patched-Firefox fast-loop attempt:
 - Preserve the useful decision that `patched-firefox` should be the one-command operator path for launching a patched Firefox from inside the VM.
-- Keep the useful decision that normal VM launch and in-development browser patch testing are separate paths: `./launch-vm` should boot the regular packaged system, while `patched-firefox` should be the explicit command for applying and launching in-development Firefox patches.
+- Keep the useful decision that normal VM launch and pending browser patch testing are separate paths: `./launch-vm` should boot the regular packaged system from `patches/firefox/packaged`, while `patched-firefox` should be the explicit command for applying and launching pending Firefox patches from `patches/firefox/pending` on top of the packaged baseline.
 - Keep the useful finding that the command must not evaluate the local `/source` flake on the launch path, because that causes Nix to copy the dirty source tree into the store before the browser can start.
 - Keep the useful finding that a source-checkout workflow and an operator fast-launch workflow should be separate paths: source identity, checkout population, and full patch refresh are useful, but they should not sit on the critical path for `patched-firefox`.
 - Keep the useful finding that the fast runtime should use the installed Firefox runtime, symlink unchanged runtime files, and copy only mutable `omni.ja` files before repacking browser chrome assets.
 - `patched-firefox` now resolves `patch`, `filterdiff`, `zip`, and `unzip` through fixed Nix store paths instead of relying on the active system profile.
+- `patched-firefox` now tolerates an unset `HOME` by resolving the passwd home directory before computing its default profile path.
 - `patched-firefox` now infers `DISPLAY=:0` when the browser terminal session omits `DISPLAY` and `/tmp/.X11-unix/X0` exists.
-- A small explicit Sync/FxA UI patch exists at `patches/firefox/0002-hide-sync-fxa-ui.patch` and is part of the ordered Firefox patch stack.
+- Packaged Firefox patches now live under `patches/firefox/packaged/`, and dev-only fast-loop patches now live under `patches/firefox/pending/`.
+- A small explicit Sync/FxA UI patch exists at `patches/firefox/packaged/0002-hide-sync-fxa-ui.patch` and is part of the ordered packaged Firefox patch stack.
 - The latest `patched-firefox` patch succeeded and the VM rebuild worked, preserving the new explicit in-VM operator path.
 - The built `patched-firefox` command was smoke-tested inside the current ol-c guest with a temporary workspace/profile; it inferred the active X display, generated a patched runtime from `/run/current-system/sw/lib/firefox`, reached the Firefox exec path, and the generated `browser/omni.ja` contained both the localhost and Sync/FxA patch markers.
-- Fix the current `patched-firefox` launcher error: `/run/current-system/sw/bin/patched-firefox: line 8: HOME: unbound variable`.
+- Keep the boundary explicit in tests: packaged Nix paths must ignore `patches/firefox/pending`, and `patched-firefox` must apply `packaged` first and `pending` second.
 
 Supported-branch validation status:
 - The repo has moved from unsupported `nixos-24.11` to `nixos-25.11`.

@@ -7,8 +7,15 @@ let
 
     base_runtime="''${OLC_FIREFOX_BASE_RUNTIME:-/run/current-system/sw/lib/firefox}"
     source_root="''${OLC_SOURCE_ROOT:-/source}"
-    patch_dir="''${OLC_FIREFOX_PATCH_DIR:-$source_root/patches/firefox}"
+    packaged_patch_dir="''${OLC_FIREFOX_PACKAGED_PATCH_DIR:-$source_root/patches/firefox/packaged}"
+    pending_patch_dir="''${OLC_FIREFOX_PENDING_PATCH_DIR:-$source_root/patches/firefox/pending}"
     workspace="''${OLC_FIREFOX_DEV_WORKSPACE:-/var/lib/ol-c/firefox-dev}"
+
+    if [ -z "''${HOME:-}" ]; then
+      HOME="$(${pkgs.getent}/bin/getent passwd "$(id -u)" | ${pkgs.coreutils}/bin/cut -d: -f6)"
+      export HOME
+    fi
+
     profile="''${OLC_FIREFOX_DEV_PROFILE:-$HOME/.mozilla/firefox/ol-c.patched-dev}"
     url="''${1:-https://localhost}"
 
@@ -25,18 +32,29 @@ let
       echo "error: Firefox runtime not found: $base_runtime" >&2
       exit 1
     fi
-    if [ ! -d "$patch_dir" ]; then
-      echo "error: Firefox patch directory not found: $patch_dir" >&2
+    if [ ! -d "$packaged_patch_dir" ]; then
+      echo "error: Firefox packaged patch directory not found: $packaged_patch_dir" >&2
       exit 1
     fi
 
+    packaged_patches=()
+    pending_patches=()
     patches=()
+
     while IFS= read -r patch_file; do
+      packaged_patches+=("$patch_file")
       patches+=("$patch_file")
-    done < <("$find_bin" "$patch_dir" -maxdepth 1 -type f -name '*.patch' | "$coreutils_bin/sort")
-    if [ "''${#patches[@]}" -eq 0 ]; then
-      echo "error: no Firefox patches found in $patch_dir" >&2
+    done < <("$find_bin" "$packaged_patch_dir" -maxdepth 1 -type f -name '*.patch' | "$coreutils_bin/sort")
+    if [ "''${#packaged_patches[@]}" -eq 0 ]; then
+      echo "error: no Firefox packaged patches found in $packaged_patch_dir" >&2
       exit 1
+    fi
+
+    if [ -d "$pending_patch_dir" ]; then
+      while IFS= read -r patch_file; do
+        pending_patches+=("$patch_file")
+        patches+=("$patch_file")
+      done < <("$find_bin" "$pending_patch_dir" -maxdepth 1 -type f -name '*.patch' | "$coreutils_bin/sort")
     fi
 
     generation="$workspace/runtime"
@@ -211,7 +229,10 @@ let
     {
       echo "OLC_PATCHED_FIREFOX_RUNTIME=1"
       printf 'base_runtime=%s\n' "$base_runtime"
-      printf 'patch_dir=%s\n' "$patch_dir"
+      printf 'packaged_patch_dir=%s\n' "$packaged_patch_dir"
+      printf 'pending_patch_dir=%s\n' "$pending_patch_dir"
+      printf 'packaged_patches=%s\n' "''${packaged_patches[*]}"
+      printf 'pending_patches=%s\n' "''${pending_patches[*]}"
       printf 'patches=%s\n' "''${patches[*]}"
       printf 'runtime=%s\n' "$generation"
     } > "$generation/ol-c-patched-firefox.txt"

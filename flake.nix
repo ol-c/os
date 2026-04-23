@@ -7,11 +7,17 @@
 
   outputs = { self, nixpkgs, ... }:
     let
+      lib = nixpkgs.lib;
       system = "x86_64-linux";
-      firefoxPatchStack = [
-        ./patches/firefox/0001-close-last-tab-to-localhost.patch
-        ./patches/firefox/0002-hide-sync-fxa-ui.patch
-      ];
+      firefoxPackagedPatchDir = ./patches/firefox/packaged;
+      firefoxPackagedPatchStack =
+        map
+          (name: firefoxPackagedPatchDir + "/${name}")
+          (lib.filter
+            (name:
+              (builtins.readDir firefoxPackagedPatchDir)."${name}" == "regular"
+              && lib.hasSuffix ".patch" name)
+            (builtins.attrNames (builtins.readDir firefoxPackagedPatchDir)));
       qemuInputPatch = builtins.toFile "qemu-vnc-hid-horizontal-wheel.patch" ''
         diff --git a/hw/input/hid.c b/hw/input/hid.c
         --- a/hw/input/hid.c
@@ -213,12 +219,12 @@
       '';
       firefoxSourceOverlay = final: prev: {
         "firefox-unwrapped" = prev."firefox-unwrapped".overrideAttrs (old: {
-          patches = (old.patches or []) ++ firefoxPatchStack;
+          patches = (old.patches or []) ++ firefoxPackagedPatchStack;
         });
         firefox = final.wrapFirefox final.firefox-unwrapped { };
       };
       firefoxFastOverlay = import ./nix/firefox-localhost-fast.nix {
-        firefoxPatches = firefoxPatchStack;
+        firefoxPatches = firefoxPackagedPatchStack;
       };
       qemuInputOverlay = final: prev: {
         qemu_kvm = prev.qemu_kvm.overrideAttrs (old: {

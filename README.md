@@ -245,14 +245,14 @@ The build-path roles are summarized in [Firefox Build Paths](#firefox-build-path
 Use this after browser frontend patch edits to package and boot the normal VM path.
 
 ```sh
-git add README.md flake.nix nix/firefox-localhost-fast.nix nix/modules/graphical-session.nix tests/test-build-vm.sh patches/firefox/0001-close-last-tab-to-localhost.patch AGENTS.md
+git add README.md flake.nix nix/firefox-localhost-fast.nix nix/modules/graphical-session.nix tests/test-build-vm.sh patches/firefox/packaged/0001-close-last-tab-to-localhost.patch AGENTS.md
 nix build .#firefox-localhost --print-build-logs
 ./launch-vm
 ```
 
 Then validate inside the VM by closing the final Firefox tab with the tab close button or `Ctrl+W` and confirming that Firefox stays open on `https://localhost`.
 
-`.#firefox-localhost` is the default packaged target used by `.#ol-c-image`. It applies the runtime browser chrome hunks from `patches/firefox/0001-close-last-tab-to-localhost.patch` into the Firefox `omni.ja` archives that contain the matching runtime assets. This fast path is intentionally limited to browser frontend assets such as `browser-commands.js`, `browser.js`, and `tabbrowser.js`.
+`.#firefox-localhost` is the default packaged target used by `.#ol-c-image`. It applies the runtime browser chrome hunks from `patches/firefox/packaged/` into the Firefox `omni.ja` archives that contain the matching runtime assets. This fast path is intentionally limited to browser frontend assets such as `browser-commands.js`, `browser.js`, and `tabbrowser.js`.
 
 The overlay rebuilds both `firefox-unwrapped` and the `firefox` wrapper. This matters because the wrapper records the unwrapped store path it launches; overriding only `firefox-unwrapped` can leave the visible browser process running the original unwrapped Firefox.
 
@@ -283,29 +283,34 @@ Use this when you are actively changing Firefox behavior and need quick feedback
 
 The intended inner loop is:
 - boot the normal guest and use the in-browser terminal at `https://localhost/terminal`
-- edit browser chrome patch artifacts in `/source/patches/firefox`
+- edit dev-only browser chrome patch artifacts in `/source/patches/firefox/pending`
 - run `patched-firefox` from inside the guest to launch a fast patched runtime
 - validate the behavior change in that faster loop first
-- once the behavior is correct, keep the repo patch artifacts in `patches/firefox/` current
+- once the behavior is correct and ready to ship, promote the patch into `patches/firefox/packaged/`
 - rerun the fast packaged path above, then use the full source compatibility path as the source-build gate
 
 The new-tab behavior is additive. It should not replace or weaken the existing last-tab reopen behavior.
 
-`patched-firefox` is intentionally an operator launch path, not a build path. It uses the installed Firefox runtime at `/run/current-system/sw/lib/firefox`, symlinks unchanged runtime files into `/var/lib/ol-c/firefox-dev`, copies only mutable `omni.ja` files, applies the known runtime-safe browser chrome patches from `/source/patches/firefox`, repacks the archives, infers `DISPLAY=:0` when the graphical session is active, and launches a dedicated dev profile.
+`patched-firefox` is intentionally an operator launch path, not a build path. It uses the installed Firefox runtime at `/run/current-system/sw/lib/firefox`, symlinks unchanged runtime files into `/var/lib/ol-c/firefox-dev`, copies only mutable `omni.ja` files, applies the known runtime-safe browser chrome patches from `/source/patches/firefox/packaged` first and then `/source/patches/firefox/pending`, repacks the archives, infers `DISPLAY=:0` when the graphical session is active, and launches a dedicated dev profile.
 
 The command must not run `nix build`, `nix eval`, or evaluate `/source/flake.nix`; that would copy the dirty source tree into the Nix store before Firefox can start.
 
 ### Updating the repo patch
 
 The packaged Firefox change in this repo lives at:
-- `patches/firefox/0001-close-last-tab-to-localhost.patch`
-- `patches/firefox/0002-hide-sync-fxa-ui.patch`
+- `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`
+- `patches/firefox/packaged/0002-hide-sync-fxa-ui.patch`
+
+The dev-only fast-loop directory is:
+- `patches/firefox/pending/`
 
 The Nix packaging entry point is:
 - `flake.nix` package `.#firefox-localhost`
 - `flake.nix` package `.#firefox-localhost-source`
 
-When the Firefox source change is validated, update the patch file, rerun the fast packaged build and launch flow above, run the full source compatibility path when the patch or Firefox version changes, and keep `tests/test-build-vm.sh` aligned with the expected packaging contract.
+Only patches in `patches/firefox/packaged/` are included in the normal packaged VM build. Files under `patches/firefox/pending/` are reserved for `patched-firefox` validation work and must not affect `./launch-vm`.
+
+When the Firefox source change is validated, update the packaged patch file, rerun the fast packaged build and launch flow above, run the full source compatibility path when the patch or Firefox version changes, and keep `tests/test-build-vm.sh` aligned with the expected packaging contract.
 
 Firefox updates should be handled by bumping the repo's pinned nixpkgs input, refreshing the patch if it drifts, and rerunning the repo tests, the full source compatibility path, and a VM smoke boot.
 
