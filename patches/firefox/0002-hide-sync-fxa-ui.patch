@@ -1,0 +1,55 @@
+diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
+index 43ccbe9..c3f4df0 100644
+--- a/browser/base/content/browser.js
++++ b/browser/base/content/browser.js
+@@ -429,6 +429,50 @@ var gSecureOSAppearanceBridge = {
+ 
+ gSecureOSAppearanceBridge.init();
+ 
++const SECUREOS_FXA_SYNC_UI_STYLE_ID = "olc-fxa-sync-ui-style";
++
++var gSecureOSFxaSyncUi = {
++  init() {
++    if (document.getElementById(SECUREOS_FXA_SYNC_UI_STYLE_ID)) {
++      return;
++    }
++
++    let style = document.createElement("style");
++    style.id = SECUREOS_FXA_SYNC_UI_STYLE_ID;
++    style.textContent = `
++      #fxa-toolbar-menu-button,
++      #appMenu-fxa-status2,
++      #appMenu-fxa-label2,
++      #appMenu-fxa-text,
++      #appMenu-fxa-separator,
++      #appMenu-fxa-status,
++      #sync-button,
++      #sync-setup,
++      #sync-syncnowitem,
++      #sync-reauthitem,
++      #sync-unverifieditem,
++      #sync-enableitem,
++      #sync-tabs-menuitem,
++      #PanelUI-fxa,
++      #PanelUI-fxa-menu,
++      #PanelUI-remotetabs,
++      #PanelUI-remotetabs-separator,
++      #PanelUI-remotetabs-view,
++      #PanelUI-fxa-status,
++      #PanelUI-fxa-signin,
++      [data-l10n-id*="account"],
++      [data-l10n-id*="fxa"],
++      [data-l10n-id*="sync"] {
++        display: none !important;
++      }
++    `;
++    document.documentElement.appendChild(style);
++    document.documentElement.setAttribute("olc-fxa-sync-ui-hidden", "true");
++  },
++};
++
++gSecureOSFxaSyncUi.init();
++
+ ChromeUtils.defineLazyGetter(this, "RTL_UI", () => {
+   return Services.locale.isAppLocaleRTL;
+ });

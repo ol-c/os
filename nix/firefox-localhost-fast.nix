@@ -1,8 +1,9 @@
-{ firefoxLocalhostPatch }:
+{ firefoxPatches }:
 
 final: prev:
 let
   firefoxUnwrappedName = prev.firefox-unwrapped.name or "firefox-unwrapped";
+  firefoxPatchArgs = builtins.concatStringsSep " " (map (patch: "${patch}") firefoxPatches);
 in {
   firefox-unwrapped = prev.runCommand "${firefoxUnwrappedName}-ol-c-localhost-fast" {
     nativeBuildInputs = [
@@ -22,6 +23,14 @@ in {
     chmod -R u+w "$out"
 
     work_dir="$(mktemp -d)"
+    firefox_patches=(${firefoxPatchArgs})
+
+    if [ "''${#firefox_patches[@]}" -ne 2 ]; then
+      echo "error: expected exactly two ol-c Firefox patches" >&2
+      exit 1
+    fi
+    localhost_patch="''${firefox_patches[0]}"
+    fxa_sync_ui_patch="''${firefox_patches[1]}"
 
     firefox_omnis=(
       "$out/lib/firefox/browser/omni.ja"
@@ -58,11 +67,14 @@ in {
     done
 
     apply_source_patch_to_runtime_asset() {
-      local source_path="$1"
-      local basename="$2"
-      local validation_pattern="$3"
-      local source_patch="$work_dir/''${basename}.source.patch"
-      local candidate_patch="$work_dir/''${basename}.candidate.patch"
+      local patch_file="$1"
+      local source_path="$2"
+      local basename="$3"
+      local validation_pattern="$4"
+      local patch_id
+      patch_id="$(basename "$patch_file" .patch)"
+      local source_patch="$work_dir/''${patch_id}.''${basename}.source.patch"
+      local candidate_patch="$work_dir/''${patch_id}.''${basename}.candidate.patch"
       local applied_path=""
       local applied_omni=""
       local entry
@@ -72,11 +84,11 @@ in {
 
       filterdiff \
         -i "*/$source_path" \
-        ${firefoxLocalhostPatch} \
+        "$patch_file" \
         > "$source_patch"
 
       if [ ! -s "$source_patch" ]; then
-        echo "error: Firefox localhost patch contains no runtime hunks for $source_path" >&2
+        echo "error: Firefox patch $patch_file contains no runtime hunks for $source_path" >&2
         exit 1
       fi
 
@@ -91,7 +103,7 @@ in {
 
           if patch -d "$extract_dir" -p1 --dry-run < "$candidate_patch" >/dev/null 2>&1; then
             if [ -n "$applied_path" ]; then
-              echo "error: Firefox localhost patch matched multiple $basename runtime assets:" >&2
+              echo "error: Firefox patch $patch_file matched multiple $basename runtime assets:" >&2
               echo "  $applied_omni:$applied_path" >&2
               echo "  $omni:$candidate_path" >&2
               exit 1
@@ -109,7 +121,7 @@ in {
       done
 
       if [ -z "$applied_path" ]; then
-        echo "error: Firefox localhost patch did not match any extracted $basename runtime asset" >&2
+        echo "error: Firefox patch $patch_file did not match any extracted $basename runtime asset" >&2
         echo "available $basename candidates:" >&2
         for entry in "''${extracted_omnis[@]}"; do
           omni="''${entry%%:*}"
@@ -143,6 +155,7 @@ in {
     }
 
     apply_source_patch_to_runtime_asset \
+      "$localhost_patch" \
       browser/base/content/browser-commands.js \
       browser-commands.js \
       'url ??= SECUREOS_LOCALHOST_URL'
@@ -166,6 +179,7 @@ in {
     fi
 
     apply_source_patch_to_runtime_asset \
+      "$localhost_patch" \
       browser/components/tabbrowser/content/tabbrowser.js \
       tabbrowser.js \
       'this.addTrustedTab(SECUREOS_LOCALHOST_URL'
@@ -196,6 +210,7 @@ in {
     fi
 
     apply_source_patch_to_runtime_asset \
+      "$localhost_patch" \
       browser/base/content/browser.js \
       browser.js \
       'gSecureOSAppearanceBridge.init()'
@@ -237,6 +252,21 @@ in {
       exit 1
     fi
 
+    apply_source_patch_to_runtime_asset \
+      "$fxa_sync_ui_patch" \
+      browser/base/content/browser.js \
+      browser.js \
+      'gSecureOSFxaSyncUi.init()'
+
+    if ! grep -Fq 'olc-fxa-sync-ui-hidden' "$browser_js_extract_dir/$browser_js_path"; then
+      echo "error: patched Firefox browser.js runtime asset is missing the ol-c Sync/FxA UI marker: $browser_js_omni:$browser_js_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq '#fxa-toolbar-menu-button' "$browser_js_extract_dir/$browser_js_path"; then
+      echo "error: patched Firefox browser.js runtime asset is missing Sync/FxA toolbar hiding: $browser_js_omni:$browser_js_path" >&2
+      exit 1
+    fi
+
     for entry in "''${extracted_omnis[@]}"; do
       omni="''${entry%%:*}"
       extract_dir="''${entry#*:}"
@@ -246,6 +276,8 @@ in {
 
     {
       echo "OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1"
+      echo "OLC_FIREFOX_FXA_SYNC_UI_PATCH_APPLIED=1"
+      printf 'patch_stack=%s\n' "''${firefox_patches[*]}"
       printf 'browser_commands_omni=%s\n' "$browser_commands_omni"
       printf 'browser_commands_path=%s\n' "$browser_commands_omni_path"
       printf 'browser_js_omni=%s\n' "$browser_js_omni"

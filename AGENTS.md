@@ -218,17 +218,20 @@ Milestones 1, 2, 3, and 4 are complete.
 We are currently focused on Milestone 6.
 
 Immediate next task:
-- Decide whether Milestone 6 is complete enough to close, or define the next development-loop proof gap.
+- Decide and implement the development-patch boundary: in-development Firefox patches should not be applied by the normal `./launch-vm` path, and should be applied only by the explicit `patched-firefox` operator path.
 
 Next steps from the patched-Firefox fast-loop attempt:
 - Preserve the useful decision that `patched-firefox` should be the one-command operator path for launching a patched Firefox from inside the VM.
+- Keep the useful decision that normal VM launch and in-development browser patch testing are separate paths: `./launch-vm` should boot the regular packaged system, while `patched-firefox` should be the explicit command for applying and launching in-development Firefox patches.
 - Keep the useful finding that the command must not evaluate the local `/source` flake on the launch path, because that causes Nix to copy the dirty source tree into the store before the browser can start.
 - Keep the useful finding that a source-checkout workflow and an operator fast-launch workflow should be separate paths: source identity, checkout population, and full patch refresh are useful, but they should not sit on the critical path for `patched-firefox`.
 - Keep the useful finding that the fast runtime should use the installed Firefox runtime, symlink unchanged runtime files, and copy only mutable `omni.ja` files before repacking browser chrome assets.
-- Keep the useful finding that the current running VM may not have `zip` and `unzip` in the active system profile even when they exist in the Nix store, so the next implementation should either depend on a rebuilt VM image that includes them or resolve tool paths explicitly.
-- Keep the useful finding that browser terminal sessions may not export `DISPLAY` even when the root X session is active at `/tmp/.X11-unix/X0`; the operator launch command should infer `DISPLAY=:0` when appropriate.
-- The Sync UI removal did not validate because no `patches/firefox/0002-...` Sync-removal patch artifact existed; the only patch in `patches/firefox/` was the existing localhost patch, which the packaged Firefox runtime already contained.
-- Next attempt should start by adding a small explicit Sync/FxA UI patch file to the Firefox patch stack, then validate that specific patch through the simplest possible `patched-firefox` path.
+- `patched-firefox` now resolves `patch`, `filterdiff`, `zip`, and `unzip` through fixed Nix store paths instead of relying on the active system profile.
+- `patched-firefox` now infers `DISPLAY=:0` when the browser terminal session omits `DISPLAY` and `/tmp/.X11-unix/X0` exists.
+- A small explicit Sync/FxA UI patch exists at `patches/firefox/0002-hide-sync-fxa-ui.patch` and is part of the ordered Firefox patch stack.
+- The latest `patched-firefox` patch succeeded and the VM rebuild worked, preserving the new explicit in-VM operator path.
+- The built `patched-firefox` command was smoke-tested inside the current ol-c guest with a temporary workspace/profile; it inferred the active X display, generated a patched runtime from `/run/current-system/sw/lib/firefox`, reached the Firefox exec path, and the generated `browser/omni.ja` contained both the localhost and Sync/FxA patch markers.
+- Fix the current `patched-firefox` launcher error: `/run/current-system/sw/bin/patched-firefox: line 8: HOME: unbound variable`.
 
 Supported-branch validation status:
 - The repo has moved from unsupported `nixos-24.11` to `nixos-25.11`.
@@ -243,6 +246,8 @@ Supported-branch validation status:
 - `./build-vm` also succeeds after adding the in-guest Firefox development-loop tooling.
 - `./launch-vm` boots into the graphical browser surface and loads the localhost UI.
 - The patched packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`; the store output includes the ol-c localhost patch marker for the patched runtime assets.
+- The fast packaged Firefox output now records both `OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1` and `OLC_FIREFOX_FXA_SYNC_UI_PATCH_APPLIED=1`.
+- `./build-vm` succeeds after adding the `patched-firefox` operator path and the explicit Sync/FxA patch artifact.
 - `./build-firefox-source-remote`, fetch, and `nix build .#firefox-localhost-source --print-build-logs` succeed, and subsequent runs reuse the local Nix store output quickly.
 
 In-VM validation note:
@@ -294,7 +299,7 @@ Implementation status:
 - [x] Make the normal host VM launch use a browser tab as the default screen while keeping SPICE, SDL, and GTK available as explicit fallbacks.
 - [x] Prove the first nested in-VM development launch: ol-c can run a child VM from the in-browser terminal using nested KVM, `/vm-images`, and the browser-tab screen flow.
 - [x] Add a basic localhost text editor at `https://localhost/edit` with terminal launch integration and terminal setting reuse.
-- [ ] Add a development-loop proof for efficiently launching a Firefox source-tree build from inside the VM to test patch edits.
+- [x] Add a development-loop proof for efficiently launching patched Firefox browser chrome from inside the VM to test patch edits.
 - [x] Improve browser-tab VM wheel capture so horizontal and vertical scroll preserve repeated steps and leftover delta before reaching QEMU.
 
 # Deferred Decisions

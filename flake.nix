@@ -8,7 +8,10 @@
   outputs = { self, nixpkgs, ... }:
     let
       system = "x86_64-linux";
-      firefoxLocalhostPatch = ./patches/firefox/0001-close-last-tab-to-localhost.patch;
+      firefoxPatchStack = [
+        ./patches/firefox/0001-close-last-tab-to-localhost.patch
+        ./patches/firefox/0002-hide-sync-fxa-ui.patch
+      ];
       qemuInputPatch = builtins.toFile "qemu-vnc-hid-horizontal-wheel.patch" ''
         diff --git a/hw/input/hid.c b/hw/input/hid.c
         --- a/hw/input/hid.c
@@ -210,12 +213,12 @@
       '';
       firefoxSourceOverlay = final: prev: {
         "firefox-unwrapped" = prev."firefox-unwrapped".overrideAttrs (old: {
-          patches = (old.patches or []) ++ [ firefoxLocalhostPatch ];
+          patches = (old.patches or []) ++ firefoxPatchStack;
         });
         firefox = final.wrapFirefox final.firefox-unwrapped { };
       };
       firefoxFastOverlay = import ./nix/firefox-localhost-fast.nix {
-        inherit firefoxLocalhostPatch;
+        firefoxPatches = firefoxPatchStack;
       };
       qemuInputOverlay = final: prev: {
         qemu_kvm = prev.qemu_kvm.overrideAttrs (old: {

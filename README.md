@@ -31,6 +31,7 @@ ol-c uses pinned nixpkgs Firefox for both browser package paths. We do not carry
 | --- | --- | --- |
 | `.#firefox-localhost` | Normal VM and packaged browser checks | The guest can run the patched browser chrome used by `.#ol-c-image` without a full Firefox source compile. |
 | `.#firefox-localhost-source` | Final source-build compatibility gate | The repo patch still applies through the pinned nixpkgs Firefox source build pipeline. |
+| `patched-firefox` | In-VM operator loop | A developer can launch a patched runtime from the installed Firefox without evaluating the dirty `/source` flake. |
 
 Normal VM validation:
 
@@ -282,17 +283,23 @@ Use this when you are actively changing Firefox behavior and need quick feedback
 
 The intended inner loop is:
 - boot the normal guest and use the in-browser terminal at `https://localhost/terminal`
-- work in a Firefox source checkout from inside the guest
+- edit browser chrome patch artifacts in `/source/patches/firefox`
+- run `patched-firefox` from inside the guest to launch a fast patched runtime
 - validate the behavior change in that faster loop first
-- once the behavior is correct, export or refresh the repo patch at `patches/firefox/0001-close-last-tab-to-localhost.patch`
+- once the behavior is correct, keep the repo patch artifacts in `patches/firefox/` current
 - rerun the fast packaged path above, then use the full source compatibility path as the source-build gate
 
 The new-tab behavior is additive. It should not replace or weaken the existing last-tab reopen behavior.
+
+`patched-firefox` is intentionally an operator launch path, not a build path. It uses the installed Firefox runtime at `/run/current-system/sw/lib/firefox`, symlinks unchanged runtime files into `/var/lib/ol-c/firefox-dev`, copies only mutable `omni.ja` files, applies the known runtime-safe browser chrome patches from `/source/patches/firefox`, repacks the archives, infers `DISPLAY=:0` when the graphical session is active, and launches a dedicated dev profile.
+
+The command must not run `nix build`, `nix eval`, or evaluate `/source/flake.nix`; that would copy the dirty source tree into the Nix store before Firefox can start.
 
 ### Updating the repo patch
 
 The packaged Firefox change in this repo lives at:
 - `patches/firefox/0001-close-last-tab-to-localhost.patch`
+- `patches/firefox/0002-hide-sync-fxa-ui.patch`
 
 The Nix packaging entry point is:
 - `flake.nix` package `.#firefox-localhost`
