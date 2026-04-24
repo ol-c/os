@@ -18,13 +18,14 @@ function requireEnv(name) {
 
 const tlsKeyPath = requireEnv('OLC_TLS_KEY');
 const tlsCertPath = requireEnv('OLC_TLS_CERT');
-const systemctlBin = process.env.OLC_SYSTEMCTL || 'systemctl';
+const loginctlBin = process.env.OLC_LOGINCTL || 'loginctl';
+const setupUser = process.env.OLC_SETUP_USER || 'olc-setup';
 const app = createOlcApp({
   createFirstUser,
   getRuntimeState: () => getRuntimeState(),
   onSetupCompleted: () => {
     setTimeout(() => {
-      const child = spawn(systemctlBin, [ 'restart', 'getty@tty1.service' ], {
+      const child = spawn(loginctlBin, [ 'terminate-user', setupUser ], {
         detached: true,
         stdio: 'ignore',
       });

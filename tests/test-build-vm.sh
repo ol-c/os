@@ -144,13 +144,14 @@ test_structural_contracts() {
   [[ "$session" == *'initial_session = {'* && "$session" == *'olc-setup'* ]] || fail "expected fresh boots to use a setup initial session"
   [[ "$session" == *'getent group olc-admin'* ]] || fail "expected initial setup session to switch on admin existence"
   [[ "$session" == *'exec ${pkgs.xorg.xinit}/bin/startx'* ]] || fail "expected greetd sessions to launch startx"
+  [[ "$session" == *'security.pam.services.greetd.text'* && "$session" == *'auth      substack      login'* && "$session" == *'session   include       login'* ]] || fail "expected greetd PAM to delegate to the login stack for homed authentication"
 
   [[ "$ui" == *"services.homed.enable = true;"* ]] || fail "expected systemd-homed to be enabled"
   [[ "$ui" == *"options.olc.setup.prefillFirstUser"* ]] || fail "expected a test-only first-user prefill option"
   [[ "$ui" == *"systemd.services.ol-c-prefill-first-user"* ]] || fail "expected a first-user prefill service"
   [[ "$ui" == *"OLC_HOMECTL"* ]] || fail "expected localhost UI service to provide homectl"
   [[ "$ui" == *"OLC_LOGINCTL"* ]] || fail "expected localhost services to provide loginctl"
-  [[ "$ui" == *"OLC_SCRIPT"* ]] || fail "expected localhost UI service to provide script for homectl PTY automation"
+  [[ "$ui" == *"OLC_SYSTEMD_RUN"* ]] || fail "expected localhost UI service to provide systemd-run for first-user provisioning"
   [[ "$ui" != *"User = \"demo\";"* ]] || fail "expected localhost UI service not to run as demo"
 
   [[ "$session" == *"/etc/skel/.xinitrc"* ]] || fail "expected logged-in users to receive an xinitrc through /etc/skel"
@@ -167,6 +168,9 @@ test_structural_contracts() {
   [[ "$setup_manager" == *"OLC_FIRST_USER_STORAGE ?? 'luks'"* ]] || fail "expected first user creation to default to LUKS-backed homed storage"
   [[ "$setup_manager" == *"OLC_FIRST_USER_UID ?? '1000'"* ]] || fail "expected the first homed admin to prefer UID 1000"
   [[ "$setup_manager" == *"OLC_FIRST_USER_GROUPS ?? 'olc-admin,wheel,kvm'"* ]] || fail "expected the first user to receive admin and dev groups"
+  [[ "$setup_manager" == *"secret"* && "$setup_manager" == *"password"* ]] || fail "expected first-user provisioning to pass the password through a JSON user record secret"
+  [[ "$setup_manager" == *"LoadCredential=home.create."* ]] || fail "expected first-user provisioning to use homectl firstboot credentials"
+  [[ "$setup_manager" == *"first-user provisioning timed out"* ]] || fail "expected first-user provisioning to fail cleanly on timeout"
   [[ "$setup_manager" == *"password must be at least 12 characters"* ]] || fail "expected first-user password validation"
 
   [[ "$app" == *"state.setupMode ? setupHtml() : rootHtml()"* ]] || fail "expected root route to switch between setup and system UI"
@@ -178,7 +182,7 @@ test_structural_contracts() {
 
   [[ "$server" == *"createFirstUser"* ]] || fail "expected server to wire first-user provisioning"
   [[ "$server" == *"getRuntimeState"* ]] || fail "expected server to wire runtime state resolution"
-  [[ "$server" == *"restart', 'getty@tty1.service"* ]] || fail "expected server to restart tty1 after setup completion"
+  [[ "$server" == *"terminate-user', setupUser"* ]] || fail "expected server to terminate the setup user session after setup completion"
 
   [[ "$terminal_app" == *"getTerminalUser"* ]] || fail "expected terminal app to resolve the active user dynamically"
   [[ "$terminal_app" == *"terminal is unavailable until a signed-in user session exists"* ]] || fail "expected terminal app to fail clearly when nobody is signed in"

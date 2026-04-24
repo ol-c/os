@@ -87,6 +87,12 @@ in {
   };
   services.xserver.desktopManager.xterm.enable = false;
   services.spice-vdagentd.enable = true;
+  security.pam.services.greetd.text = ''
+    auth      substack      login
+    account   include       login
+    password  substack      login
+    session   include       login
+  '';
   services.greetd = {
     enable = true;
     settings = {
