@@ -1,20 +1,23 @@
-{ lib, ... }:
+{ pkgs, ... }:
 
-{
+let
+  setupUser = "olc-setup";
+  setupGroup = "olc-setup";
+in {
   users.users.root.initialPassword = "root";
 
-  users.groups.demo.gid = 1000;
+  users.groups.${setupGroup}.gid = 995;
+  users.groups.olc-admin = {};
 
-  users.users.demo = {
+  users.users.${setupUser} = {
     isNormalUser = true;
-    uid = 1000;
-    group = "demo";
-    initialPassword = "demo";
-    extraGroups = [ "kvm" "wheel" ];
-    home = "/home/demo";
+    uid = 1100;
+    group = setupGroup;
+    createHome = true;
+    home = "/var/lib/ol-c/setup";
+    shell = pkgs.bashInteractive;
+    hashedPassword = "!";
   };
-
-  services.getty.autologinUser = lib.mkForce "demo";
 
   programs.bash.promptInit = ''
     olc_terminal_title() {

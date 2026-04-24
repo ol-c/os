@@ -1,7 +1,11 @@
-import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+import { isAbsolute, resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
+const execFileAsync = promisify(execFile);
 const maxEditableBytes = 2 * 1024 * 1024;
+const workerPath = fileURLToPath(new URL('./editor-worker.mjs', import.meta.url));
 
 function setNoStore(res) {
   res.setHeader('cache-control', 'no-store');
@@ -33,19 +37,6 @@ function parseRequestPath(value, fallback = process.cwd()) {
   }
 
   return resolve(raw);
-}
-
-function entryKind(dirent) {
-  if (dirent.isDirectory()) {
-    return 'directory';
-  }
-  if (dirent.isSymbolicLink()) {
-    return 'symlink';
-  }
-  if (dirent.isFile()) {
-    return 'file';
-  }
-  return 'other';
 }
 
 async function readJsonBody(req) {
@@ -312,8 +303,42 @@ export function editorHtml() {
 </html>`;
 }
 
-export async function handleEditorApi(req, res, reqUrl) {
+async function runEditorWorker(editorUser, args, options = {}) {
+  const execPath = options.execPath ?? process.execPath;
+  const worker = options.workerPath ?? workerPath;
+  const spawnOptions = options.spawnOptions ?? {};
+
+  const { stdout } = await execFileAsync(execPath, [ worker, ...args ], {
+    timeout: 4000,
+    uid: Number(editorUser.uid),
+    gid: Number(editorUser.gid),
+    env: {
+      ...process.env,
+      HOME: editorUser.home,
+      USER: editorUser.name,
+      LOGNAME: editorUser.name,
+    },
+    cwd: editorUser.home,
+    maxBuffer: maxEditableBytes * 4,
+    ...spawnOptions,
+  });
+
+  return JSON.parse(stdout);
+}
+
+export async function handleEditorApi(req, res, reqUrl, options = {}) {
+  const getEditorUser = options.getEditorUser;
+
   try {
+    if (!getEditorUser) {
+      throw jsonError('editor user resolver is required', 500);
+    }
+
+    const editorUser = await getEditorUser();
+    if (!editorUser) {
+      throw jsonError('editor is unavailable until a signed-in user session exists', 409);
+    }
+
     if (reqUrl.pathname === '/api/edit/list') {
       if (req.method !== 'GET') {
         writeJson(res, 405, { ok: false, error: 'method not allowed' }, { allow: 'GET' });
@@ -321,46 +346,13 @@ export async function handleEditorApi(req, res, reqUrl) {
       }
 
       const targetPath = parseRequestPath(reqUrl.searchParams.get('path'));
-      const entries = await readdir(targetPath, { withFileTypes: true });
-      const rows = entries
-        .map(entry => ({
-          name: entry.name,
-          path: resolve(targetPath, entry.name),
-          kind: entryKind(entry),
-        }))
-        .sort((a, b) => {
-          if (a.kind === 'directory' && b.kind !== 'directory') return -1;
-          if (a.kind !== 'directory' && b.kind === 'directory') return 1;
-          return a.name.localeCompare(b.name);
-        });
-
-      writeJson(res, 200, {
-        ok: true,
-        path: targetPath,
-        parent: dirname(targetPath) === targetPath ? null : dirname(targetPath),
-        entries: rows,
-      });
+      writeJson(res, 200, await runEditorWorker(editorUser, [ 'list', targetPath ], options));
       return;
     }
 
     if (reqUrl.pathname === '/api/edit/file' && req.method === 'GET') {
       const targetPath = parseRequestPath(reqUrl.searchParams.get('path'));
-      const info = await stat(targetPath);
-      if (!info.isFile()) {
-        throw jsonError('path is not a regular file', 400);
-      }
-      if (info.size > maxEditableBytes) {
-        throw jsonError('file is too large for the basic editor proof', 413);
-      }
-
-      writeJson(res, 200, {
-        ok: true,
-        path: targetPath,
-        name: basename(targetPath),
-        content: await readFile(targetPath, 'utf8'),
-        mtimeMs: info.mtimeMs,
-        size: info.size,
-      });
+      writeJson(res, 200, await runEditorWorker(editorUser, [ 'read', targetPath ], options));
       return;
     }
 
@@ -374,22 +366,31 @@ export async function handleEditorApi(req, res, reqUrl) {
         throw jsonError('content is too large for the basic editor proof', 413);
       }
 
-      await writeFile(targetPath, body.content, 'utf8');
-      const info = await stat(targetPath);
-      writeJson(res, 200, {
-        ok: true,
-        path: targetPath,
-        mtimeMs: info.mtimeMs,
-        size: info.size,
-      });
+      writeJson(res, 200, await runEditorWorker(editorUser, [ 'write', targetPath, body.content ], options));
       return;
     }
 
     writeJson(res, 404, { ok: false, error: 'editor API endpoint was not found' });
   } catch (error) {
-    writeJson(res, error.statusCode ?? 500, {
+    const stderr = String(error.stderr || '');
+    let payload = { error: error.message };
+
+    try {
+      if (stderr.trim()) {
+        payload = JSON.parse(stderr);
+      }
+    } catch {
+      payload = { error: stderr.trim() || error.message };
+    }
+
+    const inferredStatus =
+      payload.code === 'EACCES' ? 403 :
+      payload.code === 'EINVAL' ? 400 :
+      payload.code === 'EFBIG' ? 413 :
+      500;
+    writeJson(res, error.statusCode ?? inferredStatus, {
       ok: false,
-      error: error.code === 'EACCES' ? 'permission denied' : error.message,
+      error: payload.code === 'EACCES' ? 'permission denied' : payload.error,
     });
   }
 }

@@ -202,7 +202,7 @@ Question this milestone answers:
 
 These are implemented capabilities that should remain visible even when the active work has moved on:
 - `https://localhost/terminal` provides fresh in-browser terminal sessions.
-- `https://localhost/edit` provides a browser text editor for local files using the demo user's filesystem permissions.
+- `https://localhost/edit` provides a browser text editor for local files using the active signed-in user's filesystem permissions.
 - The editor uses CodeMirror 6, stores unsaved drafts in browser local storage, and follows the shared terminal font, color scheme, and global light or dark appearance.
 - `edit` from an in-browser terminal opens a new `/edit` tab rooted at the current directory, and `edit <path>` opens that file.
 - The normal host launch path uses a browser tab as the default VM display, backed by local-only QEMU VNC WebSocket plus pinned noVNC assets.
@@ -257,6 +257,13 @@ In-VM validation note:
 - If `/source` is mounted from `ol-c-source` with `virtiofs`, Codex should treat edits as host-synced repo edits and can validate browser-surface work directly inside the guest.
 - When a graphical Firefox session is running in the guest, Codex may use available local GUI automation tools such as `xdotool` to actively drive the browser for validation.
 
+Shared journal mirror note:
+- The canonical logs remain the guest's local `journald` store; the host-visible mirror lives at `/source/.olc-debug/journal/current.journal`.
+- That file is an aggregate journal across the current VM and any recursively embedded child VMs that share the same `/source`.
+- When working from the shared repo view, prefer standard journal tools against that file, for example `journalctl --file=/source/.olc-debug/journal/current.journal`.
+- When investigating one VM, first filter by `_MACHINE_ID`, then narrow to `_BOOT_ID`, and use `OLC_VM_MACHINE_ID`, `OLC_VM_BOOT_ID`, `OLC_VM_PARENT_MACHINE_ID`, and `OLC_VM_DEPTH` to reconstruct nested lineage.
+- If Codex is running inside the specific target VM, prefer direct `journalctl` against the local system journal over the shared mirror.
+
 Security and update planning note:
 - The repo has moved from unsupported `nixos-24.11` to `nixos-25.11`, with host build and VM boot validation complete.
 - Relying on nixpkgs for Firefox security updates is the preferred path, but only if ol-c tracks a supported branch promptly.
@@ -303,6 +310,10 @@ Implementation status:
 - [x] Add a basic localhost text editor at `https://localhost/edit` with terminal launch integration and terminal setting reuse.
 - [x] Add a development-loop proof for efficiently launching patched Firefox browser chrome from inside the VM to test patch edits.
 - [x] Improve browser-tab VM wheel capture so horizontal and vertical scroll preserve repeated steps and leftover delta before reaching QEMU.
+- [x] Add a first-boot browser setup kiosk that creates the first human admin through `systemd-homed` with LUKS-backed storage.
+- [x] Switch tty1 from fixed autologin to dynamic behavior: setup autologin only before the first admin exists, normal username/password login afterward.
+- [x] Replace hardcoded `demo` runtime assumptions in localhost terminal and editor paths with active console user resolution.
+- [x] Add a Milestone 5 automated test-prefill path that bypasses manual first-user setup in VM/system tests.
 
 # Deferred Decisions
 

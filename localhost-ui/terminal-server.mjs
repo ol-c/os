@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:https';
 import { createTerminalApp } from './terminal-app.mjs';
+import { getActiveConsoleUser } from './runtime-state.mjs';
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -12,25 +13,9 @@ function requireEnv(name) {
   return value;
 }
 
-function getDemoUser() {
-  const entry = readFileSync('/etc/passwd', 'utf8')
-    .split('\n')
-    .find(line => line.startsWith('demo:'));
-
-  if (!entry) {
-    throw new Error('Unable to resolve demo user from /etc/passwd');
-  }
-
-  const fields = entry.split(':');
-  return {
-    uid: fields[2],
-    gid: fields[3],
-  };
-}
-
 const app = createTerminalApp({
   bashBin: requireEnv('OLC_BASH'),
-  demoUser: getDemoUser(),
+  getTerminalUser: () => getActiveConsoleUser(),
   terminalClientCss: readFileSync(requireEnv('OLC_TERMINAL_CLIENT_CSS'), 'utf8'),
   terminalClientJs: readFileSync(requireEnv('OLC_TERMINAL_CLIENT_JS'), 'utf8'),
   terminalPublicUrl: process.env.OLC_TERMINAL_PUBLIC_URL || '',

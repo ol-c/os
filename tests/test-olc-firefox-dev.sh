@@ -69,7 +69,7 @@ test_patched_firefox_command_contract() {
   [[ "$contents" == *"rm\" -f \"\$generation/.purgecaches\" \"\$generation/browser/.purgecaches\""* ]] || fail "expected patched-firefox to replace packaged purge-cache symlinks"
   [[ "$contents" == *"exec \"\$generation/firefox\" --no-remote --profile \"\$profile\" --new-window \"\$url\""* ]] || fail "expected patched-firefox to launch the generated runtime directly"
 
-  [[ "$contents" == *"d /var/lib/ol-c/firefox-dev 0775 demo demo -"* ]] || fail "expected VM to create a writable Firefox dev workspace"
+  [[ "$contents" == *"d /var/lib/ol-c/firefox-dev 0775 root olc-admin -"* ]] || fail "expected VM to create a writable Firefox dev workspace for admins"
 }
 
 test_agents_records_firefox_dev_gate() {

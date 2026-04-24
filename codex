@@ -55,15 +55,36 @@ EOF
 
 docker build \
   --build-arg "CODEX_VERSION=$CODEX_VERSION" \
+  --build-arg "HOST_UID=$(id -u)" \
+  --build-arg "HOST_GID=$(id -g)" \
   -t "$IMAGE" \
   - <<'DOCKERFILE'
 FROM node:22-bookworm-slim
 
 ARG CODEX_VERSION
+ARG HOST_UID
+ARG HOST_GID
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates openssh-client bash \
+ && apt-get install -y --no-install-recommends git ca-certificates openssh-client bash sudo systemd \
  && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    existing_group="$(getent group "${HOST_GID}" | cut -d: -f1 || true)"; \
+    if [ -n "${existing_group}" ] && [ "${existing_group}" != "node" ]; then \
+      usermod -g "${existing_group}" node; \
+    else \
+      groupmod -o -g "${HOST_GID}" node; \
+    fi; \
+    usermod -o -u "${HOST_UID}" -d /home/dev -m node; \
+    usermod -l dev node; \
+    if getent group node >/dev/null 2>&1; then \
+      groupmod -n dev node; \
+    fi; \
+    echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev; \
+    chmod 0440 /etc/sudoers.d/dev; \
+    mkdir -p /home/dev; \
+    chown -R "${HOST_UID}:${HOST_GID}" /home/dev
 
 RUN npm install -g "@openai/codex@${CODEX_VERSION}"
 
@@ -82,7 +103,7 @@ exec docker run --rm -it \
   -e "CODEX_HOME=$CODEX_HOME_IN_CONTAINER" \
   -e "TERM=${TERM:-xterm-256color}" \
   -e OPENAI_API_KEY= \
-  -u "$(id -u):$(id -g)" \
+  --user dev \
   $HARDEN_ARGS \
   "$IMAGE" \
   codex \

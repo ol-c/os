@@ -5,6 +5,7 @@ import { URL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { editorHtml, handleEditorApi } from './editor-page.mjs';
+import { setupHtml } from './setup-page.mjs';
 import { rootHtml } from './system-page.mjs';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -107,7 +108,7 @@ function proxyErrorHtml(message) {
   </head>
   <body>
     <main>
-      <h1>Terminal unavailable</h1>
+      <h1>Unavailable</h1>
       <p>${message}</p>
     </main>
   </body>
@@ -135,10 +136,21 @@ function stripHopByHopHeaders(headers) {
 
 export function createOlcApp(options) {
   const {
+    createFirstUser,
+    getRuntimeState,
+    onSetupCompleted = () => {},
     systemControls,
     terminalUpstreamUrl = 'https://127.0.0.1:9443',
   } = options;
   const terminalUpstream = parseUpstream(terminalUpstreamUrl);
+
+  async function requireRuntimeState() {
+    if (!getRuntimeState) {
+      throw new Error('runtime state resolver is required');
+    }
+
+    return await getRuntimeState();
+  }
 
   function proxyTerminalRequest(req, res) {
     const proxy = terminalUpstream.request({
@@ -212,15 +224,70 @@ export function createOlcApp(options) {
     }
   }
 
+  async function handleSetupStatus(req, res) {
+    if (req.method !== 'GET') {
+      writeJson(res, 405, { ok: false, error: 'method not allowed' }, { allow: 'GET' });
+      return;
+    }
+
+    const state = await requireRuntimeState();
+    writeJson(res, 200, {
+      ok: true,
+      setupMode: state.setupMode,
+      activeUser: state.activeUser ? state.activeUser.name : null,
+    });
+  }
+
+  async function handleSetupCreate(req, res) {
+    if (req.method !== 'POST') {
+      writeJson(res, 405, { ok: false, error: 'method not allowed' }, { allow: 'POST' });
+      return;
+    }
+
+    const state = await requireRuntimeState();
+    if (!state.setupMode) {
+      writeJson(res, 409, { ok: false, error: 'first setup has already been completed' });
+      return;
+    }
+    if (!createFirstUser) {
+      writeJson(res, 500, { ok: false, error: 'setup provisioning is unavailable' });
+      return;
+    }
+
+    try {
+      const body = await readJsonBody(req);
+      const payload = await createFirstUser(body);
+      writeJson(res, 200, payload);
+      onSetupCompleted(payload);
+    } catch (error) {
+      writeJson(res, error.statusCode ?? 500, { ok: false, error: error.message });
+    }
+  }
+
   async function handleRequest(req, res) {
     const reqUrl = new URL(req.url, 'https://localhost');
+    const state = await requireRuntimeState();
 
     if (reqUrl.pathname.startsWith('/terminal')) {
+      if (state.setupMode) {
+        setNoStore(res);
+        res.writeHead(409, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(proxyErrorHtml('Terminal is unavailable during first setup.'));
+        return;
+      }
+
       proxyTerminalRequest(req, res);
       return;
     }
 
     if (reqUrl.pathname === '/edit') {
+      if (state.setupMode) {
+        setNoStore(res);
+        res.writeHead(409, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(proxyErrorHtml('Editor is unavailable during first setup.'));
+        return;
+      }
+
       setNoStore(res);
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
@@ -230,6 +297,11 @@ export function createOlcApp(options) {
     }
 
     if (reqUrl.pathname === '/edit/assets/editor.js') {
+      if (state.setupMode) {
+        writeJson(res, 409, { ok: false, error: 'editor is unavailable during first setup' });
+        return;
+      }
+
       setNoStore(res);
       res.writeHead(200, {
         'content-type': 'text/javascript; charset=utf-8',
@@ -239,7 +311,33 @@ export function createOlcApp(options) {
     }
 
     if (reqUrl.pathname.startsWith('/api/edit/')) {
-      await handleEditorApi(req, res, reqUrl);
+      if (state.setupMode) {
+        writeJson(res, 409, { ok: false, error: 'editor is unavailable during first setup' });
+        return;
+      }
+
+      await handleEditorApi(req, res, reqUrl, {
+        getEditorUser: async () => {
+          const latestState = await requireRuntimeState();
+          return latestState.activeUser;
+        },
+      });
+      return;
+    }
+
+    if (reqUrl.pathname === '/setup') {
+      if (!state.setupMode) {
+        setNoStore(res);
+        res.writeHead(303, { location: '/' });
+        res.end();
+        return;
+      }
+
+      setNoStore(res);
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+      });
+      res.end(setupHtml());
       return;
     }
 
@@ -248,7 +346,22 @@ export function createOlcApp(options) {
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
       });
-      res.end(rootHtml());
+      res.end(state.setupMode ? setupHtml() : rootHtml());
+      return;
+    }
+
+    if (reqUrl.pathname === '/api/setup/status') {
+      await handleSetupStatus(req, res);
+      return;
+    }
+
+    if (reqUrl.pathname === '/api/setup/first-user') {
+      await handleSetupCreate(req, res);
+      return;
+    }
+
+    if (state.setupMode && (reqUrl.pathname === '/api/system/events' || commandPaths.has(reqUrl.pathname))) {
+      writeJson(res, 409, { ok: false, error: 'system controls are unavailable during first setup' });
       return;
     }
 

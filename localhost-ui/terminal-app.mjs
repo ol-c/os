@@ -106,7 +106,7 @@ function cancelTimer(timer) {
 export function createTerminalApp(options) {
   const {
     bashBin,
-    demoUser,
+    getTerminalUser,
     spawnProcess = spawn,
     terminalClientCss,
     terminalClientJs,
@@ -239,6 +239,17 @@ export function createTerminalApp(options) {
   }
 
   async function spawnTerminalBackend() {
+    if (!getTerminalUser) {
+      throw new Error('terminal user resolver is required');
+    }
+
+    const terminalUser = await getTerminalUser();
+    if (!terminalUser) {
+      const error = new Error('terminal is unavailable until a signed-in user session exists');
+      error.statusCode = 409;
+      throw error;
+    }
+
     const token = randomUUID();
     const port = await reservePort();
     const basePath = pathForBackend(token);
@@ -247,9 +258,9 @@ export function createTerminalApp(options) {
       '--interface', 'lo',
       '--writable',
       '--base-path', basePath,
-      '--uid', demoUser.uid,
-      '--gid', demoUser.gid,
-      '--cwd', '/home/demo',
+      '--uid', terminalUser.uid,
+      '--gid', terminalUser.gid,
+      '--cwd', terminalUser.home,
       bashBin,
       '--login',
     ];
@@ -470,7 +481,7 @@ export function createTerminalApp(options) {
         res.end(terminalHtml(token, terminalPublicUrl));
       } catch (error) {
         setNoStore(res);
-        res.writeHead(502, {
+        res.writeHead(error.statusCode ?? 502, {
           'content-type': 'text/html; charset=utf-8',
         });
         res.end(proxyErrorHtml(`Unable to start a fresh terminal: ${error.message}`));
