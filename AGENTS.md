@@ -207,6 +207,7 @@ These are implemented capabilities that should remain visible even when the acti
 - `edit` from an in-browser terminal opens a new `/edit` tab rooted at the current directory, and `edit <path>` opens that file.
 - The normal host launch path uses a browser tab as the default VM display, backed by local-only QEMU VNC WebSocket plus pinned noVNC assets.
 - The normal VM launch path also exposes a local-only QMP socket and prints it as `qmp socket:` for low-level host-side control.
+- Nested `olc-launch-test-vm` launches keep the child hidden by default and rely on the printed reconnect URL when you want to view the child in a browser tab.
 - SPICE, SDL, and GTK remain explicit development display fallbacks.
 - Browser-tab wheel capture preserves horizontal and vertical repeated steps and leftover delta before reaching QEMU.
 - Firefox localhost shell behavior opens new tabs to `https://localhost/` and replaces last-tab closure with a localhost tab.

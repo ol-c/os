@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 OLC_LAUNCH_TEST_VM="${ROOT_DIR}/olc-launch-test-vm"
 TEST_TMP_ROOT="${OLC_TEST_TMP_ROOT:-${ROOT_DIR}/.tmp-tests}"
-TEST_SYSTEM_PATH="${OLC_TEST_SYSTEM_PATH:-/usr/bin:/bin}"
 TEST_FAKE_BASH="${OLC_TEST_FAKE_BASH:-$(command -v bash)}"
+TEST_SYSTEM_PATH="${OLC_TEST_SYSTEM_PATH:-$(dirname -- "$TEST_FAKE_BASH"):/usr/bin:/bin}"
 CASE_TMP=""
 
 fail() {
@@ -76,7 +76,6 @@ test_launches_with_default_image_and_workspace() {
       OLC_VM_WORKSPACE="${CASE_TMP}/workspace" \
       OLC_KVM_DEVICE="${CASE_TMP}/kvm" \
       OLC_DEFAULT_NOVNC_DIR="${CASE_TMP}/novnc" \
-      OLC_VM_SCREEN_OPEN_BROWSER=0 \
       "${OLC_LAUNCH_TEST_VM}" --cpus 1
   )"
 

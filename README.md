@@ -168,6 +168,7 @@ The wrapper:
 - uses the first bootable image in `/vm-images` unless `OLC_VM_IMAGE=/path/to/image.qcow2` is set
 - uses `/var/lib/ol-c/vms` for child VM runtime temp files
 - starts the child VM through the same browser-tab display path as host `./launch-vm`
+- leaves the child VM hidden by default instead of auto-opening a new browser tab
 - prints a reconnect URL for the child VM screen
 - records runtime metadata in `/var/lib/ol-c/vms/current/vm.json` so `olc-vmctl` can target the current child VM without a pasted QMP socket path
 
@@ -175,6 +176,12 @@ If you want to test a specific prebuilt image inside the parent guest:
 
 ```sh
 OLC_VM_IMAGE=/vm-images/guest.qcow2 olc-launch-test-vm
+```
+
+If you do want the child VM tab to open immediately, override the default:
+
+```sh
+OLC_VM_SCREEN_OPEN_BROWSER=1 olc-launch-test-vm
 ```
 
 Once the child VM is running, the parent guest can control it through the current metadata record:
