@@ -80,9 +80,17 @@ fi
 
 mkdir -p "$VM_WORKSPACE/tmp"
 
+if [[ -n "${OLC_QEMU_DISPLAY:-}" ]]; then
+  fail "embedded VM launches do not allow OLC_QEMU_DISPLAY overrides; use the browser-tab viewer only."
+fi
+
+if [[ -n "${OLC_QEMU_FRONTEND:-}" && "${OLC_QEMU_FRONTEND}" != "browser" ]]; then
+  fail "embedded VM launches do not allow OLC_QEMU_FRONTEND=${OLC_QEMU_FRONTEND}; use the browser-tab viewer only."
+fi
+
 export OLC_SOURCE_DIR="$SOURCE_DIR"
 export OLC_VM_IMAGE="$IMAGE_PATH"
-export OLC_QEMU_FRONTEND="${OLC_QEMU_FRONTEND:-browser}"
+export OLC_QEMU_FRONTEND="browser"
 export OLC_VM_SCREEN_OPEN_BROWSER="${OLC_VM_SCREEN_OPEN_BROWSER:-0}"
 export OLC_VM_RUNTIME_DIR="${OLC_VM_RUNTIME_DIR:-${VM_WORKSPACE}/current}"
 export TMPDIR="${TMPDIR:-${VM_WORKSPACE}/tmp}"

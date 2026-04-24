@@ -166,9 +166,59 @@ EOF
   cleanup_case
 }
 
+test_rejects_non_browser_frontend_override() {
+  local output status
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      OLC_SOURCE_DIR="${CASE_TMP}/source" \
+      OLC_VM_IMAGES_DIR="${CASE_TMP}/images" \
+      OLC_VM_WORKSPACE="${CASE_TMP}/workspace" \
+      OLC_KVM_DEVICE="${CASE_TMP}/kvm" \
+      OLC_QEMU_FRONTEND="spice" \
+      "${OLC_LAUNCH_TEST_VM}" \
+      2>&1
+  )"
+  status=$?
+  set -e
+
+  [[ $status -ne 0 ]] || fail "expected wrapper to reject non-browser frontend overrides"
+  assert_contains "$output" "embedded VM launches do not allow OLC_QEMU_FRONTEND=spice"
+  assert_contains "$output" "browser-tab viewer only"
+  cleanup_case
+}
+
+test_rejects_direct_display_override() {
+  local output status
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      OLC_SOURCE_DIR="${CASE_TMP}/source" \
+      OLC_VM_IMAGES_DIR="${CASE_TMP}/images" \
+      OLC_VM_WORKSPACE="${CASE_TMP}/workspace" \
+      OLC_KVM_DEVICE="${CASE_TMP}/kvm" \
+      OLC_QEMU_DISPLAY="gtk,gl=off,zoom-to-fit=off" \
+      "${OLC_LAUNCH_TEST_VM}" \
+      2>&1
+  )"
+  status=$?
+  set -e
+
+  [[ $status -ne 0 ]] || fail "expected wrapper to reject direct display overrides"
+  assert_contains "$output" "embedded VM launches do not allow OLC_QEMU_DISPLAY overrides"
+  assert_contains "$output" "browser-tab viewer only"
+  cleanup_case
+}
+
 test_launches_with_default_image_and_workspace
 test_requires_nested_kvm_access
 test_rejects_missing_explicit_image
 test_passes_vm_lineage_to_child_launch
+test_rejects_non_browser_frontend_override
+test_rejects_direct_display_override
 
 echo "PASS: olc-launch-test-vm"

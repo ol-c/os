@@ -170,6 +170,7 @@ The wrapper:
 - starts the child VM through the same browser-tab display path as host `./launch-vm`
 - leaves the child VM hidden by default instead of auto-opening a new browser tab
 - prints a reconnect URL for the child VM screen
+- rejects nested display overrides such as `OLC_QEMU_FRONTEND=spice|sdl|gtk` or `OLC_QEMU_DISPLAY=...` so the child cannot take over the parent screen
 - records runtime metadata in `/var/lib/ol-c/vms/current/vm.json` so `olc-vmctl` can target the current child VM without a pasted QMP socket path
 
 If you want to test a specific prebuilt image inside the parent guest:
