@@ -202,7 +202,7 @@ Question this milestone answers:
 
 These are implemented capabilities that should remain visible even when the active work has moved on:
 - `https://localhost/terminal` provides fresh in-browser terminal sessions.
-- `https://localhost/edit` provides a browser text editor for local files using the demo user's filesystem permissions.
+- `https://localhost/edit` provides a browser text editor for local files using the active signed-in user's filesystem permissions.
 - The editor uses CodeMirror 6, stores unsaved drafts in browser local storage, and follows the shared terminal font, color scheme, and global light or dark appearance.
 - `edit` from an in-browser terminal opens a new `/edit` tab rooted at the current directory, and `edit <path>` opens that file.
 - The normal host launch path uses a browser tab as the default VM display, backed by local-only QEMU VNC WebSocket plus pinned noVNC assets.
@@ -303,6 +303,10 @@ Implementation status:
 - [x] Add a basic localhost text editor at `https://localhost/edit` with terminal launch integration and terminal setting reuse.
 - [x] Add a development-loop proof for efficiently launching patched Firefox browser chrome from inside the VM to test patch edits.
 - [x] Improve browser-tab VM wheel capture so horizontal and vertical scroll preserve repeated steps and leftover delta before reaching QEMU.
+- [x] Add a first-boot browser setup kiosk that creates the first human admin through `systemd-homed` with LUKS-backed storage.
+- [x] Switch tty1 from fixed autologin to dynamic behavior: setup autologin only before the first admin exists, normal username/password login afterward.
+- [x] Replace hardcoded `demo` runtime assumptions in localhost terminal and editor paths with active console user resolution.
+- [x] Add a Milestone 5 automated test-prefill path that bypasses manual first-user setup in VM/system tests.
 
 # Deferred Decisions
 

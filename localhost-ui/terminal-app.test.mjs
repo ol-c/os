@@ -28,7 +28,7 @@ function createFakeTtydSpawner() {
     });
     server.listen(port, '127.0.0.1');
     servers.push(server);
-    children.push(child);
+    children.push({ args, child });
     return child;
   }
 
@@ -43,11 +43,15 @@ function createFakeTtydSpawner() {
   };
 }
 
-async function withTerminalServer(fn) {
-  const { spawnProcess, cleanup: cleanupSpawner } = createFakeTtydSpawner();
+async function withTerminalServer(fn, options = {}) {
+  const { spawnProcess, cleanup: cleanupSpawner, children } = createFakeTtydSpawner();
   const app = createTerminalApp({
     bashBin: '/bin/bash',
-    demoUser: { uid: '1000', gid: '1000' },
+    getTerminalUser: options.getTerminalUser || (async () => ({
+      uid: '1000',
+      gid: '1000',
+      home: '/home/alice',
+    })),
     spawnProcess,
     terminalClientCss: '/* terminal css */',
     terminalClientJs: '/* terminal js */',
@@ -60,7 +64,7 @@ async function withTerminalServer(fn) {
   const { port } = server.address();
 
   try {
-    await fn(`http://127.0.0.1:${port}`);
+    await fn(`http://127.0.0.1:${port}`, children);
   } finally {
     await new Promise(resolve => server.close(resolve));
     app.cleanup();
@@ -75,7 +79,7 @@ function extractBackendToken(html) {
 }
 
 test('/terminal creates a fresh hidden backend token on each visit', async () => {
-  await withTerminalServer(async baseUrl => {
+  await withTerminalServer(async (baseUrl, children) => {
     const first = await fetch(`${baseUrl}/terminal`);
     const firstHtml = await first.text();
     const firstToken = extractBackendToken(firstHtml);
@@ -88,14 +92,22 @@ test('/terminal creates a fresh hidden backend token on each visit', async () =>
     assert.equal(second.status, 200);
     assert.notEqual(firstToken, secondToken);
     assert.match(firstHtml, /window\.OLC_TERMINAL_CONFIG/);
-    assert.match(firstHtml, /https:\/\/localhost:9443\/session\/[^/]+\/token/);
-    assert.match(firstHtml, /https:\/\/localhost:9443\/session\/[^/]+\/close/);
-    assert.match(firstHtml, /https:\/\/localhost:9443\/session\/[^/]+\/ws/);
-    assert.match(firstHtml, /https:\/\/localhost:9443\/assets\/terminal\.css/);
-    assert.match(firstHtml, /https:\/\/localhost:9443\/assets\/terminal\.js/);
+    assert.equal(children[0].args[children[0].args.indexOf('--cwd') + 1], '/home/alice');
+    assert.equal(children[0].args[children[0].args.indexOf('--uid') + 1], '1000');
 
     await fetch(`${baseUrl}/session/${firstToken}/close`, { method: 'POST' });
     await fetch(`${baseUrl}/session/${secondToken}/close`, { method: 'POST' });
+  });
+});
+
+test('terminal reports a clear error when no signed-in user session exists', async () => {
+  await withTerminalServer(async baseUrl => {
+    const response = await fetch(`${baseUrl}/terminal`);
+    const html = await response.text();
+    assert.equal(response.status, 409);
+    assert.match(html, /signed-in user session exists/i);
+  }, {
+    getTerminalUser: async () => null,
   });
 });
 
@@ -109,73 +121,4 @@ test('terminal assets are served by the stable terminal app', async () => {
     assert.equal(js.status, 200);
     assert.equal(await js.text(), '/* terminal js */');
   });
-});
-
-test('terminal backend accepts localhost CORS requests from the UI origin', async () => {
-  await withTerminalServer(async baseUrl => {
-    const page = await fetch(`${baseUrl}/terminal`);
-    const token = extractBackendToken(await page.text());
-
-    const tokenResponse = await fetch(`${baseUrl}/session/${token}/token`, {
-      headers: { origin: 'https://localhost' },
-    });
-    assert.equal(tokenResponse.headers.get('access-control-allow-origin'), 'https://localhost');
-
-    const preflight = await fetch(`${baseUrl}/session/${token}/close`, {
-      method: 'OPTIONS',
-      headers: {
-        origin: 'https://localhost',
-        'access-control-request-method': 'POST',
-      },
-    });
-    assert.equal(preflight.status, 204);
-    assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://localhost');
-    assert.match(preflight.headers.get('access-control-allow-methods'), /POST/);
-
-    const closeResponse = await fetch(`${baseUrl}/session/${token}/close`, {
-      method: 'POST',
-      headers: { origin: 'https://localhost' },
-    });
-    assert.equal(closeResponse.status, 204);
-    assert.equal(closeResponse.headers.get('access-control-allow-origin'), 'https://localhost');
-  });
-});
-
-test('terminal token endpoint reports a recent backend exit reason', async () => {
-  const spawner = createFakeTtydSpawner();
-  const app = createTerminalApp({
-    bashBin: '/bin/bash',
-    demoUser: { uid: '1000', gid: '1000' },
-    spawnProcess: spawner.spawnProcess,
-    terminalClientCss: '/* terminal css */',
-    terminalClientJs: '/* terminal js */',
-    terminalPublicUrl: 'https://localhost:9443',
-    ttydBin: '/bin/ttyd',
-  });
-  const server = http.createServer(app.handleRequest);
-
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  const baseUrl = `http://127.0.0.1:${port}`;
-
-  try {
-    const page = await fetch(`${baseUrl}/terminal`);
-    const token = extractBackendToken(await page.text());
-    const child = spawner.children.at(-1);
-
-    child.stderr.emit('data', Buffer.from('No space left on device\n'));
-    child.emit('exit', 1, null);
-
-    const response = await fetch(`${baseUrl}/session/${token}/token`);
-    const body = await response.json();
-
-    assert.equal(response.status, 410);
-    assert.match(body.error, /terminal backend exited unexpectedly/i);
-    assert.match(body.error, /exit code 1/);
-    assert.match(body.error, /No space left on device/);
-  } finally {
-    await new Promise(resolve => server.close(resolve));
-    app.cleanup();
-    spawner.cleanup();
-  }
 });

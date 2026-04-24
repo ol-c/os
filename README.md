@@ -70,7 +70,7 @@ OLC_QEMU_BIN=/path/to/qemu-system-x86_64 ./launch-vm
 OLC_VM_DISK_SIZE=96G ./launch-vm
 ```
 
-Before booting, `launch-vm` also verifies that the host source directory can create files and directories. If that check fails, the guest would mount `/source` in a state where existing files may be editable but new files cannot be created, which is not a valid synced-development setup. When the host `virtiofsd` supports it, the launcher maps guest `demo` UID/GID `1000:1000` to the host launcher UID/GID so in-guest edits create host-owned files instead of depending on matching numeric IDs.
+Before booting, `launch-vm` also verifies that the host source directory can create files and directories. If that check fails, the guest would mount `/source` in a state where existing files may be editable but new files cannot be created, which is not a valid synced-development setup. When the host `virtiofsd` supports it, the launcher maps guest UID/GID `1000:1000` to the host launcher UID/GID so in-guest edits create host-owned files instead of depending on matching numeric IDs. The first human admin created by setup prefers UID `1000` so the existing synced-development path stays intact after first boot.
 
 The browser display path is local development only for now: the viewer server and QEMU VNC WebSocket listener bind to `127.0.0.1`. If the browser does not open automatically, use the printed `browser url:` line.
 
@@ -98,7 +98,7 @@ OLC_QEMU_GDK_SCALE=2 OLC_QEMU_GDK_DPI_SCALE=0.5 ./launch-vm
 /source
 ```
 
-The mount is read-write. The `demo` user is pinned to UID `1000` and primary GID `1000`. When the host `virtiofsd` supports ID translation, `./launch-vm` maps that guest identity to the host user running the launcher so in-guest file creation works even when the host repo owner uses a different numeric UID or GID. If `virtiofsd` does not support ID translation, the host repo still needs permissions that allow the guest numeric identity to create files and directories.
+The mount is read-write. The first human admin created by setup prefers UID `1000`. When the host `virtiofsd` supports ID translation, `./launch-vm` maps that guest identity to the host user running the launcher so in-guest file creation works even when the host repo owner uses a different numeric UID or GID. If `virtiofsd` does not support ID translation, the host repo still needs permissions that allow the guest numeric identity to create files and directories.
 
 The localhost UI service uses the packaged Nix store source by default, but when `/source/localhost-ui/server.mjs` exists it runs the service from `/source` instead. The source preview supervisor watches `/source/localhost-ui`; when those files change it restarts the HTTPS UI service. Refresh `https://localhost/` in Firefox to see server-side UI updates.
 
@@ -125,7 +125,7 @@ edit
 edit localhost-ui/server.mjs
 ```
 
-`edit` opens a new `/edit` browser tab rooted at the current directory. `edit <path>` opens that file, resolving relative paths from the current directory. The editor uses CodeMirror 6, stores unsaved drafts in browser local storage, reads and writes with the demo user's filesystem permissions, and follows the existing terminal font/color-scheme settings plus the global light/dark appearance mode. It intentionally reuses the terminal settings contract rather than adding separate editor preferences.
+`edit` opens a new `/edit` browser tab rooted at the current directory. `edit <path>` opens that file, resolving relative paths from the current directory. The editor uses CodeMirror 6, stores unsaved drafts in browser local storage, reads and writes with the active signed-in user's filesystem permissions, and follows the existing terminal font/color-scheme settings plus the global light/dark appearance mode. It intentionally reuses the terminal settings contract rather than adding separate editor preferences.
 
 The guest includes a `codex` command for in-VM development. From `https://localhost/terminal`, run:
 
@@ -134,7 +134,7 @@ cd /source
 codex
 ```
 
-The wrapper uses `npx` to run the pinned `@openai/codex` CLI, defaults to `CODEX_MODEL=gpt-5.4`, and passes `--dangerously-bypass-approvals-and-sandbox` so Codex can make full-system development changes inside this disposable VM. The `demo` user has passwordless `sudo` through the `wheel` group for the same reason. This is a development VM convenience, not the intended production OS security posture.
+The wrapper uses `npx` to run the pinned `@openai/codex` CLI, defaults to `CODEX_MODEL=gpt-5.4`, and passes `--dangerously-bypass-approvals-and-sandbox` so Codex can make full-system development changes inside this disposable VM. The initial admin user created during setup currently has passwordless `sudo` through the `wheel` group for the same reason. This is a development VM convenience, not the intended production OS security posture.
 
 ## Nested In-VM VM Development
 
@@ -173,7 +173,7 @@ This proof prefers image reuse over building a full image inside the parent VM. 
 
 `nix/ol-c.nix` is the current guest entry point. It imports focused modules from `nix/modules/`:
 - `base.nix` owns boot, qemu guest support, serial console, hostname, and NixOS state version
-- `users.nix` owns root/demo users, autologin, demo home, and shell prompt
+- `users.nix` owns the setup account, tty1 login behavior, and the shared shell prompt helpers
 - `packages.nix` owns the shared guest package list
 - `localhost-ui.nix` owns the generated localhost TLS material, trusted CA, stable `ol-c-terminal` service, and reloadable `ol-c-ui` service
 - `graphical-session.nix` owns X, matchbox, SPICE guest integration, Firefox profile setup, and browser launch

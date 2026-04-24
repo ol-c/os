@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:https';
+import { spawn } from 'node:child_process';
 import { createOlcApp } from './app.mjs';
+import { createFirstUser } from './setup-manager.mjs';
+import { getRuntimeState } from './runtime-state.mjs';
 import { createSelectedSystemControls } from './system-controls.mjs';
 
 function requireEnv(name) {
@@ -15,7 +18,19 @@ function requireEnv(name) {
 
 const tlsKeyPath = requireEnv('OLC_TLS_KEY');
 const tlsCertPath = requireEnv('OLC_TLS_CERT');
+const systemctlBin = process.env.OLC_SYSTEMCTL || 'systemctl';
 const app = createOlcApp({
+  createFirstUser,
+  getRuntimeState: () => getRuntimeState(),
+  onSetupCompleted: () => {
+    setTimeout(() => {
+      const child = spawn(systemctlBin, [ 'restart', 'getty@tty1.service' ], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+    }, 200);
+  },
   systemControls: createSelectedSystemControls(),
   terminalUpstreamUrl: process.env.OLC_TERMINAL_UPSTREAM || 'https://127.0.0.1:9443',
 });

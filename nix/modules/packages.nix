@@ -19,8 +19,10 @@
     pulseaudio
     qemu_kvm
     ripgrep
+    shadow
     spice-vdagent
     ttyd
+    util-linux
     virtiofsd
     wireplumber
     xdg-utils

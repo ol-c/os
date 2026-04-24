@@ -1,4 +1,4 @@
-{ modulesPath, ... }:
+{ lib, modulesPath, ... }:
 
 {
   imports = [
@@ -6,6 +6,7 @@
   ];
 
   system.stateVersion = "25.11";
+  ids.uids.nixbld = lib.mkForce 700;
 
   boot.loader.grub = {
     enable = true;

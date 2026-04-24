@@ -355,15 +355,15 @@ in {
 
   nix.settings = {
     experimental-features = [ "nix-command" "flakes" ];
-    trusted-users = [ "root" "demo" ];
+    trusted-users = [ "root" "@wheel" ];
   };
 
   security.sudo.wheelNeedsPassword = false;
 
   systemd.tmpfiles.rules = [
     "d /var/lib/ol-c 0755 root root -"
-    "d /var/lib/ol-c/firefox-dev 0775 demo demo -"
-    "d /var/lib/ol-c/vms 0775 demo demo -"
-    "d /var/lib/ol-c/vms/tmp 0775 demo demo -"
+    "d /var/lib/ol-c/firefox-dev 0775 root olc-admin -"
+    "d /var/lib/ol-c/vms 0775 root olc-admin -"
+    "d /var/lib/ol-c/vms/tmp 0775 root olc-admin -"
   ];
 }
