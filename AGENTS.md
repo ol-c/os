@@ -206,10 +206,12 @@ These are implemented capabilities that should remain visible even when the acti
 - The editor uses CodeMirror 6, stores unsaved drafts in browser local storage, and follows the shared terminal font, color scheme, and global light or dark appearance.
 - `edit` from an in-browser terminal opens a new `/edit` tab rooted at the current directory, and `edit <path>` opens that file.
 - The normal host launch path uses a browser tab as the default VM display, backed by local-only QEMU VNC WebSocket plus pinned noVNC assets.
+- The normal VM launch path also exposes a local-only QMP socket and prints it as `qmp socket:` for low-level host-side control.
 - SPICE, SDL, and GTK remain explicit development display fallbacks.
 - Browser-tab wheel capture preserves horizontal and vertical repeated steps and leftover delta before reaching QEMU.
 - Firefox localhost shell behavior opens new tabs to `https://localhost/` and replaces last-tab closure with a localhost tab.
 - In-VM development can use a host-shared repo mounted at `/source` through QEMU `virtiofs`.
+- `olc-vmctl` provides host-side QMP control primitives for a running VM, including `key`, `type`, `move`, `click`, `screenshot`, and `raw`.
 
 # Current Focus
 
@@ -219,6 +221,19 @@ We are currently focused on Milestone 6.
 
 Immediate next task:
 - Record exact Firefox and nixpkgs identity for `patched-firefox` runs so developers can prove what runtime they validated before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`.
+
+Additional active Milestone 6 track:
+- Define the host-driven VM operator proof so a host can launch a VM, submit work to it, and watch that work happen through the embedded VM browser viewer or in-guest browser surfaces.
+- Treat the shared `/source` mount as the first host↔guest control channel for this proof instead of adding guest networking requirements first.
+- Prefer a guest-resident operator service with explicit `shell` and `gui` execution modes over a pure host-side noVNC driving approach.
+- Use `xdotool` inside the guest for first-pass visible GUI automation when user-like interaction is required.
+- Keep the existing browser viewer as the human observation and reconnect surface, not the primary automation API.
+- Record operator request state, progress, and results both in a shared runtime directory and in journald so the host can tell what the VM is doing.
+- The first proof should be: host launches VM, submits a request, guest opens a terminal tab in Firefox and runs a visible command, host watches it happen live, and host can verify completion from shared artifacts and logs.
+- The implemented first low-level control path uses QMP directly instead: host or parent guest launches the VM, `launch-vm` prints a `qmp socket:`, and `olc-vmctl` can inject keyboard and pointer input or capture screenshots while the VM remains visible in the embedded browser viewer.
+
+Planning note:
+- The current exploration and proposed proof live in `docs/host-driven-vm-operator-plan.md`.
 
 Next steps from the patched-Firefox fast-loop attempt:
 - Preserve the useful decision that `patched-firefox` should be the one-command operator path for launching a patched Firefox from inside the VM.
@@ -314,6 +329,8 @@ Implementation status:
 - [x] Switch tty1 from fixed autologin to dynamic behavior: setup autologin only before the first admin exists, normal username/password login afterward.
 - [x] Replace hardcoded `demo` runtime assumptions in localhost terminal and editor paths with active console user resolution.
 - [x] Add a Milestone 5 automated test-prefill path that bypasses manual first-user setup in VM/system tests.
+- [x] Explore and document the host-driven VM operator direction for launching a VM, submitting work from the host, and watching the VM carry it out live through the embedded browser viewer.
+- [x] Add a first QMP-native host control path for launched VMs, including printed QMP socket paths, nested-child runtime metadata, and an `olc-vmctl` wrapper for keyboard, pointer, screenshot, and raw-QMP actions.
 
 # Deferred Decisions
 

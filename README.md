@@ -74,6 +74,17 @@ Before booting, `launch-vm` also verifies that the host source directory can cre
 
 The browser display path is local development only for now: the viewer server and QEMU VNC WebSocket listener bind to `127.0.0.1`. If the browser does not open automatically, use the printed `browser url:` line.
 
+`launch-vm` now also creates a local-only QMP control socket and prints it as `qmp socket:`. Use the repo's thin QMP wrapper to inject keyboard and pointer input, capture screenshots, or send raw QMP commands while the VM stays visible in the browser tab:
+
+```sh
+./olc-vmctl --qmp /tmp/ol-c-qmp.XXXXXX/qmp.sock key ctrl+alt+delete
+./olc-vmctl --qmp /tmp/ol-c-qmp.XXXXXX/qmp.sock type 'root'
+./olc-vmctl --qmp /tmp/ol-c-qmp.XXXXXX/qmp.sock move 400 250
+./olc-vmctl --qmp /tmp/ol-c-qmp.XXXXXX/qmp.sock click 1
+./olc-vmctl --qmp /tmp/ol-c-qmp.XXXXXX/qmp.sock screenshot /tmp/vm.ppm
+./olc-vmctl --qmp /tmp/ol-c-qmp.XXXXXX/qmp.sock raw '{"execute":"query-mice"}'
+```
+
 SPICE remains available as an explicit fallback, and SDL/GTK remain available as direct QEMU display fallbacks:
 
 ```sh
@@ -158,11 +169,20 @@ The wrapper:
 - uses `/var/lib/ol-c/vms` for child VM runtime temp files
 - starts the child VM through the same browser-tab display path as host `./launch-vm`
 - prints a reconnect URL for the child VM screen
+- records runtime metadata in `/var/lib/ol-c/vms/current/vm.json` so `olc-vmctl` can target the current child VM without a pasted QMP socket path
 
 If you want to test a specific prebuilt image inside the parent guest:
 
 ```sh
 OLC_VM_IMAGE=/vm-images/guest.qcow2 olc-launch-test-vm
+```
+
+Once the child VM is running, the parent guest can control it through the current metadata record:
+
+```sh
+olc-vmctl key ctrl+l
+olc-vmctl type 'https://localhost/terminal'
+olc-vmctl key enter
 ```
 
 This proof prefers image reuse over building a full image inside the parent VM. Local in-guest `./build-vm` remains guarded by the `/nix` free-space check.
@@ -234,6 +254,7 @@ Run the current shell contract tests with:
 ```sh
 bash tests/test-build-vm.sh
 bash tests/test-launch-vm.sh
+node --test tests/test-olc-vmctl.mjs
 ```
 
 ## Firefox Patch Workflow

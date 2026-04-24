@@ -25,6 +25,8 @@ Environment:
   OLC_VM_SCREEN_OPEN_BROWSER
                           Open the browser viewer with xdg-open. Default: 1.
   OLC_VM_SCREEN_PORT      Local browser viewer HTTP port. Default: automatic.
+  OLC_VM_RUNTIME_DIR      Runtime metadata directory for the launched VM.
+                          Default: unset.
   OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED
                           SDL HiDPI mode for QEMU's own window. Default: 1.
   OLC_QEMU_GDK_SCALE
@@ -216,6 +218,7 @@ QEMU_GDK_SCALE="${OLC_QEMU_GDK_SCALE:-1}"
 QEMU_GDK_DPI_SCALE="${OLC_QEMU_GDK_DPI_SCALE:-1}"
 VM_SCREEN_OPEN_BROWSER="${OLC_VM_SCREEN_OPEN_BROWSER:-1}"
 VM_SCREEN_PORT="${OLC_VM_SCREEN_PORT:-0}"
+VM_RUNTIME_DIR="${OLC_VM_RUNTIME_DIR:-}"
 SOURCE_DIR="${OLC_SOURCE_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
 VIRTIOFSD_SANDBOX="${OLC_VIRTIOFSD_SANDBOX:-none}"
 VIRTIOFSD_TRANSLATE_IDS="${OLC_VIRTIOFSD_TRANSLATE_IDS:-1}"
@@ -236,6 +239,11 @@ VM_SCREEN_PID=""
 SHARE_VM_IMAGES="${OLC_SHARE_VM_IMAGES:-1}"
 VM_DISK_SIZE="${OLC_VM_DISK_SIZE:-64G}"
 VM_DISK_OVERLAY=""
+QMP_SOCKET_DIR=""
+QMP_SOCKET=""
+RUNTIME_METADATA_PATH=""
+VM_SCREEN_URL=""
+VM_SCREEN_RECONNECT_URL=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -335,6 +343,9 @@ echo "graphical proof: Firefox launches as the in-guest UI shell"
 echo "serial output: terminal"
 echo "qemu frontend: $QEMU_FRONTEND"
 echo "qemu binary: $QEMU_BIN"
+QMP_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-qmp.XXXXXX")"
+QMP_SOCKET="${QMP_SOCKET_DIR}/qmp.sock"
+echo "qmp socket: $QMP_SOCKET"
 echo "source mount: $SOURCE_DIR -> /source"
 if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
   echo "image mount: $IMAGE_DIR -> /vm-images"
@@ -383,8 +394,14 @@ cleanup() {
   if [[ -n "$VM_SCREEN_LOG" ]]; then
     rm -f "$VM_SCREEN_LOG"
   fi
+  if [[ -n "$RUNTIME_METADATA_PATH" ]]; then
+    rm -f "$RUNTIME_METADATA_PATH"
+  fi
   if [[ -n "$VM_DISK_OVERLAY" ]]; then
     rm -f "$VM_DISK_OVERLAY"
+  fi
+  if [[ -n "$QMP_SOCKET_DIR" ]]; then
+    rm -rf "$QMP_SOCKET_DIR"
   fi
 
   if [[ -n "$VIRTIOFSD_PID" ]] && kill -0 "$VIRTIOFSD_PID" >/dev/null 2>&1; then
@@ -407,6 +424,36 @@ cleanup() {
 }
 
 trap cleanup EXIT INT TERM
+
+write_runtime_metadata() {
+  local browser_json reconnect_json
+
+  if [[ -z "$VM_RUNTIME_DIR" ]]; then
+    return
+  fi
+
+  browser_json="null"
+  reconnect_json="null"
+  if [[ -n "$VM_SCREEN_URL" ]]; then
+    browser_json="\"$VM_SCREEN_URL\""
+  fi
+  if [[ -n "$VM_SCREEN_RECONNECT_URL" ]]; then
+    reconnect_json="\"$VM_SCREEN_RECONNECT_URL\""
+  fi
+
+  mkdir -p "$VM_RUNTIME_DIR"
+  RUNTIME_METADATA_PATH="${VM_RUNTIME_DIR}/vm.json"
+
+  cat >"$RUNTIME_METADATA_PATH" <<EOF
+{
+  "qmpSocket": "$QMP_SOCKET",
+  "browserUrl": $browser_json,
+  "reconnectUrl": $reconnect_json,
+  "frontend": "$QEMU_FRONTEND",
+  "pid": ${QEMU_PID:-null}
+}
+EOF
+}
 
 VIRTIOFS_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-virtiofs.XXXXXX")"
 VIRTIOFS_SOCKET="${VIRTIOFS_SOCKET_DIR}/source.sock"
@@ -500,6 +547,8 @@ if [[ -n "$VM_PARENT_MACHINE_ID" ]]; then
   echo "parent vm depth: ${VM_PARENT_DEPTH:-0}"
 fi
 
+write_runtime_metadata
+
 if [[ "$QEMU_FRONTEND" != "spice" ]]; then
   if [[ "$QEMU_FRONTEND" == "browser" ]]; then
     VNC_DISPLAY="$(find_browser_display)"
@@ -511,6 +560,7 @@ if [[ "$QEMU_FRONTEND" != "spice" ]]; then
 
     "$QEMU_BIN" \
       "${qemu_base_args[@]}" \
+      -qmp "unix:${QMP_SOCKET},server=on,wait=off" \
       -display none \
       -chardev qemu-vdagent,id=ol-c-vdagent,name=vdagent,clipboard=on,mouse=off \
       -device virtio-serial-pci \
@@ -552,6 +602,7 @@ if [[ "$QEMU_FRONTEND" != "spice" ]]; then
     VM_SCREEN_RECONNECT_URL="${VM_SCREEN_URL/127.0.0.1/localhost}"
     echo "browser url: $VM_SCREEN_URL"
     echo "reconnect url: $VM_SCREEN_RECONNECT_URL"
+    write_runtime_metadata
 
     if [[ "$VM_SCREEN_OPEN_BROWSER" == "1" ]] && command -v xdg-open >/dev/null 2>&1; then
       xdg-open "$VM_SCREEN_URL" >/dev/null 2>&1 || true
@@ -590,8 +641,10 @@ if [[ "$QEMU_FRONTEND" != "spice" ]]; then
 
   "$QEMU_BIN" \
     "${qemu_base_args[@]}" \
+    -qmp "unix:${QMP_SOCKET},server=on,wait=off" \
     -display "$QEMU_DISPLAY" &
   QEMU_PID="$!"
+  write_runtime_metadata
   wait "$QEMU_PID"
   QEMU_PID=""
   exit 0
@@ -605,12 +658,14 @@ echo "spice socket: $SPICE_SOCKET"
 
 "$QEMU_BIN" \
   "${qemu_base_args[@]}" \
+  -qmp "unix:${QMP_SOCKET},server=on,wait=off" \
   -display none \
   -spice "unix=on,addr=${SPICE_SOCKET},disable-ticketing=on,agent-mouse=on,gl=off" \
   -device virtio-serial-pci \
   -chardev spicevmc,id=ol-c-vdagent,name=vdagent \
   -device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0 &
 QEMU_PID="$!"
+write_runtime_metadata
 
 for _ in $(seq 1 100); do
   if [[ -S "$SPICE_SOCKET" || -e "$SPICE_SOCKET" ]]; then

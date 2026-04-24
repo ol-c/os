@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 LAUNCH_VM="${ROOT_DIR}/launch-vm"
 TEST_TMP_ROOT="${OLC_TEST_TMP_ROOT:-${ROOT_DIR}/.tmp-tests}"
-TEST_SYSTEM_PATH="${OLC_TEST_SYSTEM_PATH:-/usr/bin:/bin}"
 TEST_FAKE_BASH="${OLC_TEST_FAKE_BASH:-$(command -v bash)}"
+TEST_SYSTEM_PATH="${OLC_TEST_SYSTEM_PATH:-$(dirname -- "$TEST_FAKE_BASH"):/usr/bin:/bin}"
 CASE_TMP=""
 
 fail() {
@@ -35,6 +35,7 @@ printf '%s\n' "\${SDL_VIDEO_HIGHDPI_DISABLED:-}" > "${CASE_TMP}/qemu.sdl-hidpi-d
 printf '%s\n' "\${GDK_SCALE:-}" > "${CASE_TMP}/qemu.gdk-scale"
 printf '%s\n' "\${GDK_DPI_SCALE:-}" > "${CASE_TMP}/qemu.gdk-dpi-scale"
 spice_socket=""
+qmp_socket=""
 vnc_enabled=0
 for arg in "\$@"; do
   case "\$arg" in
@@ -42,11 +43,20 @@ for arg in "\$@"; do
       spice_socket="\${arg#*addr=}"
       spice_socket="\${spice_socket%%,*}"
       ;;
+    unix:*,server=on,wait=off)
+      qmp_socket="\${arg#unix:}"
+      qmp_socket="\${qmp_socket%%,*}"
+      ;;
     127.0.0.1:*,websocket=127.0.0.1:*)
       vnc_enabled=1
       ;;
   esac
 done
+if [[ -n "\$qmp_socket" ]]; then
+  mkdir -p "\$(dirname "\$qmp_socket")"
+  : > "\$qmp_socket"
+  printf '%s\n' "\$qmp_socket" > "${CASE_TMP}/qmp.socket-path"
+fi
 if [[ -n "\$spice_socket" ]]; then
   mkdir -p "\$(dirname "\$spice_socket")"
   : > "\$spice_socket"
@@ -329,7 +339,7 @@ test_requires_source_directory_create_permissions() {
 }
 
 test_invokes_qemu_with_expected_browser_args_by_default() {
-  local output qemu_args build_args qemu_img_args virtiofsd_args virtiofsd_shared_dir vm_images_virtiofsd_args vm_images_shared_dir sdl_hidpi_disabled gdk_scale gdk_dpi_scale virtiofs_socket vm_images_socket node_args node_novnc_dir node_vnc_ws_port nix_args
+  local output qemu_args build_args qemu_img_args virtiofsd_args virtiofsd_shared_dir vm_images_virtiofsd_args vm_images_shared_dir sdl_hidpi_disabled gdk_scale gdk_dpi_scale virtiofs_socket vm_images_socket node_args node_novnc_dir node_vnc_ws_port nix_args qmp_socket
   setup_case
 
   output="$(
@@ -358,10 +368,12 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   node_novnc_dir="$(cat "${CASE_TMP}/node.novnc-dir")"
   node_vnc_ws_port="$(cat "${CASE_TMP}/node.vnc-ws-port")"
   nix_args="$(cat "${CASE_TMP}/nix.args.all")"
+  qmp_socket="$(cat "${CASE_TMP}/qmp.socket-path")"
   assert_contains "$output" "graphical proof: Firefox launches as the in-guest UI shell"
   assert_contains "$output" "serial output: terminal"
   assert_contains "$output" "qemu frontend: browser"
   assert_contains "$output" "qemu binary: ${CASE_TMP}/qemu-store/bin/qemu-system-x86_64"
+  assert_contains "$output" "qmp socket: "
   assert_contains "$output" "runtime disk overlay: "
   assert_contains "$output" "runtime disk size: 64G"
   assert_contains "$output" "source mount: ${ROOT_DIR} -> /source"
@@ -401,6 +413,7 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$qemu_args" "-audiodev none,id=olc-audio"
   assert_contains "$qemu_args" "-device intel-hda"
   assert_contains "$qemu_args" "-device hda-duplex,audiodev=olc-audio"
+  assert_contains "$qemu_args" "-qmp unix:"
   assert_contains "$qemu_args" "-display none"
   assert_contains "$qemu_args" "-vnc 127.0.0.1:"
   assert_contains "$qemu_args" "websocket=127.0.0.1:"
@@ -435,10 +448,12 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   [[ -f "${CASE_TMP}/qemu.terminated" ]] || fail "expected screen server exit to terminate QEMU"
   [[ -f "${CASE_TMP}/virtiofsd.terminated" ]] || fail "expected launcher cleanup to terminate virtiofsd"
   [[ ! -f "${CASE_TMP}/remote-viewer.args" ]] || fail "browser frontend should not launch remote-viewer"
+  [[ "$qmp_socket" == /tmp/ol-c-qmp.*/* ]] || fail "expected QMP socket to use a disposable temp directory, got [$qmp_socket]"
   virtiofs_socket="$(cat "${CASE_TMP}/virtiofsd.socket-path")"
   vm_images_socket="$(cat "${CASE_TMP}/vm-images-virtiofsd.socket-path")"
   [[ ! -e "$(dirname "$virtiofs_socket")" ]] || fail "expected virtiofs temp directory to be removed"
   [[ ! -e "$(dirname "$vm_images_socket")" ]] || fail "expected VM images virtiofs temp directory to be removed"
+  [[ ! -e "$(dirname "$qmp_socket")" ]] || fail "expected QMP temp directory to be removed"
   cleanup_case
 }
 

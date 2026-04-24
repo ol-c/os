@@ -179,6 +179,8 @@ test_structural_contracts() {
   [[ "$development" == *"trusted-users = [ \"root\" \"@wheel\" ];"* ]] || fail "expected development nix trust to follow wheel users"
   [[ "$development" == *"d /var/lib/ol-c/firefox-dev 0775 root olc-admin -"* ]] || fail "expected Firefox dev workspace to belong to olc-admin"
   [[ "$development" == *"d /var/lib/ol-c/vms 0775 root olc-admin -"* ]] || fail "expected nested VM workspace to belong to olc-admin"
+  [[ "$development" == *'writeShellScriptBin "olc-vmctl"'* ]] || fail "expected development profile to install olc-vmctl"
+  [[ "$development" == *'tools}/olc-vmctl.mjs'* ]] || fail "expected olc-vmctl to run the repo QMP controller"
 
   [[ "$runtime_state" == *"show-seat"* ]] || fail "expected runtime state to resolve the active seat session"
   [[ "$runtime_state" == *"getent"* ]] || fail "expected runtime state to resolve user entries through getent"

@@ -345,11 +345,20 @@ let
     export OLC_DEFAULT_NOVNC_DIR="''${OLC_DEFAULT_NOVNC_DIR:-${pkgs.novnc}/share/webapps/novnc}"
     exec ${pkgs.bash}/bin/bash ${../../olc-launch-test-vm} "$@"
   '';
+  olcVmctl = pkgs.writeShellScriptBin "olc-vmctl" ''
+    source_root="''${OLC_SOURCE_ROOT:-/source}"
+    if [ -x "$source_root/olc-vmctl" ]; then
+      exec "$source_root/olc-vmctl" "$@"
+    fi
+
+    exec ${pkgs.nodejs}/bin/node ${../../tools}/olc-vmctl.mjs "$@"
+  '';
 in {
   environment.systemPackages = [
     patchedFirefoxCommand
     codexCommand
     olcLaunchTestVm
+    olcVmctl
     pkgs.sudo
   ];
 
