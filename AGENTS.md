@@ -257,6 +257,13 @@ In-VM validation note:
 - If `/source` is mounted from `ol-c-source` with `virtiofs`, Codex should treat edits as host-synced repo edits and can validate browser-surface work directly inside the guest.
 - When a graphical Firefox session is running in the guest, Codex may use available local GUI automation tools such as `xdotool` to actively drive the browser for validation.
 
+Shared journal mirror note:
+- The canonical logs remain the guest's local `journald` store; the host-visible mirror lives at `/source/.olc-debug/journal/current.journal`.
+- That file is an aggregate journal across the current VM and any recursively embedded child VMs that share the same `/source`.
+- When working from the shared repo view, prefer standard journal tools against that file, for example `journalctl --file=/source/.olc-debug/journal/current.journal`.
+- When investigating one VM, first filter by `_MACHINE_ID`, then narrow to `_BOOT_ID`, and use `OLC_VM_MACHINE_ID`, `OLC_VM_BOOT_ID`, `OLC_VM_PARENT_MACHINE_ID`, and `OLC_VM_DEPTH` to reconstruct nested lineage.
+- If Codex is running inside the specific target VM, prefer direct `journalctl` against the local system journal over the shared mirror.
+
 Security and update planning note:
 - The repo has moved from unsupported `nixos-24.11` to `nixos-25.11`, with host build and VM boot validation complete.
 - Relying on nixpkgs for Firefox security updates is the preferred path, but only if ol-c tracks a supported branch promptly.

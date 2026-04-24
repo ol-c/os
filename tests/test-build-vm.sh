@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BUILD_VM="${ROOT_DIR}/build-vm"
+AGENTS_DOC="${ROOT_DIR}/AGENTS.md"
 FLAKE_NIX="${ROOT_DIR}/flake.nix"
 OLC_NIX="${ROOT_DIR}/nix/ol-c.nix"
 NIX_USERS="${ROOT_DIR}/nix/modules/users.nix"
@@ -118,8 +119,10 @@ test_rejects_unknown_argument() {
 
 test_structural_contracts() {
   local olc_nix users ui session development app server terminal_app terminal_server runtime_state setup_manager base
+  local agents_doc
   olc_nix="$(cat "${OLC_NIX}")"
   base="$(cat "${NIX_BASE}")"
+  agents_doc="$(cat "${AGENTS_DOC}")"
   users="$(cat "${NIX_USERS}")"
   ui="$(cat "${NIX_LOCALHOST_UI}")"
   session="$(cat "${NIX_GRAPHICAL_SESSION}")"
@@ -134,6 +137,15 @@ test_structural_contracts() {
   [[ "$olc_nix" == *"./modules/users.nix"* ]] || fail "expected ol-c module to import users.nix"
   [[ "$olc_nix" == *"./modules/localhost-ui.nix"* ]] || fail "expected ol-c module to import localhost-ui.nix"
   [[ "$base" == *"ids.uids.nixbld = lib.mkForce 700;"* ]] || fail "expected nix build users to be force-allocated below 1000 for homed setup detection"
+  [[ "$base" == *"Storage=persistent"* ]] || fail "expected journald to persist logs locally"
+  [[ "$base" == *'systemd.services.olc-journal-mirror'* ]] || fail "expected a shared journal mirror service"
+  [[ "$base" == *'RequiresMountsFor = "/source";'* ]] || fail "expected the shared journal mirror to require /source"
+  [[ "$base" == *'current.journal'* ]] || fail "expected the shared journal mirror to write a native current.journal file"
+  [[ "$base" == *'systemd-journal-remote'* ]] || fail "expected the shared journal mirror to use systemd-journal-remote"
+  [[ "$base" == *'--output=export'* ]] || fail "expected the shared journal mirror to export the local journal in export format before import"
+  [[ "$base" == *'OLC_VM_PARENT_MACHINE_ID'* && "$base" == *'OLC_VM_DEPTH'* ]] || fail "expected the shared journal mirror to record VM lineage fields"
+  [[ "$agents_doc" == *'/source/.olc-debug/journal/current.journal'* ]] || fail "expected AGENTS to document the shared journal mirror path"
+  [[ "$agents_doc" == *'journalctl --file=/source/.olc-debug/journal/current.journal'* ]] || fail "expected AGENTS to document standard journalctl usage for the shared mirror"
   [[ "$users" == *'setupUser = "olc-setup"'* ]] || fail "expected a dedicated setup user"
   [[ "$users" == *'users.groups.olc-admin = {};'* ]] || fail "expected an explicit olc-admin group"
   [[ "$users" == *'isNormalUser = true;'* ]] || fail "expected setup user to be a normal user for greetd initial sessions"
@@ -143,7 +155,11 @@ test_structural_contracts() {
   [[ "$session" == *'default_session = {'* && "$session" == *'tuigreet'* ]] || fail "expected configured boots to use tuigreet for login"
   [[ "$session" == *'initial_session = {'* && "$session" == *'olc-setup'* ]] || fail "expected fresh boots to use a setup initial session"
   [[ "$session" == *'getent group olc-admin'* ]] || fail "expected initial setup session to switch on admin existence"
-  [[ "$session" == *'exec ${pkgs.xorg.xinit}/bin/startx'* ]] || fail "expected greetd sessions to launch startx"
+  [[ "$session" == *'writeShellScript "olc-greetd-user-session"'* ]] || fail "expected a dedicated greetd wrapper for configured user sessions"
+  [[ "$session" == *'writeShellScript "olc-greetd-setup-session"'* ]] || fail "expected a dedicated greetd wrapper for setup sessions"
+  [[ "$session" == *'identifier=olc-greetd-session'* ]] || fail "expected greetd session wrappers to log before startx"
+  [[ "$session" == *'exec ${pkgs.xorg.xinit}/bin/startx ${userSessionScript}'* ]] || fail "expected configured greetd logins to launch the explicit user session script"
+  [[ "$session" == *'exec ${greetdSetupSessionCommand}'* ]] || fail "expected setup boots to launch the explicit setup wrapper"
   [[ "$session" == *'security.pam.services.greetd.text'* && "$session" == *'auth      substack      login'* && "$session" == *'session   include       login'* ]] || fail "expected greetd PAM to delegate to the login stack for homed authentication"
 
   [[ "$ui" == *"services.homed.enable = true;"* ]] || fail "expected systemd-homed to be enabled"
@@ -151,13 +167,14 @@ test_structural_contracts() {
   [[ "$ui" == *"systemd.services.ol-c-prefill-first-user"* ]] || fail "expected a first-user prefill service"
   [[ "$ui" == *"OLC_HOMECTL"* ]] || fail "expected localhost UI service to provide homectl"
   [[ "$ui" == *"OLC_LOGINCTL"* ]] || fail "expected localhost services to provide loginctl"
-  [[ "$ui" == *"OLC_SYSTEMD_RUN"* ]] || fail "expected localhost UI service to provide systemd-run for first-user provisioning"
+  [[ "$ui" == *"OLC_SCRIPT"* ]] || fail "expected localhost UI service to provide script for homectl PTY automation"
   [[ "$ui" != *"User = \"demo\";"* ]] || fail "expected localhost UI service not to run as demo"
 
-  [[ "$session" == *"/etc/skel/.xinitrc"* ]] || fail "expected logged-in users to receive an xinitrc through /etc/skel"
-  [[ "$session" == *"/var/lib/ol-c/setup/.xinitrc"* ]] || fail "expected a dedicated setup kiosk xinitrc"
+  [[ "$session" == *'writeShellScript "olc-user-xsession"'* ]] || fail "expected a dedicated user X session script"
+  [[ "$session" == *'writeShellScript "olc-setup-xsession"'* ]] || fail "expected a dedicated setup X session script"
   [[ "$session" == *"https://localhost/setup"* ]] || fail "expected setup kiosk to open the setup route"
   [[ "$session" == *'$HOME/.mozilla/firefox/ol-c.default'* ]] || fail "expected Firefox profile diagnostics to be home-relative"
+  [[ "$session" == *'systemd-cat --identifier=olc-xsession'* ]] || fail "expected graphical sessions to log directly into journald"
 
   [[ "$development" == *"trusted-users = [ \"root\" \"@wheel\" ];"* ]] || fail "expected development nix trust to follow wheel users"
   [[ "$development" == *"d /var/lib/ol-c/firefox-dev 0775 root olc-admin -"* ]] || fail "expected Firefox dev workspace to belong to olc-admin"
@@ -168,8 +185,10 @@ test_structural_contracts() {
   [[ "$setup_manager" == *"OLC_FIRST_USER_STORAGE ?? 'luks'"* ]] || fail "expected first user creation to default to LUKS-backed homed storage"
   [[ "$setup_manager" == *"OLC_FIRST_USER_UID ?? '1000'"* ]] || fail "expected the first homed admin to prefer UID 1000"
   [[ "$setup_manager" == *"OLC_FIRST_USER_GROUPS ?? 'olc-admin,wheel,kvm'"* ]] || fail "expected the first user to receive admin and dev groups"
-  [[ "$setup_manager" == *"secret"* && "$setup_manager" == *"password"* ]] || fail "expected first-user provisioning to pass the password through a JSON user record secret"
-  [[ "$setup_manager" == *"LoadCredential=home.create."* ]] || fail "expected first-user provisioning to use homectl firstboot credentials"
+  [[ "$setup_manager" == *"scriptBin"* && "$setup_manager" == *"stdinPath"* ]] || fail "expected first-user provisioning to drive homectl create through a PTY-backed script session"
+  [[ "$setup_manager" == *"\${password}\\n\${password}\\n"* ]] || fail "expected first-user provisioning to feed the password twice to homectl create"
+  [[ "$setup_manager" == *"createCommand"* && "$setup_manager" == *"homectlBin"* && "$setup_manager" == *"--storage=\${storage}"* ]] || fail "expected first-user provisioning to use homectl create with direct flags"
+  [[ "$setup_manager" == *"'inspect'"* && "$setup_manager" == *"'--json=short'"* ]] || fail "expected first-user provisioning to verify the created homed user exists"
   [[ "$setup_manager" == *"first-user provisioning timed out"* ]] || fail "expected first-user provisioning to fail cleanly on timeout"
   [[ "$setup_manager" == *"password must be at least 12 characters"* ]] || fail "expected first-user password validation"
 

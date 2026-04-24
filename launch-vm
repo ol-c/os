@@ -40,6 +40,12 @@ Environment:
   OLC_VIRTIOFSD_HOST_UID  Host UID for guest demo writes. Default: id -u.
   OLC_VIRTIOFSD_HOST_GID  Host GID for guest demo writes. Default: id -g.
   OLC_KVM_DEVICE          KVM device path. Default: /dev/kvm.
+  OLC_VM_PARENT_MACHINE_ID
+                          Parent VM machine-id to expose to the guest for
+                          nested log lineage. Default: unset.
+  OLC_VM_PARENT_DEPTH
+                          Parent VM nesting depth for nested log lineage.
+                          Default: 0 when parent machine id is set.
   OLC_SKIP_SOURCE_WRITE_CHECK
                           Skip source directory create/delete validation. Default: 0.
 EOF
@@ -216,6 +222,8 @@ VIRTIOFSD_TRANSLATE_IDS="${OLC_VIRTIOFSD_TRANSLATE_IDS:-1}"
 VIRTIOFSD_HOST_UID="${OLC_VIRTIOFSD_HOST_UID:-$(id -u)}"
 VIRTIOFSD_HOST_GID="${OLC_VIRTIOFSD_HOST_GID:-$(id -g)}"
 KVM_DEVICE="${OLC_KVM_DEVICE:-/dev/kvm}"
+VM_PARENT_MACHINE_ID="${OLC_VM_PARENT_MACHINE_ID:-}"
+VM_PARENT_DEPTH="${OLC_VM_PARENT_DEPTH:-}"
 SPICE_SOCKET_DIR=""
 VIRTIOFS_SOCKET_DIR=""
 VM_IMAGES_SOCKET_DIR=""
@@ -483,6 +491,14 @@ qemu_base_args=(
   -device hda-duplex,audiodev=olc-audio
   -serial mon:stdio
 )
+
+if [[ -n "$VM_PARENT_MACHINE_ID" ]]; then
+  qemu_base_args+=(
+    -smbios "type=1,serial=olc-parent-machine-id=${VM_PARENT_MACHINE_ID};olc-parent-depth=${VM_PARENT_DEPTH:-0}"
+  )
+  echo "parent machine id: $VM_PARENT_MACHINE_ID"
+  echo "parent vm depth: ${VM_PARENT_DEPTH:-0}"
+fi
 
 if [[ "$QEMU_FRONTEND" != "spice" ]]; then
   if [[ "$QEMU_FRONTEND" == "browser" ]]; then

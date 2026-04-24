@@ -1,8 +1,91 @@
-{ config, pkgs, ... }:
+{ config, lib, pkgs, ... }:
 
 let
   localhostTls = config.olc.localhost.tlsPackage;
   firefoxBin = "${pkgs.firefox-unwrapped}/lib/firefox/firefox";
+  sessionPath = lib.makeBinPath [
+    pkgs.coreutils
+    pkgs.curl
+    pkgs.findutils
+    pkgs.matchbox
+    pkgs.spice-vdagent
+    pkgs.systemd
+    pkgs.util-linux
+    pkgs.xdotool
+    pkgs.xorg.xauth
+    pkgs.xorg.xinit
+    pkgs.xorg.xsetroot
+  ];
+  userSessionScript = pkgs.writeShellScript "olc-user-xsession" ''
+    ${userXinitRc "https://localhost"}
+  '';
+  setupSessionScript = pkgs.writeShellScript "olc-setup-xsession" ''
+    ${userXinitRc "https://localhost/setup"}
+  '';
+  waitForDisplayZeroRelease = ''
+    display_zero_busy() {
+      if ${pkgs.procps}/bin/pgrep -x Xorg >/dev/null 2>&1; then
+        return 0
+      fi
+      if ${pkgs.procps}/bin/pgrep -x X >/dev/null 2>&1; then
+        return 0
+      fi
+      if ${pkgs.procps}/bin/pgrep -x Xorg.wrap >/dev/null 2>&1; then
+        return 0
+      fi
+      if [ -e /tmp/.X0-lock ] || [ -e /tmp/.tX0-lock ] || [ -S /tmp/.X11-unix/X0 ]; then
+        return 0
+      fi
+      return 1
+    }
+
+    log_display_zero_state() {
+      printf 'display_zero_state=%s\n' "$1"
+      ls -ld /tmp /tmp/.X11-unix 2>/dev/null || true
+      ls -l /tmp/.X0-lock /tmp/.tX0-lock /tmp/.X11-unix/X0 2>/dev/null || true
+    }
+
+    log_display_zero_state before-wait
+    for _ in $(seq 1 150); do
+      if ! display_zero_busy; then
+        break
+      fi
+      if ! ${pkgs.procps}/bin/pgrep -x Xorg >/dev/null 2>&1 \
+        && ! ${pkgs.procps}/bin/pgrep -x X >/dev/null 2>&1 \
+        && ! ${pkgs.procps}/bin/pgrep -x Xorg.wrap >/dev/null 2>&1; then
+        rm -f /tmp/.X0-lock /tmp/.tX0-lock /tmp/.X11-unix/X0
+      fi
+      if ! display_zero_busy; then
+        break
+      fi
+      sleep 0.1
+    done
+    log_display_zero_state after-wait
+  '';
+  greetdUserSessionCommand = pkgs.writeShellScript "olc-greetd-user-session" ''
+    export PATH='${sessionPath}:$PATH'
+    exec > >(${pkgs.systemd}/bin/systemd-cat --identifier=olc-greetd-session) 2>&1
+    set -x
+    printf 'mode=user uid=%s user=%s home=%s shell=%s pwd=%s xdg_runtime_dir=%s command=%s\n' \
+      "$(id -u)" "$(id -un)" "$HOME" "$SHELL" "$PWD" "''${XDG_RUNTIME_DIR-}" \
+      "${pkgs.xorg.xinit}/bin/startx ${userSessionScript}"
+    ${pkgs.getent}/bin/getent passwd "$(id -un)" || true
+    ${pkgs.systemd}/bin/loginctl show-user "$(id -un)" || true
+    ${waitForDisplayZeroRelease}
+    exec ${pkgs.xorg.xinit}/bin/startx ${userSessionScript}
+  '';
+  greetdSetupSessionCommand = pkgs.writeShellScript "olc-greetd-setup-session" ''
+    export PATH='${sessionPath}:$PATH'
+    exec > >(${pkgs.systemd}/bin/systemd-cat --identifier=olc-greetd-session) 2>&1
+    set -x
+    printf 'mode=setup uid=%s user=%s home=%s shell=%s pwd=%s xdg_runtime_dir=%s command=%s\n' \
+      "$(id -u)" "$(id -un)" "$HOME" "$SHELL" "$PWD" "''${XDG_RUNTIME_DIR-}" \
+      "${pkgs.xorg.xinit}/bin/startx ${setupSessionScript}"
+    ${pkgs.getent}/bin/getent passwd "$(id -un)" || true
+    ${pkgs.systemd}/bin/loginctl show-user "$(id -un)" || true
+    ${waitForDisplayZeroRelease}
+    exec ${pkgs.xorg.xinit}/bin/startx ${setupSessionScript}
+  '';
   userProfileScript = ''
     mkdir -p "$HOME/.mozilla/firefox/ol-c.default"
     cat > "$HOME/.mozilla/firefox/profiles.ini" <<'OLC_PROFILES'
@@ -36,6 +119,12 @@ let
     OLC_USERJS
   '';
   userXinitRc = startUrl: ''
+    export PATH='${sessionPath}:$PATH'
+    exec > >(${pkgs.systemd}/bin/systemd-cat --identifier=olc-xsession) 2>&1
+    export PS4='+xsession:''${LINENO}: '
+    set -x
+    printf 'uid=%s user=%s home=%s pwd=%s start_url=%s\n' \
+      "$(id -u)" "$(id -un)" "$HOME" "$PWD" "${startUrl}"
     xsetroot -solid "#0f172a"
     ${pkgs.spice-vdagent}/bin/spice-vdagent &
     matchbox-window-manager -use_titlebar no -use_cursor yes &
@@ -53,30 +142,60 @@ let
       printf 'moz_purge_caches=%s\n' '1'
       printf 'profile=%s\n' "$HOME/.mozilla/firefox/ol-c.default"
     } > "$HOME/ol-c-firefox-launch.txt"
-    MOZ_PURGE_CACHES=1 ${firefoxBin} --no-remote --profile "$HOME/.mozilla/firefox/ol-c.default" --new-window ${startUrl} &
-    firefox_pid="$!"
-    for _ in $(seq 1 40); do
-      running_firefox="$(${pkgs.coreutils}/bin/readlink -f "/proc/$firefox_pid/exe" 2>/dev/null || true)"
-      if [ -n "$running_firefox" ]; then
-        printf 'running_firefox_exe=%s\n' "$running_firefox" >> "$HOME/ol-c-firefox-launch.txt"
-        if [ "$running_firefox" != '${firefoxBin}' ]; then
-          printf 'unexpected_firefox_exe=1\n' >> "$HOME/ol-c-firefox-launch.txt"
+    cat "$HOME/ol-c-firefox-launch.txt"
+    (
+      firefox_pid=""
+      for _ in $(seq 1 40); do
+        firefox_pid="$(${pkgs.procps}/bin/pgrep -n -u "$(id -u)" firefox 2>/dev/null || true)"
+        if [ -n "$firefox_pid" ]; then
+          running_firefox="$(${pkgs.coreutils}/bin/readlink -f "/proc/$firefox_pid/exe" 2>/dev/null || true)"
+          if [ -n "$running_firefox" ]; then
+            printf 'running_firefox_exe=%s\n' "$running_firefox" >> "$HOME/ol-c-firefox-launch.txt"
+            if [ "$running_firefox" != '${firefoxBin}' ]; then
+              printf 'unexpected_firefox_exe=1\n' >> "$HOME/ol-c-firefox-launch.txt"
+            fi
+            cat "$HOME/ol-c-firefox-launch.txt"
+            break
+          fi
         fi
+        sleep 0.1
+      done
+      for _ in $(seq 1 40); do
+        window_id="$(xdotool search --onlyvisible --class firefox 2>/dev/null | head -n 1 || true)"
+        if [ -n "$window_id" ]; then
+          xdotool windowmove "$window_id" 0 0
+          xdotool windowsize "$window_id" 100% 100%
+          xdotool key --window "$window_id" alt+F10
+          break
+        fi
+        sleep 0.25
+      done
+    ) &
+    env MOZ_PURGE_CACHES=1 ${firefoxBin} --no-remote --profile "$HOME/.mozilla/firefox/ol-c.default" --new-window ${startUrl} &
+    launcher_pid="$!"
+    printf 'launcher_pid=%s\n' "$launcher_pid" >> "$HOME/ol-c-firefox-launch.txt"
+    firefox_pid=""
+    for _ in $(seq 1 80); do
+      firefox_pid="$(${pkgs.procps}/bin/pgrep -n -u "$(id -u)" firefox 2>/dev/null || true)"
+      if [ -n "$firefox_pid" ]; then
+        printf 'session_firefox_pid=%s\n' "$firefox_pid" >> "$HOME/ol-c-firefox-launch.txt"
         break
       fi
-      sleep 0.1
-    done
-    for _ in $(seq 1 40); do
-      window_id="$(xdotool search --onlyvisible --class firefox 2>/dev/null | head -n 1 || true)"
-      if [ -n "$window_id" ]; then
-        xdotool windowmove "$window_id" 0 0
-        xdotool windowsize "$window_id" 100% 100%
-        xdotool key --window "$window_id" alt+F10
+      if ! kill -0 "$launcher_pid" 2>/dev/null; then
         break
       fi
       sleep 0.25
     done
-    wait
+    if [ -z "$firefox_pid" ]; then
+      printf 'session_firefox_pid_not_found=1\n' >> "$HOME/ol-c-firefox-launch.txt"
+      cat "$HOME/ol-c-firefox-launch.txt"
+      wait "$launcher_pid"
+      exit $?
+    fi
+    cat "$HOME/ol-c-firefox-launch.txt"
+    while ${pkgs.procps}/bin/pgrep -u "$(id -u)" firefox >/dev/null 2>&1; do
+      sleep 1
+    done
   '';
 in {
   services.xserver.enable = true;
@@ -99,7 +218,7 @@ in {
       terminal.vt = 1;
       default_session = {
         user = "greeter";
-        command = "${pkgs.tuigreet}/bin/tuigreet --time --cmd ${pkgs.xorg.xinit}/bin/startx";
+        command = "${pkgs.tuigreet}/bin/tuigreet --time --cmd ${greetdUserSessionCommand}";
       };
       initial_session = {
         user = "olc-setup";
@@ -110,7 +229,7 @@ in {
             exit 0
           fi
 
-          exec ${pkgs.xorg.xinit}/bin/startx
+          exec ${greetdSetupSessionCommand}
         '';
       };
     };
@@ -118,16 +237,7 @@ in {
 
   system.activationScripts.olcGraphicalSession = ''
     mkdir -p /etc/skel/.mozilla/firefox/ol-c.default
-    cat > /etc/skel/.xinitrc <<'OLC_SKEL_XINIT'
-    ${userXinitRc "https://localhost"}
-    OLC_SKEL_XINIT
-    chmod 0755 /etc/skel/.xinitrc
-
     mkdir -p /var/lib/ol-c/setup/.mozilla/firefox/ol-c.default
-    cat > /var/lib/ol-c/setup/.xinitrc <<'OLC_SETUP_XINIT'
-    ${userXinitRc "https://localhost/setup"}
-    OLC_SETUP_XINIT
     chown -R olc-setup:olc-setup /var/lib/ol-c/setup
-    chmod 0755 /var/lib/ol-c/setup/.xinitrc
   '';
 }

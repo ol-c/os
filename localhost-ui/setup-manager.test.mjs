@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -37,26 +37,32 @@ test('first-user validation rejects bad usernames and weak passwords', () => {
   }), /does not match/);
 });
 
-test('first-user creation provisions through systemd-run and homectl firstboot credentials', async () => {
-  let seenCommand = null;
-  let seenArgs = null;
-  let credentialJson = null;
+test('first-user creation provisions through script-wrapped homectl create and verifies the result', async () => {
+  const seenCalls = [];
+  let passwordInput = null;
   const tempRoot = await mkdtemp(join(tmpdir(), 'olc-setup-test-'));
 
   function spawnProcess(command, args) {
-    seenCommand = command;
-    seenArgs = args;
+    seenCalls.push({ command, args });
 
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    child.stdin = null;
+    child.stdin = {
+      end(value) {
+        if (command === '/bin/script') {
+          passwordInput = String(value);
+        }
+      },
+    };
+    child.kill = () => {};
     child.on = child.addListener.bind(child);
     queueMicrotask(async () => {
-      const credentialArg = args.find(arg => arg.startsWith('--property=LoadCredential=home.create.alice:'));
-      const credentialPath = credentialArg.split(':').slice(1).join(':');
-      credentialJson = JSON.parse(await readFile(credentialPath, 'utf8'));
-      child.emit('exit', 0);
+      try {
+        child.emit('exit', 0);
+      } catch (error) {
+        child.emit('error', error);
+      }
     });
     return child;
   }
@@ -68,43 +74,51 @@ test('first-user creation provisions through systemd-run and homectl firstboot c
   }, {
     tempRoot,
     homectlBin: '/bin/homectl',
+    scriptBin: '/bin/script',
     shellBin: '/bin/bash',
-    systemdRunBin: '/bin/systemd-run',
     spawnProcess,
   });
 
-  assert.equal(seenCommand, '/bin/systemd-run');
-  assert.equal(seenArgs.at(-3), '/bin/homectl');
-  assert.equal(seenArgs.at(-2), 'firstboot');
-  assert.equal(seenArgs.at(-1), '--no-pager');
-  assert.ok(seenArgs.includes('--wait'));
-  assert.ok(seenArgs.includes('--collect'));
-  assert.ok(seenArgs.includes('--pipe'));
-  assert.ok(seenArgs.some(arg => arg.startsWith('--unit=olc-first-user-alice-')));
-  assert.ok(seenArgs.includes('--service-type=oneshot'));
-  assert.deepEqual(credentialJson, {
-    accessMode: '0700',
-    disposition: 'regular',
-    homeDirectory: '/home/alice',
-    memberOf: [ 'olc-admin', 'wheel', 'kvm' ],
-    secret: {
-      password: [ 'correct horse battery' ],
-    },
-    shell: '/bin/bash',
-    storage: 'luks',
-    uid: 1000,
-    userName: 'alice',
-  });
+  assert.equal(seenCalls.length, 2);
+  assert.equal(seenCalls[0].command, '/bin/script');
+  assert.equal(seenCalls[0].args[0], '-qefc');
+  assert.match(seenCalls[0].args[1], /'\/bin\/homectl' 'create' 'alice'/);
+  assert.match(seenCalls[0].args[1], /'--storage=luks'/);
+  assert.match(seenCalls[0].args[1], /'--uid=1000'/);
+  assert.match(seenCalls[0].args[1], /'--home-dir=\/home\/alice'/);
+  assert.match(seenCalls[0].args[1], /'--shell=\/bin\/bash'/);
+  assert.match(seenCalls[0].args[1], /'--member-of=olc-admin,wheel,kvm'/);
+  assert.match(seenCalls[0].args[1], /'--access-mode=0700'/);
+  assert.equal(seenCalls[0].args[2], '/dev/null');
+  assert.equal(passwordInput, 'correct horse battery\ncorrect horse battery\n');
+  assert.equal(seenCalls[1].command, '/bin/homectl');
+  assert.deepEqual(seenCalls[1].args, [
+    'inspect',
+    'alice',
+    '--json=short',
+    '--no-pager',
+  ]);
   assert.equal(result.username, 'alice');
 });
 
 test('first-user creation times out cleanly when provisioning never exits', async () => {
-  function spawnProcess() {
+  function spawnProcess(command, args) {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
+    child.stdin = {
+      end() {},
+    };
     child.kill = () => {};
     child.on = child.addListener.bind(child);
+    if (command === '/bin/script') {
+      return child;
+    }
+    if (command === '/bin/homectl' && args?.[0] === 'inspect') {
+      queueMicrotask(() => {
+        child.emit('exit', 0);
+      });
+    }
     return child;
   }
 
@@ -114,8 +128,8 @@ test('first-user creation times out cleanly when provisioning never exits', asyn
     confirmPassword: 'correct horse battery',
   }, {
     spawnProcess,
-    systemdRunBin: '/bin/systemd-run',
     homectlBin: '/bin/homectl',
+    scriptBin: '/bin/script',
     timeoutMs: 5,
   }), error => error.statusCode === 504 && /timed out/i.test(error.message));
 });

@@ -39,6 +39,8 @@ printf '%s\n' "\${OLC_QEMU_FRONTEND:-}" > "${CASE_TMP}/launch.frontend"
 printf '%s\n' "\${OLC_NOVNC_DIR:-}" > "${CASE_TMP}/launch.novnc-dir"
 printf '%s\n' "\${OLC_VM_SCREEN_OPEN_BROWSER:-}" > "${CASE_TMP}/launch.open-browser"
 printf '%s\n' "\${TMPDIR:-}" > "${CASE_TMP}/launch.tmpdir"
+printf '%s\n' "\${OLC_VM_PARENT_MACHINE_ID:-}" > "${CASE_TMP}/launch.parent-machine-id"
+printf '%s\n' "\${OLC_VM_PARENT_DEPTH:-}" > "${CASE_TMP}/launch.parent-depth"
 EOF
   chmod +x "${CASE_TMP}/source/launch-vm"
 
@@ -139,8 +141,35 @@ test_rejects_missing_explicit_image() {
   cleanup_case
 }
 
+test_passes_vm_lineage_to_child_launch() {
+  local output lineage_env
+  setup_case
+  lineage_env="${CASE_TMP}/vm-lineage.env"
+  cat > "${lineage_env}" <<'EOF'
+OLC_VM_MACHINE_ID=parent-machine
+OLC_VM_BOOT_ID=parent-boot
+OLC_VM_DEPTH=2
+EOF
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      OLC_SOURCE_DIR="${CASE_TMP}/source" \
+      OLC_VM_IMAGES_DIR="${CASE_TMP}/images" \
+      OLC_VM_WORKSPACE="${CASE_TMP}/workspace" \
+      OLC_KVM_DEVICE="${CASE_TMP}/kvm" \
+      OLC_VM_LINEAGE_ENV="${lineage_env}" \
+      "${OLC_LAUNCH_TEST_VM}"
+  )"
+
+  assert_contains "$output" "source: ${CASE_TMP}/source"
+  assert_eq "parent-machine" "$(cat "${CASE_TMP}/launch.parent-machine-id")"
+  assert_eq "2" "$(cat "${CASE_TMP}/launch.parent-depth")"
+  cleanup_case
+}
+
 test_launches_with_default_image_and_workspace
 test_requires_nested_kvm_access
 test_rejects_missing_explicit_image
+test_passes_vm_lineage_to_child_launch
 
 echo "PASS: olc-launch-test-vm"

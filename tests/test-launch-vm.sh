@@ -535,6 +535,29 @@ test_missing_explicit_vm_image_fails() {
   cleanup_case
 }
 
+test_passes_parent_vm_lineage_to_guest_firmware() {
+  local output qemu_args
+  setup_case
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_VM_PARENT_MACHINE_ID=parent-machine \
+      OLC_VM_PARENT_DEPTH=3 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}"
+  )"
+
+  qemu_args="$(cat "${CASE_TMP}/qemu.args")"
+  assert_contains "$output" "parent machine id: parent-machine"
+  assert_contains "$output" "parent vm depth: 3"
+  assert_contains "$qemu_args" "-smbios type=1,serial=olc-parent-machine-id=parent-machine;olc-parent-depth=3"
+  cleanup_case
+}
+
 test_exits_when_qemu_exits_first() {
   local output qemu_args viewer_args
   setup_case
@@ -697,6 +720,7 @@ test_invokes_qemu_with_expected_browser_args_by_default
 test_resolves_nixpkgs_novnc_webapp_layout
 test_explicit_vm_image_skips_build
 test_missing_explicit_vm_image_fails
+test_passes_parent_vm_lineage_to_guest_firmware
 test_exits_when_qemu_exits_first
 test_allows_direct_display_backend_override
 test_allows_sdl_frontend_override

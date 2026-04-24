@@ -113,38 +113,17 @@ in {
 
         tmpdir="$(mktemp -d)"
         trap 'rm -rf "$tmpdir"' EXIT
-
-        cat > "$tmpdir/home.create.${config.olc.setup.prefillFirstUser.username}.json" <<'EOF'
-        {
-          "accessMode": "0700",
-          "disposition": "regular",
-          "homeDirectory": "/home/${config.olc.setup.prefillFirstUser.username}",
-          "memberOf": [
-            "olc-admin",
-            "wheel",
-            "kvm"
-          ],
-          "secret": {
-            "password": [
-              "${config.olc.setup.prefillFirstUser.password}"
-            ]
-          },
-          "shell": "${pkgs.bashInteractive}/bin/bash",
-          "storage": "luks",
-          "uid": 1000,
-          "userName": "${config.olc.setup.prefillFirstUser.username}"
-        }
+        cat > "$tmpdir/${config.olc.setup.prefillFirstUser.username}.password" <<'EOF'
+        ${config.olc.setup.prefillFirstUser.password}
+        ${config.olc.setup.prefillFirstUser.password}
         EOF
 
-        ${pkgs.systemd}/bin/systemd-run \
-          --quiet \
-          --wait \
-          --collect \
-          --pipe \
-          --service-type=oneshot \
-          --property=LoadCredential=home.create.${config.olc.setup.prefillFirstUser.username}:$tmpdir/home.create.${config.olc.setup.prefillFirstUser.username}.json \
-          -- \
-          ${pkgs.systemd}/bin/homectl firstboot --no-pager
+        ${pkgs.util-linux}/bin/script -qefc \
+          "${pkgs.systemd}/bin/homectl create ${lib.escapeShellArg config.olc.setup.prefillFirstUser.username} --storage=luks --uid=1000 --home-dir=/home/${config.olc.setup.prefillFirstUser.username} --shell=${pkgs.bashInteractive}/bin/bash --member-of=olc-admin,wheel,kvm --access-mode=0700 --no-pager" \
+          /dev/null \
+          < "$tmpdir/${config.olc.setup.prefillFirstUser.username}.password"
+
+        ${pkgs.systemd}/bin/homectl inspect ${lib.escapeShellArg config.olc.setup.prefillFirstUser.username} --json=short --no-pager >/dev/null
       '';
     };
 
@@ -188,8 +167,8 @@ in {
         OLC_LOGIN_SHELL = "${pkgs.bashInteractive}/bin/bash";
         OLC_PACTL = "${pkgs.pulseaudio}/bin/pactl";
         OLC_PULSE_SERVER = "unix:/run/user/1000/pulse/native";
+        OLC_SCRIPT = "${pkgs.util-linux}/bin/script";
         OLC_SETUP_USER = "olc-setup";
-        OLC_SYSTEMD_RUN = "${pkgs.systemd}/bin/systemd-run";
         OLC_TERMINAL_UPSTREAM = "https://127.0.0.1:9443";
         OLC_TLS_CERT = "${localhostTls}/server.crt";
         OLC_TLS_KEY = "${localhostTls}/server.key";

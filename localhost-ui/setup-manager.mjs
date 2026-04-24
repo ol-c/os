@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -11,6 +12,10 @@ function validationError(message) {
   const error = new Error(message);
   error.statusCode = 400;
   return error;
+}
+
+function shellEscape(value) {
+  return `'${String(value).replaceAll('\'', `'\\''`)}'`;
 }
 
 export function validateFirstUserInput(body) {
@@ -33,34 +38,6 @@ export function validateFirstUserInput(body) {
   return { username, password };
 }
 
-function transientUnitName(username) {
-  return `olc-first-user-${username}-${Date.now()}`;
-}
-
-function createFirstUserRecord({
-  username,
-  password,
-  homeDirectory,
-  shellBin,
-  preferredUid,
-  memberOf,
-  storage,
-}) {
-  return {
-    accessMode: '0700',
-    disposition: 'regular',
-    homeDirectory,
-    memberOf: memberOf.split(',').map(group => group.trim()).filter(Boolean),
-    secret: {
-      password: [ password ],
-    },
-    shell: shellBin,
-    storage,
-    uid: Number(preferredUid),
-    userName: username,
-  };
-}
-
 function commandError(message, statusCode = 500) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -71,6 +48,7 @@ async function runCommand(command, args, options = {}) {
   const {
     env = process.env,
     spawnProcess = spawn,
+    stdinPath = null,
     timeoutMs = 120_000,
   } = options;
 
@@ -79,8 +57,9 @@ async function runCommand(command, args, options = {}) {
     let output = '';
     const child = spawnProcess(command, args, {
       env,
-      stdio: [ 'ignore', 'pipe', 'pipe' ],
+      stdio: [ 'pipe', 'pipe', 'pipe' ],
     });
+    const input = stdinPath ? createReadStream(stdinPath) : null;
 
     const timer = setTimeout(() => {
       if (settled) {
@@ -88,6 +67,7 @@ async function runCommand(command, args, options = {}) {
       }
 
       settled = true;
+      input?.destroy();
       child.kill('SIGTERM');
       reject(commandError('first-user provisioning timed out', 504));
     }, timeoutMs);
@@ -99,6 +79,7 @@ async function runCommand(command, args, options = {}) {
 
       settled = true;
       clearTimeout(timer);
+      input?.destroy();
       if (error) {
         reject(error);
         return;
@@ -113,6 +94,7 @@ async function runCommand(command, args, options = {}) {
     child.stderr?.on('data', chunk => {
       output += String(chunk);
     });
+    input?.on('error', error => finish(error));
     child.on('error', error => finish(error));
     child.on('exit', code => {
       if (code === 0) {
@@ -122,6 +104,17 @@ async function runCommand(command, args, options = {}) {
 
       finish(commandError(output.trim() || 'first-user provisioning failed'));
     });
+    if (input) {
+      if (typeof child.stdin?.on === 'function') {
+        input.pipe(child.stdin);
+      } else {
+        readFile(stdinPath, 'utf8')
+          .then(value => child.stdin?.end(value))
+          .catch(error => finish(error));
+      }
+    } else {
+      child.stdin?.end();
+    }
   });
 }
 
@@ -134,7 +127,7 @@ export async function createFirstUser(body, options = {}) {
   }
 
   const homectlBin = options.homectlBin ?? envCommand('OLC_HOMECTL', 'homectl');
-  const systemdRunBin = options.systemdRunBin ?? envCommand('OLC_SYSTEMD_RUN', 'systemd-run');
+  const scriptBin = options.scriptBin ?? envCommand('OLC_SCRIPT', 'script');
   const spawnProcess = options.spawnProcess ?? spawn;
   const mkdtempFn = options.mkdtempFn ?? mkdtemp;
   const writeFileFn = options.writeFileFn ?? writeFile;
@@ -149,37 +142,32 @@ export async function createFirstUser(body, options = {}) {
 
   const provision = (async () => {
     const tempDir = await mkdtempFn(join(tempRoot, 'olc-first-user-'));
-    const credentialPath = join(tempDir, `home.create.${username}.json`);
+    const passwordPath = join(tempDir, `${username}.password`);
 
     try {
-      const userRecord = createFirstUserRecord({
-        username,
-        password,
-        homeDirectory: homeDir,
-        shellBin,
-        preferredUid,
-        memberOf,
-        storage,
-      });
-
       await writeFileFn(
-        credentialPath,
-        `${JSON.stringify(userRecord, null, 2)}\n`,
+        passwordPath,
+        `${password}\n${password}\n`,
         { mode: 0o600 },
       );
 
-      await runCommand(systemdRunBin, [
-        '--quiet',
-        '--wait',
-        '--collect',
-        '--pipe',
-        '--service-type=oneshot',
-        `--unit=${transientUnitName(username)}`,
-        `--property=LoadCredential=home.create.${username}:${credentialPath}`,
-        '--',
+      const createCommand = [
         homectlBin,
-        'firstboot',
+        'create',
+        username,
+        `--storage=${storage}`,
+        `--uid=${preferredUid}`,
+        `--home-dir=${homeDir}`,
+        `--shell=${shellBin}`,
+        `--member-of=${memberOf}`,
+        '--access-mode=0700',
         '--no-pager',
+      ];
+
+      await runCommand(scriptBin, [
+        '-qefc',
+        createCommand.map(shellEscape).join(' '),
+        '/dev/null',
       ], {
         env: {
           ...process.env,
@@ -187,6 +175,21 @@ export async function createFirstUser(body, options = {}) {
         },
         spawnProcess,
         timeoutMs,
+        stdinPath: passwordPath,
+      });
+
+      await runCommand(homectlBin, [
+        'inspect',
+        username,
+        '--json=short',
+        '--no-pager',
+      ], {
+        env: {
+          ...process.env,
+          LC_ALL: 'C',
+        },
+        spawnProcess,
+        timeoutMs: Math.min(timeoutMs, 10_000),
       });
     } finally {
       await rmFn(tempDir, { recursive: true, force: true });
