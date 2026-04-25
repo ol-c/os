@@ -168,6 +168,7 @@ The schema should stay intentionally small at first.
 
 ## Follow-On Work After The First Proof
 
+- Add a nested-VM Firefox BiDi bridge so a parent can ask a child-resident helper to create and proxy BiDi actions against the child's live Firefox session, instead of depending on unreachable child-local `127.0.0.1` WebSocket endpoints.
 - Add `open-localhost-page`, `keystroke`, `click-image-anchor`, and `wait-for-window` helpers.
 - Add screenshots or lightweight video snapshots as result artifacts.
 - Add a browser-visible operator status page in localhost UI if needed.

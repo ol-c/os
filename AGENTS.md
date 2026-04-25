@@ -230,6 +230,7 @@ Additional active Milestone 6 track:
 - Prefer a guest-resident operator service with explicit `shell` and `gui` execution modes over a pure host-side noVNC driving approach.
 - Use `xdotool` inside the guest for first-pass visible GUI automation when user-like interaction is required.
 - Keep the existing browser viewer as the human observation and reconnect surface, not the primary automation API.
+- Add a parent-to-child Firefox BiDi bridge so a parent VM can control a child VM's live Firefox session without relying on child-local `127.0.0.1` access or falling back to QMP input for page-level DOM work.
 - Record operator request state, progress, and results both in a shared runtime directory and in journald so the host can tell what the VM is doing.
 - The first proof should be: host launches VM, submits a request, guest opens a terminal tab in Firefox and runs a visible command, host watches it happen live, and host can verify completion from shared artifacts and logs.
 - The implemented first low-level control path uses QMP directly instead: host or parent guest launches the VM, `launch-vm` prints a `qmp socket:`, and `olc-vmctl` can inject keyboard and pointer input or capture screenshots while the VM remains visible in the embedded browser viewer.
@@ -354,3 +355,4 @@ These are non-priority tasks we can pick up any time as an option for the next t
 - Ctrl+S crashes firefox
 - Future paste-into-VM fix: copy out of the browser-launched VM already works well. Paste should keep using the existing noVNC plus QEMU `qemu-vdagent` clipboard path, but keyboard paste needs to intercept `Ctrl+V` and host `Cmd+V` in capture phase before noVNC handles them, read host clipboard text during that user gesture, call `rfb.clipboardPasteFrom(text)`, then synthesize guest `Ctrl+V` so the active guest app actually pastes. Browser clipboard reads may be permission or prompt gated, so failure should show a concise hint.
 - Ctrl+Shift+C should not open dev tools in vm, we should make that copy
+- remove "connected" and "clipboard ready" chrome
