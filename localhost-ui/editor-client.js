@@ -1,88 +1,23 @@
 import { EditorView, basicSetup } from 'codemirror';
 import { Compartment, EditorState } from '@codemirror/state';
-import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
-import { tags } from '@lezer/highlight';
+import { defaultTerminalPreferences } from './terminal-options.mjs';
+import { languageExtensionForPath, languageNameForPath } from './editor-languages.mjs';
 import {
-  defaultTerminalPreferences,
-  findTerminalFont,
-} from './terminal-options.mjs';
-
-const terminalThemes = Object.freeze({
-  solarized: Object.freeze({
-    light: Object.freeze({
-      background: '#fdf6e3',
-      foreground: '#657b83',
-      panel: '#fbfbf8',
-      panelForeground: '#181a1f',
-      muted: '#586e75',
-      line: '#eee8d5',
-      accent: '#268bd2',
-      selection: '#eee8d5',
-      keyword: '#859900',
-      string: '#2aa198',
-      number: '#d33682',
-      comment: '#93a1a1',
-      variable: '#b58900',
-      error: '#dc322f',
-    }),
-    dark: Object.freeze({
-      background: '#002b36',
-      foreground: '#839496',
-      panel: '#073642',
-      panelForeground: '#93a1a1',
-      muted: '#586e75',
-      line: '#073642',
-      accent: '#268bd2',
-      selection: '#073642',
-      keyword: '#859900',
-      string: '#2aa198',
-      number: '#d33682',
-      comment: '#586e75',
-      variable: '#b58900',
-      error: '#dc322f',
-    }),
-  }),
-  tango: Object.freeze({
-    light: Object.freeze({
-      background: '#ffffff',
-      foreground: '#2e3436',
-      panel: '#eeeeec',
-      panelForeground: '#2e3436',
-      muted: '#555753',
-      line: '#d3d7cf',
-      accent: '#3465a4',
-      selection: '#d3d7cf',
-      keyword: '#4e9a06',
-      string: '#06989a',
-      number: '#75507b',
-      comment: '#888a85',
-      variable: '#c4a000',
-      error: '#cc0000',
-    }),
-    dark: Object.freeze({
-      background: '#2e3436',
-      foreground: '#d3d7cf',
-      panel: '#343a3b',
-      panelForeground: '#eeeeec',
-      muted: '#babdb6',
-      line: '#555753',
-      accent: '#729fcf',
-      selection: '#555753',
-      keyword: '#8ae234',
-      string: '#34e2e2',
-      number: '#ad7fa8',
-      comment: '#888a85',
-      variable: '#fce94f',
-      error: '#ef2929',
-    }),
-  }),
-});
+  createThemeExtension,
+  resolveEditorFontFamily,
+  resolveEditorTheme,
+} from './editor-theme.mjs';
 
 const nodes = {
   buffers: document.getElementById('buffers'),
   cwd: document.getElementById('cwd'),
   editor: document.getElementById('editor'),
   filter: document.getElementById('filter'),
+  language: document.getElementById('editor-language'),
+  reload: document.getElementById('reload-file'),
+  save: document.getElementById('save-file'),
+  status: document.getElementById('editor-status'),
+  title: document.getElementById('editor-title'),
   tree: document.getElementById('tree'),
 };
 
@@ -109,64 +44,15 @@ function parseInitialLocation() {
 }
 
 function selectedTheme() {
-  return terminalThemes[editorPreferences.colorScheme]?.[appearanceMode]
-    ?? terminalThemes[defaultTerminalPreferences.colorScheme][appearanceMode];
+  return resolveEditorTheme(editorPreferences, appearanceMode);
 }
 
 function selectedFontFamily() {
-  return findTerminalFont(editorPreferences.font)?.cssFamily
-    ?? findTerminalFont(defaultTerminalPreferences.font).cssFamily;
+  return resolveEditorFontFamily(editorPreferences);
 }
 
 function themeExtension(theme) {
-  return [
-    EditorView.theme({
-      '&': {
-        height: '100%',
-        maxHeight: '100%',
-        color: theme.foreground,
-        backgroundColor: theme.background,
-        fontFamily: selectedFontFamily(),
-        overflow: 'hidden',
-      },
-      '.cm-scroller': {
-        fontFamily: selectedFontFamily(),
-        lineHeight: '1.45',
-        overflow: 'auto',
-      },
-      '.cm-gutter, .cm-content': {
-        minHeight: '100%',
-      },
-      '.cm-content': {
-        caretColor: theme.accent,
-      },
-      '.cm-cursor': {
-        borderLeftColor: theme.accent,
-      },
-      '.cm-selectionBackground, ::selection': {
-        backgroundColor: `${theme.selection} !important`,
-      },
-      '.cm-gutters': {
-        backgroundColor: theme.panel,
-        color: theme.muted,
-        borderRightColor: theme.line,
-      },
-      '.cm-activeLine, .cm-activeLineGutter': {
-        backgroundColor: theme.panel,
-      },
-      '.cm-focused': {
-        outline: 'none',
-      },
-    }, { dark: appearanceMode === 'dark' }),
-    syntaxHighlighting(HighlightStyle.define([
-      { tag: tags.keyword, color: theme.keyword },
-      { tag: tags.string, color: theme.string },
-      { tag: tags.number, color: theme.number },
-      { tag: tags.comment, color: theme.comment },
-      { tag: tags.variableName, color: theme.variable },
-      { tag: tags.invalid, color: theme.error },
-    ])),
-  ];
+  return createThemeExtension(theme, appearanceMode, selectedFontFamily());
 }
 
 function editorExtensions() {
@@ -179,6 +65,7 @@ function editorExtensions() {
       }
       if (update.docChanged) {
         persistDraft();
+        updateEditorHeader();
         renderBuffers();
         renderTree();
       }
@@ -196,6 +83,8 @@ const editorView = new EditorView({
 });
 
 function setStatus(message, { error = false } = {}) {
+  nodes.status.textContent = message;
+  nodes.status.dataset.error = error ? 'true' : 'false';
   if (error) {
     console.error(message);
   } else {
@@ -226,6 +115,7 @@ function bufferDirty(buffer) {
 function createBuffer({ path, name, content, mtimeMs }) {
   const draft = window.localStorage.getItem(draftKey(path));
   return {
+    languageName: languageNameForPath(path),
     path,
     name,
     mtimeMs,
@@ -233,9 +123,20 @@ function createBuffer({ path, name, content, mtimeMs }) {
     restoredDraft: draft !== null,
     state: EditorState.create({
       doc: draft ?? content,
-      extensions: editorExtensions(),
+      extensions: [
+        ...editorExtensions(),
+        languageExtensionForPath(path),
+      ],
     }),
   };
+}
+
+function updateEditorHeader() {
+  const buffer = getActiveBuffer();
+  nodes.title.textContent = buffer ? buffer.path : 'No file open';
+  nodes.language.textContent = buffer ? buffer.languageName : 'Plain text';
+  nodes.reload.disabled = !buffer;
+  nodes.save.disabled = !buffer;
 }
 
 function switchToBuffer(path) {
@@ -247,6 +148,7 @@ function switchToBuffer(path) {
   activePath = path;
   editorView.setState(buffer.state);
   document.title = `${buffer.name} - Editor`;
+  updateEditorHeader();
   renderBuffers();
   renderTree();
   editorView.focus();
@@ -268,6 +170,15 @@ function nextBufferPathAfter(path) {
   return paths[index + 1] ?? paths[index - 1] ?? null;
 }
 
+function clearActiveEditor() {
+  editorView.setState(EditorState.create({
+    doc: '',
+    extensions: editorExtensions(),
+  }));
+  document.title = 'Editor';
+  updateEditorHeader();
+}
+
 function closeBuffer(path) {
   const buffer = openBuffers.get(path);
   if (!buffer) {
@@ -285,15 +196,40 @@ function closeBuffer(path) {
     if (nextPath && openBuffers.has(nextPath)) {
       switchToBuffer(nextPath);
     } else {
-      editorView.setState(EditorState.create({
-        doc: '',
-        extensions: editorExtensions(),
-      }));
-      document.title = 'Editor';
+      clearActiveEditor();
     }
   }
   renderBuffers();
   renderTree();
+}
+
+function createBufferRow(buffer) {
+  const row = document.createElement('div');
+  row.className = 'buffer-row';
+  row.dataset.active = buffer.path === activePath ? 'true' : 'false';
+
+  const openButton = document.createElement('button');
+  openButton.type = 'button';
+  openButton.className = 'buffer-open';
+  openButton.title = buffer.path;
+  openButton.setAttribute('role', 'listitem');
+  openButton.innerHTML = '<span class="buffer-name"></span><span class="buffer-state"></span>';
+  openButton.querySelector('.buffer-name').textContent = buffer.name;
+  openButton.querySelector('.buffer-state').title = buffer.path === activePath
+    ? bufferDirty(buffer) ? 'selected with unsaved edits' : 'selected'
+    : bufferDirty(buffer) ? 'open with unsaved edits' : 'open';
+  openButton.querySelector('.buffer-state').textContent = bufferStateLabel(buffer);
+  openButton.addEventListener('click', () => switchToBuffer(buffer.path));
+
+  const closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.className = 'buffer-close';
+  closeButton.title = `Close ${buffer.name}`;
+  closeButton.textContent = '×';
+  closeButton.addEventListener('click', () => closeBuffer(buffer.path));
+
+  row.append(openButton, closeButton);
+  return row;
 }
 
 function renderBuffers() {
@@ -303,26 +239,7 @@ function renderBuffers() {
     return;
   }
 
-  nodes.buffers.replaceChildren(...buffers.map(buffer => {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'buffer-row';
-    row.dataset.active = buffer.path === activePath ? 'true' : 'false';
-    row.title = buffer.path;
-    row.setAttribute('role', 'listitem');
-    row.innerHTML = '<span class="buffer-name"></span><span class="buffer-state"></span><button class="buffer-close" type="button" title="Close">×</button>';
-    row.querySelector('.buffer-name').textContent = buffer.name;
-    row.querySelector('.buffer-state').title = buffer.path === activePath
-      ? bufferDirty(buffer) ? 'selected with unsaved edits' : 'selected'
-      : bufferDirty(buffer) ? 'open with unsaved edits' : 'open';
-    row.querySelector('.buffer-state').textContent = bufferStateLabel(buffer);
-    row.querySelector('.buffer-close').addEventListener('click', event => {
-      event.stopPropagation();
-      closeBuffer(buffer.path);
-    });
-    row.addEventListener('click', () => switchToBuffer(buffer.path));
-    return row;
-  }));
+  nodes.buffers.replaceChildren(...buffers.map(createBufferRow));
 }
 
 function reconfigureOpenBufferThemes() {
@@ -441,6 +358,22 @@ async function openFile(path) {
   }
 }
 
+async function reloadFile() {
+  const activeBuffer = getActiveBuffer();
+  if (!activeBuffer) {
+    return;
+  }
+
+  if (bufferDirty(activeBuffer) && !window.confirm(`Reload ${activeBuffer.name} and discard unsaved edits?`)) {
+    return;
+  }
+
+  window.localStorage.removeItem(draftKey(activeBuffer.path));
+  openBuffers.delete(activeBuffer.path);
+  await openFile(activeBuffer.path);
+  setStatus(`Reloaded ${activeBuffer.path}`);
+}
+
 async function saveFile() {
   const activeBuffer = getActiveBuffer();
   if (!activeBuffer) {
@@ -456,6 +389,7 @@ async function saveFile() {
     activeBuffer.savedContent = currentContent();
     activeBuffer.state = editorView.state;
     window.localStorage.removeItem(draftKey(activeBuffer.path));
+    updateEditorHeader();
     renderBuffers();
     renderTree();
     setStatus(`Saved ${activeBuffer.path}`);
@@ -516,7 +450,14 @@ async function syncSystemStatus() {
 
 parseInitialLocation();
 applyTheme();
+updateEditorHeader();
 nodes.filter.addEventListener('input', renderTree);
+nodes.reload.addEventListener('click', () => {
+  void reloadFile();
+});
+nodes.save.addEventListener('click', () => {
+  void saveFile();
+});
 window.addEventListener('keydown', event => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
     event.preventDefault();

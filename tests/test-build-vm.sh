@@ -118,7 +118,7 @@ test_rejects_unknown_argument() {
 }
 
 test_structural_contracts() {
-  local olc_nix users ui session development app server terminal_app terminal_server runtime_state setup_manager base
+  local olc_nix users ui session development app server terminal_app terminal_server runtime_state setup_manager base editor_page
   local agents_doc
   olc_nix="$(cat "${OLC_NIX}")"
   base="$(cat "${NIX_BASE}")"
@@ -128,6 +128,7 @@ test_structural_contracts() {
   session="$(cat "${NIX_GRAPHICAL_SESSION}")"
   development="$(cat "${NIX_DEVELOPMENT}")"
   app="$(cat "${LOCALHOST_APP}")"
+  editor_page="$(cat "${ROOT_DIR}/localhost-ui/editor-page.mjs")"
   server="$(cat "${LOCALHOST_SERVER}")"
   terminal_app="$(cat "${LOCALHOST_TERMINAL_APP}")"
   terminal_server="$(cat "${LOCALHOST_TERMINAL_SERVER}")"
@@ -168,6 +169,7 @@ test_structural_contracts() {
   [[ "$ui" == *"OLC_HOMECTL"* ]] || fail "expected localhost UI service to provide homectl"
   [[ "$ui" == *"OLC_LOGINCTL"* ]] || fail "expected localhost services to provide loginctl"
   [[ "$ui" == *"OLC_SCRIPT"* ]] || fail "expected localhost UI service to provide script for homectl PTY automation"
+  [[ "$ui" == *"OLC_SYSTEMD_RUN"* ]] || fail "expected localhost UI service to provide systemd-run for editor worker fallback"
   [[ "$ui" != *"User = \"demo\";"* ]] || fail "expected localhost UI service not to run as demo"
 
   [[ "$session" == *'writeShellScript "olc-user-xsession"'* ]] || fail "expected a dedicated user X session script"
@@ -200,14 +202,15 @@ test_structural_contracts() {
   [[ "$app" == *"editor is unavailable during first setup"* ]] || fail "expected editor to be blocked during setup"
   [[ "$app" == *"Terminal is unavailable during first setup."* ]] || fail "expected terminal to be blocked during setup"
   [[ "$app" == *"getEditorUser"* ]] || fail "expected editor API to resolve the active signed-in user dynamically"
+  [[ "$app" == *"readEditorClientJs()"* ]] || fail "expected editor asset route to read the current bundle at request time"
 
   [[ "$server" == *"createFirstUser"* ]] || fail "expected server to wire first-user provisioning"
   [[ "$server" == *"getRuntimeState"* ]] || fail "expected server to wire runtime state resolution"
   [[ "$server" == *"terminate-user', setupUser"* ]] || fail "expected server to terminate the setup user session after setup completion"
-
   [[ "$terminal_app" == *"getTerminalUser"* ]] || fail "expected terminal app to resolve the active user dynamically"
   [[ "$terminal_app" == *"terminal is unavailable until a signed-in user session exists"* ]] || fail "expected terminal app to fail clearly when nobody is signed in"
   [[ "$terminal_server" == *"getActiveConsoleUser"* ]] || fail "expected terminal server to use active console user resolution"
+  [[ "$editor_page" == *"systemd-run"* ]] || fail "expected editor worker to support a systemd-run fallback for live source-server execution"
 }
 
 test_requires_nix

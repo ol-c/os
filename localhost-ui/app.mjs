@@ -9,7 +9,11 @@ import { setupHtml } from './setup-page.mjs';
 import { rootHtml } from './system-page.mjs';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
-const editorClientJs = readFileSync(join(moduleDir, 'editor-client.bundle.js'), 'utf8');
+const editorClientBundlePath = join(moduleDir, 'editor-client.bundle.js');
+
+function readEditorClientJs() {
+  return readFileSync(editorClientBundlePath, 'utf8');
+}
 
 const commandPaths = new Map([
   [ '/api/system/network', 'network' ],
@@ -306,7 +310,7 @@ export function createOlcApp(options) {
       res.writeHead(200, {
         'content-type': 'text/javascript; charset=utf-8',
       });
-      res.end(editorClientJs);
+      res.end(readEditorClientJs());
       return;
     }
 

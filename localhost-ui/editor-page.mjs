@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
@@ -133,6 +133,32 @@ export function editorHtml() {
         border-bottom: 1px solid var(--editor-line);
       }
 
+      #toolbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+      }
+
+      .toolbar-button {
+        height: 2rem;
+        border: 1px solid var(--editor-line);
+        border-radius: 6px;
+        background: var(--editor-bg);
+        color: var(--editor-fg);
+        font: 13px/1.2 var(--editor-font);
+        padding: 0 0.75rem;
+      }
+
+      .toolbar-button:hover,
+      .toolbar-button:focus-visible {
+        background: var(--editor-line);
+        outline: 0;
+      }
+
+      .toolbar-button:disabled {
+        opacity: 0.55;
+      }
+
       #filter {
         width: 100%;
         min-width: 0;
@@ -155,6 +181,51 @@ export function editorHtml() {
         font-size: 0.85rem;
       }
 
+      #editor-meta {
+        display: grid;
+        gap: 0.2rem;
+        padding: 0.5rem;
+        border-bottom: 1px solid var(--editor-line);
+        background: color-mix(in srgb, var(--editor-panel) 72%, var(--editor-bg));
+      }
+
+      #editor-title {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 0.88rem;
+      }
+
+      #editor-status-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        min-width: 0;
+      }
+
+      #editor-status {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 0.8rem;
+        color: var(--editor-muted);
+      }
+
+      #editor-status[data-error="true"] {
+        color: var(--editor-error);
+      }
+
+      #editor-language {
+        flex: 0 0 auto;
+        border: 1px solid var(--editor-line);
+        border-radius: 999px;
+        padding: 0.1rem 0.45rem;
+        font-size: 0.72rem;
+        color: var(--editor-panel-fg);
+        background: var(--editor-bg);
+      }
+
       #buffers {
         display: grid;
         gap: 0.25rem;
@@ -166,11 +237,20 @@ export function editorHtml() {
 
       .buffer-row {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-columns: minmax(0, 1fr) auto;
         align-items: center;
         gap: 0.45rem;
-        width: 100%;
         min-height: 1.85rem;
+        border-radius: 6px;
+      }
+
+      .buffer-open {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 0.45rem;
+        min-height: 1.85rem;
+        width: 100%;
         border: 0;
         border-radius: 6px;
         background: transparent;
@@ -180,13 +260,16 @@ export function editorHtml() {
         padding: 0 0.4rem;
       }
 
-      .buffer-row:hover,
-      .buffer-row:focus-visible {
+      .buffer-open:hover,
+      .buffer-open:focus-visible,
+      .buffer-close:hover,
+      .buffer-close:focus-visible {
         background: var(--editor-line);
         outline: 0;
       }
 
-      .buffer-row[data-active="true"] {
+      .buffer-row[data-active="true"] .buffer-open,
+      .buffer-row[data-active="true"] .buffer-close {
         background: var(--editor-accent);
         color: var(--editor-bg);
       }
@@ -214,12 +297,6 @@ export function editorHtml() {
         color: inherit;
         font: 15px/1 system-ui, sans-serif;
         padding: 0;
-      }
-
-      .buffer-close:hover,
-      .buffer-close:focus-visible {
-        background: color-mix(in srgb, currentColor 16%, transparent);
-        outline: 0;
       }
 
       #tree {
@@ -289,8 +366,19 @@ export function editorHtml() {
       <aside id="sidebar">
         <div id="toolbar">
           <input id="filter" type="search" placeholder="Filter files" autocomplete="off" />
+          <div id="toolbar-actions">
+            <button id="reload-file" class="toolbar-button" type="button" disabled>Reload</button>
+            <button id="save-file" class="toolbar-button" type="button" disabled>Save</button>
+          </div>
         </div>
         <div id="cwd"></div>
+        <div id="editor-meta">
+          <div id="editor-title">No file open</div>
+          <div id="editor-status-row">
+            <div id="editor-status" data-error="false">Ready</div>
+            <div id="editor-language">Plain text</div>
+          </div>
+        </div>
         <div id="buffers" role="list" aria-label="Open files"></div>
         <div id="tree" role="listbox" aria-label="Files"></div>
       </aside>
@@ -306,24 +394,67 @@ export function editorHtml() {
 async function runEditorWorker(editorUser, args, options = {}) {
   const execPath = options.execPath ?? process.execPath;
   const worker = options.workerPath ?? workerPath;
+  const workerCwd = options.workerCwd ?? '/';
+  const systemdRunPath =
+    options.systemdRunPath
+    ?? process.env.OLC_SYSTEMD_RUN
+    ?? (process.env.OLC_LOGINCTL ? `${dirname(process.env.OLC_LOGINCTL)}/systemd-run` : null)
+    ?? '/run/current-system/sw/bin/systemd-run';
   const spawnOptions = options.spawnOptions ?? {};
+  const workerEnv = {
+    ...process.env,
+    HOME: editorUser.home,
+    USER: editorUser.name,
+    LOGNAME: editorUser.name,
+  };
 
-  const { stdout } = await execFileAsync(execPath, [ worker, ...args ], {
-    timeout: 4000,
-    uid: Number(editorUser.uid),
-    gid: Number(editorUser.gid),
-    env: {
-      ...process.env,
-      HOME: editorUser.home,
-      USER: editorUser.name,
-      LOGNAME: editorUser.name,
-    },
-    cwd: editorUser.home,
-    maxBuffer: maxEditableBytes * 4,
-    ...spawnOptions,
-  });
+  try {
+    const { stdout } = await execFileAsync(execPath, [ worker, ...args ], {
+      timeout: 4000,
+      uid: Number(editorUser.uid),
+      gid: Number(editorUser.gid),
+      env: workerEnv,
+      cwd: workerCwd,
+      maxBuffer: maxEditableBytes * 4,
+      ...spawnOptions,
+    });
 
-  return JSON.parse(stdout);
+    return JSON.parse(stdout);
+  } catch (error) {
+    if (
+      (error.code !== 'EACCES' && error.code !== 'EPERM')
+      || Number(process.getuid?.()) !== 0
+    ) {
+      throw error;
+    }
+
+    const systemdArgs = [
+      '--quiet',
+      '--pipe',
+      '--wait',
+      '--collect',
+      '--service-type=exec',
+      `--uid=${editorUser.name}`,
+      `--gid=${editorUser.gid}`,
+      '--same-dir',
+      `--setenv=HOME=${editorUser.home}`,
+      `--setenv=USER=${editorUser.name}`,
+      `--setenv=LOGNAME=${editorUser.name}`,
+      execPath,
+      worker,
+      ...args,
+    ];
+
+    const { stdout } = await execFileAsync(systemdRunPath, systemdArgs, {
+      timeout: 6000,
+      env: workerEnv,
+      cwd: workerCwd,
+      maxBuffer: maxEditableBytes * 4,
+      ...spawnOptions,
+    });
+
+    return JSON.parse(stdout);
+  }
 }
 
 export async function handleEditorApi(req, res, reqUrl, options = {}) {
