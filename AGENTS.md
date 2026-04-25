@@ -356,3 +356,5 @@ These are non-priority tasks we can pick up any time as an option for the next t
 - Future paste-into-VM fix: copy out of the browser-launched VM already works well. Paste should keep using the existing noVNC plus QEMU `qemu-vdagent` clipboard path, but keyboard paste needs to intercept `Ctrl+V` and host `Cmd+V` in capture phase before noVNC handles them, read host clipboard text during that user gesture, call `rfb.clipboardPasteFrom(text)`, then synthesize guest `Ctrl+V` so the active guest app actually pastes. Browser clipboard reads may be permission or prompt gated, so failure should show a concise hint.
 - Ctrl+Shift+C should not open dev tools in vm, we should make that copy
 - remove "connected" and "clipboard ready" chrome
+- make sure password save offer on initial account creation doesn't show
+
