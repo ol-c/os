@@ -1,184 +1,141 @@
 You are running in a vm, so you have full control of installing new things, launching things to take over and test, and running anything you want to test updates you make.
 
-# Purpose of this Project
+# Purpose
 
-To provide a secure and safe OS based on nixOS and using a browser for all UI.
+Build a secure NixOS-based OS whose primary user interface is the browser.
 
-We will develop together by progressively implementing features described in this file.
-
-Make edits to this file as we adjust plans.
-
-We will mark things done as we finish them. For something to qualify as finished, it must have excellent test coverage.
+This file is the working project brief. Keep it current as decisions change. A task is only complete when it has strong automated coverage.
 
 # Planning Rule
 
-We will define milestones by the proof they provide, not by premature tooling or architecture decisions.
+Define milestones by the proof they provide, not by premature architecture choices.
 
-That means:
-- We should decide what we need to demonstrate first.
-- We should choose the minimum implementation needed to demonstrate it.
-- We should avoid locking in VM, boot, networking, or build orchestration details before they are justified by a milestone.
+- Decide what must be demonstrated.
+- Choose the minimum implementation that proves it.
+- Avoid locking in VM, boot, networking, packaging, or orchestration details before a milestone requires them.
 
-# Milestones
+# Roadmap
 
 ## Completed Milestones
 
-Milestones 1, 2, 3, and 4 are complete. The implementation checklist below is the retained history for completed work.
-
-- Milestone 1 proved a reproducible NixOS guest boot on an Ubuntu host.
-- Milestone 2 proved an in-guest graphical browser UI.
-- Milestone 3 proved browser-based system controls.
-- Milestone 4 proved synced in-VM development against a host-shared repo.
-
-## Milestone 5: First-Time Setup and Persistence
-
-Goal:
-- Implement first boot onboarding and persist machine state.
-
-Success criteria:
-- A fresh machine state shows onboarding on first boot.
-- Completing setup writes durable machine state.
-- A later boot of the same machine state skips onboarding.
-- Automated tests can bypass the manual setup flow through a test prefill path.
-
-Question this milestone answers:
-- Can the system transition cleanly from unconfigured to configured state?
+- Milestone 1: reproducible NixOS guest boot on an Ubuntu host.
+- Milestone 2: graphical in-guest browser UI.
+- Milestone 3: browser-based system controls.
+- Milestone 4: synced in-VM development against a host-shared repo.
+- Milestone 5: first-boot onboarding, persistent machine state, and a test-prefill path.
 
 ## Milestone 6: Development Loop
 
 Goal:
-- Tighten the build and launch workflow for normal development.
+- Make the normal development loop predictable, fast, and reproducible.
 
-Milestone 6 decisions:
-- Keep the Firefox source-tree development loop aligned with the Firefox source selected by the repo's pinned nixpkgs input by default.
-- Define a fixed in-VM Firefox development checkout and build-cache location outside the tracked ol-c repo contents.
-- Use nested KVM on the Ubuntu host for the current in-ol-c VM development proof.
-- Expose the parent VM's boot image directory into the ol-c guest at `/vm-images` so child VM tests can reuse a prebuilt image.
-- Use `/var/lib/ol-c/vms` as the guest-side runtime workspace for child VM launch temp files and logs.
-- Keep the full Firefox source tree and reusable Firefox build artifacts out of this repo.
-- Namespace Firefox source checkouts, build outputs, and reusable cache state by Firefox identity, including version, source URL or source name, source hash, and nixpkgs revision.
-- Provide a mechanism to populate the in-VM Firefox checkout from the pinned nixpkgs Firefox source and to reuse or prebuild artifacts where practical.
-- Treat the in-VM Firefox source loop as a proof and development loop, not as the distro packaging source of truth.
-- After a Firefox source behavior change is validated in the VM, refresh the repo patch artifact and run the packaged Nix gates intentionally.
-- Rely on nixpkgs as the primary Firefox packaging and security-update source for now.
-- Keep newer-than-nixpkgs Firefox support as a future escape hatch only if nixpkgs update latency becomes unacceptable.
-- Do not make ol-c responsible for packaging a newer Firefox than nixpkgs as part of this milestone.
-- Before relying on nixpkgs for timely security updates, move the repo off unsupported `nixos-24.11` to a currently supported NixOS branch and keep that branch current.
+Key decisions:
+- Keep the Firefox source-tree loop aligned with the Firefox source selected by pinned `nixpkgs`.
+- Treat source-tree validation as a development proof, not as the distro packaging source of truth.
+- Keep the final packaged Nix build path as the release gate for shipped Firefox changes.
+- Keep full Firefox source trees and reusable build artifacts out of this repo.
+- Namespace Firefox source checkouts, build outputs, and caches by Firefox identity, including version, source identity, source hash, and `nixpkgs` revision.
+- Use nested KVM for the current in-ol-c VM development proof.
+- Expose the parent image directory at `/vm-images` so child VM tests can reuse prebuilt images.
+- Use `/var/lib/ol-c/vms` for child VM runtime state, temp files, and logs.
+- Keep nixpkgs/NixOS as the primary Firefox and security-update source for now.
+- Treat newer-than-nixpkgs Firefox support as an escape hatch only if update latency becomes a real problem.
+- Embedded VM creation should allow for setting up a test user account, so we can skip authentication for tests for user layer changes
 
 Success criteria:
-- The build flow is predictable.
-- The launch flow is predictable.
+- Build and launch behavior are predictable.
 - Rebuild versus reuse behavior is explicit.
-- The workflow supports fast iteration without undermining reproducibility.
-- The in-VM Firefox source loop records the exact Firefox and nixpkgs identity being tested.
-- A developer can validate Firefox source-tree behavior in the guest before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`.
-- The final packaged build path remains the gate for what the distro will ship.
-
-Examples of things that may belong here:
-- Build orchestration
-- Artifact manifests
-- Overlays or snapshots
-- Better launch scripts
-- Efficiently launching a Firefox source-tree build from inside the VM to test patch edits before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`
-- Updating the pinned NixOS branch as part of keeping development and security assumptions honest
-- Recording Firefox source identity and build-output identity for source-tree test runs
-- Future explicit support for a repo-declared newer Firefox track, if nixpkgs update latency proves unacceptable
+- Fast iteration does not undermine reproducibility.
+- `patched-firefox` or the source-tree loop records the exact Firefox and `nixpkgs` identity being tested.
+- A developer can validate Firefox behavior in the guest before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`.
+- The packaged build remains the gate for what ships.
 
 Question this milestone answers:
-- Do we have a development workflow that is practical and repeatable?
+- Do we have a practical, repeatable development workflow?
 
 ## Milestone 7: Self-Hosted Development
 
 Goal:
-- Evaluate and possibly support development from inside the OS itself.
+- Decide whether developing ol-c from inside ol-c is a primary workflow or a later capability.
 
 Success criteria:
-- We define what “develop inside the OS” actually means.
-- We understand the constraints around editing, building, testing, and nested virtualization.
-- We decide whether self-hosting is a primary workflow or a later capability.
+- “Develop inside the OS” is defined concretely.
+- Editing, building, testing, and nested-virtualization constraints are understood.
+- We decide whether self-hosting is primary or deferred.
 
 Question this milestone answers:
-- Can this OS become a practical environment for developing itself?
+- Can the OS become a practical environment for developing itself?
 
 ## Milestone 8: Browser Accountability and Activity Visibility
 
 Goal:
-- Expose important browser-site behaviors in a user-facing browser interface so users can understand what sites are doing with sensitive browser capabilities and persistent browser state.
+- Show users what sites are doing with sensitive browser capabilities and persistent state.
 
-Milestone 8 decisions:
-- De-prioritize this milestone behind the current roadmap.
-- Make the first proof visibility-only, not control-oriented.
-- Include aggregate CPU, memory, and network accounting alongside important event tracking in the first version.
-- Treat this as a product capability of the browser shell, not as a developer or devtools feature.
-- Prefer browser-internal instrumentation and first-party UI over standard extension APIs.
+Key decisions:
+- This is currently deprioritized behind the Milestone 6 work.
+- The first proof is visibility-only, not control-oriented.
+- Include aggregate CPU, memory, and network accounting alongside important capability events.
+- Treat this as browser-shell product UI, not as devtools.
+- Prefer browser-internal instrumentation and first-party UI over extension APIs.
 
 Success criteria:
-- The browser UI shows important current and recent activity for sites or tabs.
-- At minimum, the milestone demonstrates visibility for a defined set of high-value events such as screen capture, camera access, microphone access, persistent storage use or grant, service worker install or active state, and background worker activity where practical.
-- The browser UI shows aggregate CPU, memory, and network usage attributable to a tab, site, or origin.
-- The UI can show both what is happening now and a recent history or timeline of important events.
-- Event data is attributable to a tab, site, or origin in a way users can understand.
-- Automated tests cover the event-to-UI contract with deterministic triggers or test hooks.
+- The UI shows important current and recent site or tab activity.
+- The first version covers a defined set of high-value events such as screen capture, camera, microphone, persistent storage, service workers, and background workers where practical.
+- CPU, memory, and network usage are attributable in a user-comprehensible way.
+- Automated tests cover the event-to-UI contract with deterministic triggers or hooks.
 
 Out of scope:
-- Throttling, suspension, kill, or policy enforcement controls
-- Broad developer tooling or raw internal telemetry dumps
+- Enforcement controls such as throttling, suspension, or kill.
+- Raw telemetry dumps or broad developer tooling.
 
 Question this milestone answers:
-- Can the browser act as a trustworthy activity ledger that tells users what sites are doing with sensitive browser capabilities and persistent browser state?
+- Can the browser act as a trustworthy activity ledger?
 
 ## Milestone 9: User-Facing System Updates and Rollback
 
 Goal:
-- Deliver OS and browser security updates through the browser System page without requiring users to understand or operate NixOS directly.
+- Deliver OS and browser updates through the browser System page without requiring users to operate NixOS directly.
 
-Milestone 9 decisions:
-- Treat Firefox self-update as incompatible with the ol-c update model; Firefox updates should arrive through ol-c system updates.
-- Use nixpkgs/NixOS as the primary source for Firefox security updates unless concrete latency problems justify carrying a repo-declared newer Firefox package track.
+Key decisions:
+- Firefox updates should arrive through ol-c system updates, not Firefox self-update.
 - Users should not compile Firefox locally as part of normal updates.
-- ol-c should consume prebuilt, signed or otherwise verified update artifacts before offering an update to users.
-- Depend on the release artifact and binary distribution proofs before treating browser-facing updates as a user-ready product path.
-- The browser System page is the intended product surface for update availability, install actions, update progress, reboot prompts, and rollback.
-- Rollback should use NixOS generations rather than browser-level self-update state.
-- The update path should make patch drift visible early: if an upstream Firefox update breaks the ol-c Firefox patch, that should block publication in CI/release work rather than silently holding users on an old browser.
+- The browser System page is the product surface for update discovery, install, progress, reboot, and rollback.
+- Rollback should use NixOS generations.
+- Patch drift against upstream Firefox should block publication rather than silently freezing users on an old browser.
 
 Success criteria:
-- The browser System page can show when an ol-c update is available.
-- A user can opt in to install an available update without invoking Nix commands.
-- The installed update uses prebuilt artifacts rather than compiling large packages such as Firefox on the user's machine.
-- A user can move back to a previous known system generation if an update is undesirable or broken.
-- The update mechanism records enough version information to explain what Firefox, nixpkgs, and ol-c revision are active.
-- Automated tests cover the browser-to-update-service contract with deterministic fakes or controlled test hooks.
+- Users can discover, install, and roll back updates from the browser.
+- Updates use prebuilt verified artifacts rather than local heavy builds.
+- The active `ol-c`, `nixpkgs`, and Firefox versions are visible.
+- Automated tests cover the browser-to-update-service contract.
 
 Question this milestone answers:
-- Can ol-c keep browser and OS security updates user-friendly, timely, and reversible?
+- Can ol-c keep browser and OS updates user-friendly, timely, and reversible?
 
 ## Milestone 10: Prebuilt Release Artifacts
 
 Goal:
-- Produce ol-c release artifacts that users can install or boot without running `nix build`.
+- Produce ol-c release artifacts that downstream users can install or boot without running `nix build`.
 
 Success criteria:
-- A trusted local or CI builder can produce the current `.#ol-c-image` release artifact from a validated repo state.
-- The release output records the ol-c revision, nixpkgs revision, Firefox version, image output path, artifact hashes, and build logs.
-- The release path proves the Firefox patch gates and VM boot gate before an artifact is considered publishable.
-- The release artifact can be consumed by a downstream install or boot workflow without rebuilding Firefox or the OS on the user's machine.
-- Automated tests cover the release manifest contract with deterministic local artifacts or fakes.
+- A trusted local or CI builder can produce `.#ol-c-image` from a validated repo state.
+- Release output records the ol-c revision, `nixpkgs` revision, Firefox version, artifact path, hashes, and logs.
+- The release path proves Firefox patch gates and VM boot before publication.
+- Automated tests cover the release manifest contract.
 
 Question this milestone answers:
-- Can ol-c turn a validated repo state into a reusable downstream install artifact?
+- Can ol-c turn a validated repo state into a reusable downstream artifact?
 
 ## Milestone 11: Verified Binary Distribution
 
 Goal:
-- Publish verifiable ol-c artifacts and Nix closures so user machines download trusted binaries instead of compiling Firefox or the OS.
+- Publish verifiable ol-c artifacts and Nix closures so users download trusted binaries instead of compiling locally.
 
 Success criteria:
-- Published artifacts include hashes and signatures or an equivalent verification mechanism.
-- A fresh machine can verify artifact provenance before install or update.
-- Missing, mismatched, or untrusted verification data prevents install or update.
-- The distribution path can provide the Nix closure needed by the release artifact without requiring local source builds.
-- Automated tests cover verification success and failure cases with deterministic local fixtures.
+- Published artifacts include signatures, hashes, or an equivalent verification mechanism.
+- Install or update fails closed on missing or untrusted verification data.
+- The distribution path can provide the Nix closure required by the release artifact.
+- Automated tests cover both verification success and failure.
 
 Question this milestone answers:
 - Can users safely consume ol-c builds without trusting local compilation?
@@ -186,165 +143,90 @@ Question this milestone answers:
 ## Milestone 12: Installer and First Install Path
 
 Goal:
-- Provide a first install flow that consumes a prebuilt verified ol-c release artifact.
+- Provide an install flow that consumes a prebuilt verified ol-c release artifact.
 
 Success criteria:
-- A user can install or boot ol-c from a published release artifact without invoking Nix commands.
-- The first install path does not compile Firefox or other large OS packages on the user's machine.
-- Installed machine state remains compatible with first-time setup and persistence.
-- The installer records enough version information to explain what ol-c revision, nixpkgs revision, and Firefox version were installed.
-- Automated tests cover the installer contract using local fake artifacts or controlled test hooks.
+- A non-developer can install or boot ol-c without invoking Nix commands.
+- The first install path does not compile Firefox or other large packages locally.
+- Installed state remains compatible with first-time setup and persistence.
+- The installed `ol-c`, `nixpkgs`, and Firefox versions are recorded.
+- Automated tests cover the installer contract.
 
 Question this milestone answers:
 - Can a non-developer get ol-c onto hardware or a VM quickly and repeatably?
 
 # Current Capabilities
 
-These are implemented capabilities that should remain visible even when the active work has moved on:
 - `https://localhost/terminal` provides fresh in-browser terminal sessions.
-- `https://localhost/edit` provides a browser text editor for local files using the active signed-in user's filesystem permissions.
-- The editor uses CodeMirror 6, stores unsaved drafts in browser local storage, and follows the shared terminal font, color scheme, and global light or dark appearance.
-- `edit` from an in-browser terminal opens a new `/edit` tab rooted at the current directory, and `edit <path>` opens that file.
-- The normal host launch path uses a browser tab as the default VM display, backed by local-only QEMU VNC WebSocket plus pinned noVNC assets.
-- The normal VM launch path also exposes a local-only QMP socket and prints it as `qmp socket:` for low-level host-side control.
-- `launch-vm` can wait for a guest `olc-vm-ready` journal marker and treat missing readiness within the expected window as a surfaced launch failure.
-- Nested `olc-launch-test-vm` launches keep the child hidden by default and rely on the printed reconnect URL when you want to view the child in a browser tab.
-- Nested `olc-launch-test-vm` launches reject parent display overrides and keep browser-tab viewing as the only parent-side VNC access path.
-- Nested `olc-launch-test-vm` launches now default to a `10G` disposable overlay, `OLC_VM_FAST_BOOT=1`, `OLC_VM_NETWORK_MODE=none`, and `OLC_SHARE_VM_IMAGES=0` so child boots stay cheap while preserving the browser-viewer reconnect path.
-- Nested fast-boot children inherit fixed store paths for noVNC and the patched browser-viewer QEMU from the guest system instead of resolving them through a launch-time flake build.
-- Nested `olc-launch-test-vm` launches now wait for the guest ready marker by default and reuse a cached patched QEMU path before falling back to a fresh repo `nix build`.
-- Browser-tab wheel capture preserves horizontal and vertical repeated steps and leftover delta before reaching QEMU.
+- `https://localhost/edit` provides a browser text editor that uses the active signed-in user's filesystem permissions.
+- `edit` from an in-browser terminal opens `/edit`, and `edit <path>` opens a specific file.
+- The normal `./launch-vm` path uses a browser tab as the VM display through local-only QEMU VNC WebSocket plus pinned noVNC assets.
+- `launch-vm` also exposes a local-only QMP socket and prints it as `qmp socket:`.
+- `launch-vm` can wait for the guest `olc-vm-ready` journal marker and surface readiness failures.
+- In-VM development uses a host-shared repo mounted at `/source` via `virtiofs`.
+- Nested `olc-launch-test-vm` launches default to a cheap child-boot path and print a reconnect URL for browser viewing.
+- `olc-vmctl` provides low-level QMP control primitives including `key`, `type`, `move`, `click`, `screenshot`, and `raw`.
 - Firefox localhost shell behavior opens new tabs to `https://localhost/` and replaces last-tab closure with a localhost tab.
-- In-VM development can use a host-shared repo mounted at `/source` through QEMU `virtiofs`.
-- `olc-vmctl` provides host-side QMP control primitives for a running VM, including `key`, `type`, `move`, `click`, `screenshot`, and `raw`.
 
 # Current Focus
 
-Milestones 1, 2, 3, and 4 are complete.
-
-We are currently focused on Milestone 6.
+Active milestone:
+- Milestone 6.
 
 Immediate next task:
-- Record exact Firefox and nixpkgs identity for `patched-firefox` runs so developers can prove what runtime they validated before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`.
+- Record the exact Firefox and `nixpkgs` identity for `patched-firefox` runs so developers can prove what runtime they validated before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`.
 
-Additional active Milestone 6 track:
-- Define the host-driven VM operator proof so a host can launch a VM, submit work to it, and watch that work happen through the embedded VM browser viewer or in-guest browser surfaces.
-- Treat the shared `/source` mount as the first host↔guest control channel for this proof instead of adding guest networking requirements first.
-- Prefer a guest-resident operator service with explicit `shell` and `gui` execution modes over a pure host-side noVNC driving approach.
-- Use `xdotool` inside the guest for first-pass visible GUI automation when user-like interaction is required.
-- Keep the existing browser viewer as the human observation and reconnect surface, not the primary automation API.
-- Add a parent-to-child Firefox BiDi bridge so a parent VM can control a child VM's live Firefox session without relying on child-local `127.0.0.1` access or falling back to QMP input for page-level DOM work.
-- Record operator request state, progress, and results both in a shared runtime directory and in journald so the host can tell what the VM is doing.
-- The first proof should be: host launches VM, submits a request, guest opens a terminal tab in Firefox and runs a visible command, host watches it happen live, and host can verify completion from shared artifacts and logs.
-- The implemented first low-level control path uses QMP directly instead: host or parent guest launches the VM, `launch-vm` prints a `qmp socket:`, and `olc-vmctl` can inject keyboard and pointer input or capture screenshots while the VM remains visible in the embedded browser viewer.
+Current Milestone 6 direction:
+- `patched-firefox` is the one-command in-VM operator path for launching a patched Firefox from the installed runtime.
+- Normal VM launch and pending Firefox patch testing stay separate: `./launch-vm` boots the packaged system from `patches/firefox/packaged`, while `patched-firefox` applies `packaged` first and `pending` second.
+- `patched-firefox` must not evaluate the dirty local `/source` flake on its launch path.
+- The fast path should reuse the installed runtime, symlink unchanged files, and rebuild only mutable `omni.ja` assets.
+- Packaged Firefox patches live under `patches/firefox/packaged/`; dev-only fast-loop patches live under `patches/firefox/pending/`.
+- Keep the packaged Nix paths explicitly blind to `patches/firefox/pending` in tests.
 
-Planning note:
-- The current exploration and proposed proof live in `docs/host-driven-vm-operator-plan.md`.
+Parallel Milestone 6 track:
+- Define a host-driven VM operator proof where a host launches a VM, submits work, watches it happen live, and verifies completion through shared artifacts and logs.
+- Use the shared `/source` mount as the first host-to-guest control channel rather than requiring guest networking first.
+- Keep the embedded browser viewer as the human observation surface, not the main automation API.
+- Use a guest-resident operator path for visible work where appropriate, with `xdotool` available for first-pass GUI automation.
+- Prefer a parent-to-child Firefox BiDi bridge for page-level control of a child VM's browser session; keep `olc-vmctl` as the lower-level fallback for raw input and screenshots.
 
-Next steps from the patched-Firefox fast-loop attempt:
-- Preserve the useful decision that `patched-firefox` should be the one-command operator path for launching a patched Firefox from inside the VM.
-- Keep the useful decision that normal VM launch and pending browser patch testing are separate paths: `./launch-vm` should boot the regular packaged system from `patches/firefox/packaged`, while `patched-firefox` should be the explicit command for applying and launching pending Firefox patches from `patches/firefox/pending` on top of the packaged baseline.
-- Keep the useful finding that the command must not evaluate the local `/source` flake on the launch path, because that causes Nix to copy the dirty source tree into the store before the browser can start.
-- Keep the useful finding that a source-checkout workflow and an operator fast-launch workflow should be separate paths: source identity, checkout population, and full patch refresh are useful, but they should not sit on the critical path for `patched-firefox`.
-- Keep the useful finding that the fast runtime should use the installed Firefox runtime, symlink unchanged runtime files, and copy only mutable `omni.ja` files before repacking browser chrome assets.
-- `patched-firefox` now resolves `patch`, `filterdiff`, `zip`, and `unzip` through fixed Nix store paths instead of relying on the active system profile.
-- `patched-firefox` now tolerates an unset `HOME` by resolving the passwd home directory before computing its default profile path.
-- `patched-firefox` now infers `DISPLAY=:0` when the browser terminal session omits `DISPLAY` and `/tmp/.X11-unix/X0` exists.
-- Packaged Firefox patches now live under `patches/firefox/packaged/`, and dev-only fast-loop patches now live under `patches/firefox/pending/`.
-- A small explicit Sync/FxA UI patch exists at `patches/firefox/packaged/0002-hide-sync-fxa-ui.patch` and is part of the ordered packaged Firefox patch stack.
-- The latest `patched-firefox` patch succeeded and the VM rebuild worked, preserving the new explicit in-VM operator path.
-- The built `patched-firefox` command was smoke-tested inside the current ol-c guest with a temporary workspace/profile; it inferred the active X display, generated a patched runtime from `/run/current-system/sw/lib/firefox`, reached the Firefox exec path, and the generated `browser/omni.ja` contained both the localhost and Sync/FxA patch markers.
-- Keep the boundary explicit in tests: packaged Nix paths must ignore `patches/firefox/pending`, and `patched-firefox` must apply `packaged` first and `pending` second.
+Related design notes:
+- `docs/host-driven-vm-operator-plan.md` holds the current operator-proof plan.
 
-Supported-branch validation status:
+# Validation Status
+
 - The repo has moved from unsupported `nixos-24.11` to `nixos-25.11`.
-- The fast deterministic contract checks pass:
+- Fast deterministic checks currently passing:
   - `node --test localhost-ui/*.test.mjs`
   - `cd terminal-client && npm test && npm run build`
   - `bash tests/test-build-vm.sh`
   - `bash tests/test-launch-vm.sh`
   - `bash tests/test-build-firefox-remote.sh`
   - `bash tests/test-olc-firefox-dev.sh`
-- `./build-vm` succeeds as the minimum real Nix build gate for the NixOS branch update.
-- `./build-vm` also succeeds after adding the in-guest Firefox development-loop tooling.
-- `./launch-vm` boots into the graphical browser surface and loads the localhost UI.
-- The patched packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`; the store output includes the ol-c localhost patch marker for the patched runtime assets.
-- The fast packaged Firefox output now records both `OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1` and `OLC_FIREFOX_FXA_SYNC_UI_PATCH_APPLIED=1`.
-- `./build-vm` succeeds after adding the `patched-firefox` operator path and the explicit Sync/FxA patch artifact.
-- `./build-firefox-source-remote`, fetch, and `nix build .#firefox-localhost-source --print-build-logs` succeed, and subsequent runs reuse the local Nix store output quickly.
+- `./build-vm` succeeds.
+- `./launch-vm` boots to the graphical browser surface and loads the localhost UI.
+- The packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`.
+- The fast packaged Firefox output records both `OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1` and `OLC_FIREFOX_FXA_SYNC_UI_PATCH_APPLIED=1`.
+- `./build-firefox-source-remote`, fetch, and `nix build .#firefox-localhost-source --print-build-logs` succeed, with later local builds reusing the imported result.
 
-In-VM validation note:
-- When Codex is running inside the ol-c guest, it can identify that context with `hostnamectl`, `systemd-detect-virt`, and `findmnt -T /source`.
-- If `/source` is mounted from `ol-c-source` with `virtiofs`, Codex should treat edits as host-synced repo edits and can validate browser-surface work directly inside the guest.
-- When a graphical Firefox session is running in the guest, Codex may use available local GUI automation tools such as `xdotool` to actively drive the browser for validation.
+# Working Notes
 
-Host-driven live analysis and debugging note:
-- The parent ol-c guest can act as the effective host operator for a nested child VM by launching `olc-launch-test-vm`, opening the printed reconnect URL in a browser tab, and keeping that viewer open as the human observation surface.
-- For page-level analysis or live DOM debugging inside the child Firefox session, prefer `olc-vm-bidi` over noVNC/QMP input injection; this uses the shared operator directory plus the child's `olc-vm-ready` BiDi marker to send structured requests into the live browser session.
-- Treat `olc-vm-bidi` as the primary path when the task is “inspect or change what the live localhost page is doing right now”, for example reading the current URL, evaluating JavaScript in `https://localhost/*`, clicking a DOM target, or replacing page content temporarily to prove control.
-- Treat the reconnect URL as the user-facing proof surface and `olc-vm-bidi` results plus journald as the machine-verifiable proof surface; use both when demonstrating that a live child tab changed in response to operator work.
-- Keep `olc-vmctl` as the lower-level fallback for actions BiDi cannot prove, such as raw keyboard or pointer injection, screenshots, or recovery when page-level automation is unavailable.
+In-VM validation:
+- If Codex is running inside the ol-c guest and `/source` is the `ol-c-source` `virtiofs` mount, treat edits as host-synced repo edits and validate browser-surface work directly in the guest.
+- When a graphical Firefox session is live in the guest, local tools such as `xdotool` may be used for validation.
 
-Shared journal mirror note:
+Host-driven live analysis:
+- A parent ol-c guest can act as the effective host operator for a nested child VM by launching `olc-launch-test-vm`, opening the printed reconnect URL, and keeping that viewer open as the observation surface.
+- For page-level analysis or DOM work inside a child Firefox session, prefer `olc-vm-bidi` over noVNC or QMP input injection.
+- Use the reconnect URL as the human proof surface and BiDi results plus `journald` as the machine-verifiable proof surface.
+
+Shared journal mirror:
 - The canonical logs remain the guest's local `journald` store; the host-visible mirror lives under `/source/.olc-debug/journal`.
-- Each VM mirrors its current boot into its own native journal file in that directory, so parent and child VMs can share `/source` without fighting over one aggregate journal file.
-- When working from the shared repo view, prefer standard journal tools against that directory, for example `journalctl --directory=/source/.olc-debug/journal`.
-- The embedded-VM `olc-vm-ready` marker now means the active local Firefox session has published its BiDi endpoint, not merely that `https://localhost/` answered once.
-- When investigating one VM, first filter by `_MACHINE_ID`, then narrow to `_BOOT_ID`, and use `OLC_VM_MACHINE_ID`, `OLC_VM_BOOT_ID`, `OLC_VM_PARENT_MACHINE_ID`, and `OLC_VM_DEPTH` to reconstruct nested lineage.
-- If Codex is running inside the specific target VM, prefer direct `journalctl` against the local system journal over the shared mirror.
-
-Security and update planning note:
-- The repo has moved from unsupported `nixos-24.11` to `nixos-25.11`, with host build and VM boot validation complete.
-- Relying on nixpkgs for Firefox security updates is the preferred path, but only if ol-c tracks a supported branch promptly.
-- Distribution-system work is now explicitly split into prebuilt release artifacts, verified binary distribution, first install, and browser-facing updates.
-- User-facing ol-c updates should eventually be exposed through the browser System page and backed by prebuilt verified artifacts.
-- Users should not need to operate NixOS directly or compile Firefox locally to receive browser security updates.
-- Rollback should be exposed as an ol-c product action backed by NixOS generations.
-
-Implementation status:
-- [x] Chose QEMU for the first development backend.
-- [x] Chose a minimal custom nixOS guest as the first boot target.
-- [x] Chose serial output as the Milestone 1 proof surface.
-- [x] Added a minimal nix guest definition with a deterministic Milestone 1 boot marker.
-- [x] Added a simple build script and QEMU launch script for Milestone 1.
-- [x] Added a graphical Milestone 2 guest with autologin and Firefox.
-- [x] Added tests for the build and launch contract for both milestones.
-- [x] Verified the full Milestone 2 graphical boot and browser launch on an Ubuntu host with nix and QEMU/KVM installed.
-- [x] Simplified the normal VM launcher so `./launch-vm` always boots the current graphical Milestone 2 guest, with milestone validation handled by build and test scripts.
-- [x] Moved the normal graphical launch path away from direct host windows and toward the browser-rendered VM surface.
-- [x] Consolidated the historical milestone Nix modules into one canonical ol-c module at `nix/ol-c.nix`.
-- [x] Proved the current Firefox source-patch flow end to end by building the patched browser, booting the guest with it, and verifying that closing the final tab reopens `https://localhost`.
-- [x] Add a browser terminal proof surface at `https://localhost/terminal` where each visit creates a fresh session.
-- [x] Use a browser terminal frontend and backend path that are robust enough for advanced interactive terminal programs.
-- [x] Make the terminal page title follow the shell title stream when available, with a fallback title when not available.
-- [x] Investigate and fix the remaining extra line shown after terminal command output.
-- [x] Keep terminal behavior modular enough to test independently, including closing the browser tab when the root terminal session exits instead of showing a dead terminal interface.
-- [x] Extend the Firefox localhost shell behavior so opening a new tab also loads `https://localhost/` without regressing the final-tab reopen behavior. (fix the fragile tab exit bug as well)
-- [x] Add a Google Compute Engine VM helper for remote patched-Firefox builds with Cloud Storage result handoff, provider-enforced timeout deletion, and explicit kill/fetch/cleanup commands.
-- [x] Split the Firefox packaged workflow into a fast browser-frontend repack target and a full source-build compatibility target.
-- [x] Replace the current 5 minute idle timeout with a more reliable terminal session cleanup strategy.
-- [x] Define the Milestone 3 browser-based system controls proof surface and test strategy.
-- [x] Implement the first browser-visible system status surfaces for core device utilities.
-- [x] Implement browser-driven control flows for the selected Milestone 3 utilities.
-- [x] Add excellent automated coverage for the browser-to-system control contract.
-- [x] Define the Milestone 4 synced in-VM development proof surface and test strategy.
-- [x] Add one supported host↔guest shared repo mount path using `virtiofs`.
-- [x] Enable in-guest development against the shared tree with a fixed mount location.
-- [x] Add source-backed preview for localhost UI from `/source`, with terminal sessions owned by a stable service so Codex-driven edits do not kill the active terminal.
-- [x] Document the validate-inside-VM, then package-with-Nix workflow for browser-surface changes.
-- [x] Prove synced in-VM development against the host ol-c repo mounted at `/source`.
-- [x] Move the repo from unsupported `nixos-24.11` to a currently supported NixOS branch and verify the VM still builds and boots.
-- [x] Make the normal host VM launch use a browser tab as the VM rendering surface.
-- [x] Prove the first nested in-VM development launch: ol-c can run a child VM from the in-browser terminal using nested KVM, `/vm-images`, and the browser-tab screen flow.
-- [x] Add a basic localhost text editor at `https://localhost/edit` with terminal launch integration and terminal setting reuse.
-- [x] Add a development-loop proof for efficiently launching patched Firefox browser chrome from inside the VM to test patch edits.
-- [x] Improve browser-tab VM wheel capture so horizontal and vertical scroll preserve repeated steps and leftover delta before reaching QEMU.
-- [x] Add a first-boot browser setup kiosk that creates the first human admin through `systemd-homed` with LUKS-backed storage.
-- [x] Switch tty1 from fixed autologin to dynamic behavior: setup autologin only before the first admin exists, normal username/password login afterward.
-- [x] Replace hardcoded `demo` runtime assumptions in localhost terminal and editor paths with active console user resolution.
-- [x] Add a Milestone 5 automated test-prefill path that bypasses manual first-user setup in VM/system tests.
-- [x] Explore and document the host-driven VM operator direction for launching a VM, submitting work from the host, and watching the VM carry it out live through the embedded browser viewer.
-- [x] Add a first QMP-native host control path for launched VMs, including printed QMP socket paths, journal-backed readiness/discovery, and an `olc-vmctl` wrapper for keyboard, pointer, screenshot, and raw-QMP actions.
+- Each VM mirrors its current boot into its own native journal file in that directory.
+- When working from the shared repo view, prefer `journalctl --directory=/source/.olc-debug/journal`.
+- The `olc-vm-ready` marker means the active local Firefox session has published its BiDi endpoint.
+- When investigating one VM, filter by `_MACHINE_ID` first, then `_BOOT_ID`, and use `OLC_VM_MACHINE_ID`, `OLC_VM_BOOT_ID`, `OLC_VM_PARENT_MACHINE_ID`, and `OLC_VM_DEPTH` to reconstruct nested lineage.
 
 # Deferred Decisions
 
