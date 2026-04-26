@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
@@ -144,12 +144,14 @@ test('move scales screenshot coordinates into absolute pointer events', async ()
   }
 });
 
-test('runtime metadata resolves default target', async () => {
+test('proc discovery resolves default target', async () => {
   const server = await startFakeQmpServer();
-  const runtimeDir = await mkdtemp(join(tmpdir(), 'olc-vmctl-runtime.'));
+  const procRoot = await mkdtemp(join(tmpdir(), 'olc-vmctl-proc.'));
   try {
-    await writeFile(join(runtimeDir, 'vm.json'), JSON.stringify({ qmpSocket: server.path }));
-    const result = await runVmctl([ '--runtime-dir', runtimeDir, 'click', '1' ]);
+    const pidDir = join(procRoot, '43210');
+    await mkdir(pidDir, { recursive: true });
+    await writeFile(join(pidDir, 'cmdline'), `qemu-system-x86_64\0-qmp\0unix:${server.path},server=on,wait=off\0`);
+    const result = await runVmctl([ 'click', '1' ], { OLC_VMCTL_PROC_ROOT: procRoot });
     assert.equal(result.exitCode, 0, result.stderr);
     assert.equal(server.events[1].execute, 'input-send-event');
     assert.deepEqual(server.events[1].arguments.events[0].data, { button: 'left', down: true });
@@ -157,7 +159,7 @@ test('runtime metadata resolves default target', async () => {
     assert.deepEqual(server.events[2].arguments.events[0].data, { button: 'left', down: false });
   } finally {
     await server.close();
-    await rm(runtimeDir, { recursive: true, force: true });
+    await rm(procRoot, { recursive: true, force: true });
   }
 });
 

@@ -207,9 +207,12 @@ These are implemented capabilities that should remain visible even when the acti
 - `edit` from an in-browser terminal opens a new `/edit` tab rooted at the current directory, and `edit <path>` opens that file.
 - The normal host launch path uses a browser tab as the default VM display, backed by local-only QEMU VNC WebSocket plus pinned noVNC assets.
 - The normal VM launch path also exposes a local-only QMP socket and prints it as `qmp socket:` for low-level host-side control.
+- `launch-vm` can wait for a guest `olc-vm-ready` journal marker and treat missing readiness within the expected window as a surfaced launch failure.
 - Nested `olc-launch-test-vm` launches keep the child hidden by default and rely on the printed reconnect URL when you want to view the child in a browser tab.
 - Nested `olc-launch-test-vm` launches reject parent display overrides and keep browser-tab viewing as the only parent-side VNC access path.
-- SPICE, SDL, and GTK remain explicit development display fallbacks.
+- Nested `olc-launch-test-vm` launches now default to a `10G` disposable overlay, `OLC_VM_FAST_BOOT=1`, `OLC_VM_NETWORK_MODE=none`, and `OLC_SHARE_VM_IMAGES=0` so child boots stay cheap while preserving the browser-viewer reconnect path.
+- Nested fast-boot children inherit fixed store paths for noVNC and the patched browser-viewer QEMU from the guest system instead of resolving them through a launch-time flake build.
+- Nested `olc-launch-test-vm` launches now wait for the guest ready marker by default and reuse a cached patched QEMU path before falling back to a fresh repo `nix build`.
 - Browser-tab wheel capture preserves horizontal and vertical repeated steps and leftover delta before reaching QEMU.
 - Firefox localhost shell behavior opens new tabs to `https://localhost/` and replaces last-tab closure with a localhost tab.
 - In-VM development can use a host-shared repo mounted at `/source` through QEMU `virtiofs`.
@@ -275,10 +278,18 @@ In-VM validation note:
 - If `/source` is mounted from `ol-c-source` with `virtiofs`, Codex should treat edits as host-synced repo edits and can validate browser-surface work directly inside the guest.
 - When a graphical Firefox session is running in the guest, Codex may use available local GUI automation tools such as `xdotool` to actively drive the browser for validation.
 
+Host-driven live analysis and debugging note:
+- The parent ol-c guest can act as the effective host operator for a nested child VM by launching `olc-launch-test-vm`, opening the printed reconnect URL in a browser tab, and keeping that viewer open as the human observation surface.
+- For page-level analysis or live DOM debugging inside the child Firefox session, prefer `olc-vm-bidi` over noVNC/QMP input injection; this uses the shared operator directory plus the child's `olc-vm-ready` BiDi marker to send structured requests into the live browser session.
+- Treat `olc-vm-bidi` as the primary path when the task is “inspect or change what the live localhost page is doing right now”, for example reading the current URL, evaluating JavaScript in `https://localhost/*`, clicking a DOM target, or replacing page content temporarily to prove control.
+- Treat the reconnect URL as the user-facing proof surface and `olc-vm-bidi` results plus journald as the machine-verifiable proof surface; use both when demonstrating that a live child tab changed in response to operator work.
+- Keep `olc-vmctl` as the lower-level fallback for actions BiDi cannot prove, such as raw keyboard or pointer injection, screenshots, or recovery when page-level automation is unavailable.
+
 Shared journal mirror note:
-- The canonical logs remain the guest's local `journald` store; the host-visible mirror lives at `/source/.olc-debug/journal/current.journal`.
-- That file is an aggregate journal across the current VM and any recursively embedded child VMs that share the same `/source`.
-- When working from the shared repo view, prefer standard journal tools against that file, for example `journalctl --file=/source/.olc-debug/journal/current.journal`.
+- The canonical logs remain the guest's local `journald` store; the host-visible mirror lives under `/source/.olc-debug/journal`.
+- Each VM mirrors its current boot into its own native journal file in that directory, so parent and child VMs can share `/source` without fighting over one aggregate journal file.
+- When working from the shared repo view, prefer standard journal tools against that directory, for example `journalctl --directory=/source/.olc-debug/journal`.
+- The embedded-VM `olc-vm-ready` marker now means the active local Firefox session has published its BiDi endpoint, not merely that `https://localhost/` answered once.
 - When investigating one VM, first filter by `_MACHINE_ID`, then narrow to `_BOOT_ID`, and use `OLC_VM_MACHINE_ID`, `OLC_VM_BOOT_ID`, `OLC_VM_PARENT_MACHINE_ID`, and `OLC_VM_DEPTH` to reconstruct nested lineage.
 - If Codex is running inside the specific target VM, prefer direct `journalctl` against the local system journal over the shared mirror.
 
@@ -300,7 +311,7 @@ Implementation status:
 - [x] Added tests for the build and launch contract for both milestones.
 - [x] Verified the full Milestone 2 graphical boot and browser launch on an Ubuntu host with nix and QEMU/KVM installed.
 - [x] Simplified the normal VM launcher so `./launch-vm` always boots the current graphical Milestone 2 guest, with milestone validation handled by build and test scripts.
-- [x] Moved the normal graphical launch path to SPICE with `remote-viewer`, while keeping SDL and GTK as direct-display fallbacks for debugging.
+- [x] Moved the normal graphical launch path away from direct host windows and toward the browser-rendered VM surface.
 - [x] Consolidated the historical milestone Nix modules into one canonical ol-c module at `nix/ol-c.nix`.
 - [x] Proved the current Firefox source-patch flow end to end by building the patched browser, booting the guest with it, and verifying that closing the final tab reopens `https://localhost`.
 - [x] Add a browser terminal proof surface at `https://localhost/terminal` where each visit creates a fresh session.
@@ -323,7 +334,7 @@ Implementation status:
 - [x] Document the validate-inside-VM, then package-with-Nix workflow for browser-surface changes.
 - [x] Prove synced in-VM development against the host ol-c repo mounted at `/source`.
 - [x] Move the repo from unsupported `nixos-24.11` to a currently supported NixOS branch and verify the VM still builds and boots.
-- [x] Make the normal host VM launch use a browser tab as the default screen while keeping SPICE, SDL, and GTK available as explicit fallbacks.
+- [x] Make the normal host VM launch use a browser tab as the VM rendering surface.
 - [x] Prove the first nested in-VM development launch: ol-c can run a child VM from the in-browser terminal using nested KVM, `/vm-images`, and the browser-tab screen flow.
 - [x] Add a basic localhost text editor at `https://localhost/edit` with terminal launch integration and terminal setting reuse.
 - [x] Add a development-loop proof for efficiently launching patched Firefox browser chrome from inside the VM to test patch edits.
@@ -333,7 +344,7 @@ Implementation status:
 - [x] Replace hardcoded `demo` runtime assumptions in localhost terminal and editor paths with active console user resolution.
 - [x] Add a Milestone 5 automated test-prefill path that bypasses manual first-user setup in VM/system tests.
 - [x] Explore and document the host-driven VM operator direction for launching a VM, submitting work from the host, and watching the VM carry it out live through the embedded browser viewer.
-- [x] Add a first QMP-native host control path for launched VMs, including printed QMP socket paths, nested-child runtime metadata, and an `olc-vmctl` wrapper for keyboard, pointer, screenshot, and raw-QMP actions.
+- [x] Add a first QMP-native host control path for launched VMs, including printed QMP socket paths, journal-backed readiness/discovery, and an `olc-vmctl` wrapper for keyboard, pointer, screenshot, and raw-QMP actions.
 
 # Deferred Decisions
 
@@ -357,4 +368,6 @@ These are non-priority tasks we can pick up any time as an option for the next t
 - Ctrl+Shift+C should not open dev tools in vm, we should make that copy
 - remove "connected" and "clipboard ready" chrome
 - make sure password save offer on initial account creation doesn't show
-
+- investigate browser terminal breakage after printing nested-child serial boot output with heavy raw OSC/ANSI control sequences; likely fix is to filter or redirect that boot stream before it hits the browser terminal session
+- investigate Codex CLI exits back to a raw shell prompt during nested-child launch work; likely trigger is the same unfiltered serial boot/control-sequence stream reaching the interactive Codex terminal, so prefer redirecting child serial logs to files and only tailing filtered output on demand
+- investigate Codex CLI exits during long `Working` periods with multiple background terminal sessions open; likely mitigation is to avoid stacked long-lived waits/pollers and prefer short explicit polling commands with no lingering background terminals

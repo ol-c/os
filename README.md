@@ -50,7 +50,7 @@ nix build .#firefox-localhost-source --print-build-logs
 
 The source gate is intentionally slower. It appends the repo patch to pinned nixpkgs `firefox-unwrapped` before Firefox is built. The remote wrapper moves that heavy compile off the local machine and imports the resulting Nix closure; the follow-up local `nix build` should reuse that imported result for the same repo state.
 
-`launch-vm` uses a browser tab as the default VM display. QEMU exposes the VM display through a local-only VNC WebSocket endpoint, and a small repo-owned viewer page uses pinned noVNC assets to render the VM screen in the browser. It also mounts this repo read-write inside the guest at `/source` using QEMU virtiofs, so the in-browser terminal can edit the same source tree that is visible on the host.
+`launch-vm` uses a browser tab as the VM display. QEMU exposes the VM display through a local-only VNC WebSocket endpoint, and a small repo-owned viewer page uses pinned noVNC assets to render the VM screen in the browser. It also mounts this repo read-write inside the guest at `/source` using QEMU virtiofs, so the in-browser terminal can edit the same source tree that is visible on the host.
 
 The browser display path uses the repo-pinned patched QEMU package exposed as `.#qemu-olc`. The patch preserves horizontal wheel events from noVNC/QEMU VNC and carries them through the USB HID tablet path as AC Pan events. The browser frontend keeps QEMU vdagent clipboard support enabled, disables vdagent mouse forwarding, and disables legacy PS/2/vmport input so VNC pointer input reaches the patched USB tablet path. This build is separate from the VM image and can be built explicitly:
 
@@ -58,7 +58,7 @@ The browser display path uses the repo-pinned patched QEMU package exposed as `.
 nix build .#qemu-olc --print-out-paths --no-link
 ```
 
-For debugging with an already-built QEMU binary:
+For debugging with an already-built browser-viewer QEMU binary:
 
 ```sh
 OLC_QEMU_BIN=/path/to/qemu-system-x86_64 ./launch-vm
@@ -85,21 +85,7 @@ The browser display path is local development only for now: the viewer server an
 ./olc-vmctl --qmp /tmp/ol-c-qmp.XXXXXX/qmp.sock raw '{"execute":"query-mice"}'
 ```
 
-SPICE remains available as an explicit fallback, and SDL/GTK remain available as direct QEMU display fallbacks:
-
-```sh
-OLC_QEMU_FRONTEND=spice ./launch-vm
-OLC_QEMU_FRONTEND=sdl ./launch-vm
-OLC_QEMU_FRONTEND=gtk ./launch-vm
-OLC_QEMU_DISPLAY='gtk,gl=off,zoom-to-fit=off' ./launch-vm
-```
-
-The SDL and GTK scaling knobs are also overrideable for direct-display debugging:
-
-```sh
-OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED=0 ./launch-vm
-OLC_QEMU_GDK_SCALE=2 OLC_QEMU_GDK_DPI_SCALE=0.5 ./launch-vm
-```
+For embedded child-VM work, readiness and rough timing now come from the shared journal directory instead: each VM mirrors its own native journal file under `/source/.olc-debug/journal`, the guest emits one `olc-vm-ready` marker after the active Firefox session has published its BiDi endpoint, and the launcher can wait for that marker with a timeout budget.
 
 ## Milestone 4 In-VM Development
 
@@ -167,11 +153,17 @@ The wrapper:
 - uses `/source` as the editable repo when it is the expected `ol-c-source` virtiofs mount
 - uses the first bootable image in `/vm-images` unless `OLC_VM_IMAGE=/path/to/image.qcow2` is set
 - uses `/var/lib/ol-c/vms` for child VM runtime temp files
+- defaults child overlays to `10G` so nested boots do not spend time expanding a large disposable root disk
+- defaults child launches to `OLC_VM_FAST_BOOT=1`, which skips nested-only boot work such as `growpart`, root growfs, journal flush, and random-seed restore
+- defaults child launches to `OLC_VM_NETWORK_MODE=none`, which avoids waiting on guest DHCP when localhost-only validation is enough
+- defaults child launches to `OLC_SHARE_VM_IMAGES=0`, because the child usually does not need to expose `/vm-images` again unless it will launch grandchildren
 - starts the child VM through the same browser-tab display path as host `./launch-vm`
 - leaves the child VM hidden by default instead of auto-opening a new browser tab
 - prints a reconnect URL for the child VM screen
-- rejects nested display overrides such as `OLC_QEMU_FRONTEND=spice|sdl|gtk` or `OLC_QEMU_DISPLAY=...` so the child cannot take over the parent screen
-- records runtime metadata in `/var/lib/ol-c/vms/current/vm.json` so `olc-vmctl` can target the current child VM without a pasted QMP socket path
+- rejects nested display overrides such as `OLC_QEMU_FRONTEND=...` or `OLC_QEMU_DISPLAY=...` so the child cannot take over the parent screen
+- prints the child QMP socket path directly, and `olc-vmctl` can also discover a live child QMP socket from the running QEMU process table when you do not pass one explicitly
+- inherits fixed store paths for noVNC and the patched browser-viewer QEMU from the guest system so repeated child launches do not evaluate the repo flake just to find viewer assets
+- waits for the guest `olc-vm-ready` journal marker by default and treats timeout as a surfaced child-boot failure
 
 If you want to test a specific prebuilt image inside the parent guest:
 
@@ -185,7 +177,13 @@ If you do want the child VM tab to open immediately, override the default:
 OLC_VM_SCREEN_OPEN_BROWSER=1 olc-launch-test-vm
 ```
 
-Once the child VM is running, the parent guest can control it through the current metadata record:
+If a specific child test really does need guest networking or recursive `/vm-images`, override the fast defaults explicitly:
+
+```sh
+OLC_VM_NETWORK_MODE=user OLC_SHARE_VM_IMAGES=1 olc-launch-test-vm
+```
+
+Once the child VM is running, the parent guest can control it through the printed `qmp socket:` path, or let `olc-vmctl` discover the live child automatically:
 
 ```sh
 olc-vmctl key ctrl+l
@@ -204,7 +202,7 @@ This proof prefers image reuse over building a full image inside the parent VM. 
 - `users.nix` owns the setup account, tty1 login behavior, and the shared shell prompt helpers
 - `packages.nix` owns the shared guest package list
 - `localhost-ui.nix` owns the generated localhost TLS material, trusted CA, stable `ol-c-terminal` service, and reloadable `ol-c-ui` service
-- `graphical-session.nix` owns X, matchbox, SPICE guest integration, Firefox profile setup, and browser launch
+- `graphical-session.nix` owns X, matchbox, guest graphical session setup, Firefox profile setup, and browser launch
 
 The localhost HTTPS service source lives in `localhost-ui/server.mjs`. The stable terminal service source lives in `localhost-ui/terminal-server.mjs`. Nix wires both into the guest and provides the runtime paths for TLS material, terminal assets, `ttyd`, and bash.
 
@@ -353,13 +351,6 @@ sudo apt install -y qemu-system-x86 qemu-utils qemu-kvm virtiofsd
 ```
 
 `virtiofsd` provides the host daemon used to mount this repo at `/source` inside the guest and to expose the parent image directory at `/vm-images`. Without it, the launcher will stop before booting the guest.
-
-`virt-viewer` is optional now. Install it only if you want the SPICE fallback:
-
-```sh
-sudo apt install -y virt-viewer
-OLC_QEMU_FRONTEND=spice ./launch-vm
-```
 
 Install Nix using the standard installer for your environment, then confirm the required tools exist:
 

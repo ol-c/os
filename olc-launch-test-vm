@@ -36,6 +36,35 @@ resolve_source_dir() {
   pwd
 }
 
+resolve_cached_qemu_bin() {
+  local cache_dir cache_file qemu_out candidate
+
+  cache_dir="${VM_WORKSPACE}/cache"
+  cache_file="${cache_dir}/qemu-bin"
+
+  if [[ -r "$cache_file" ]]; then
+    candidate="$(head -n 1 "$cache_file")"
+    if [[ -x "$candidate" ]]; then
+      RESOLVED_QEMU_BIN="$candidate"
+      return
+    fi
+  fi
+
+  mkdir -p "$cache_dir"
+  qemu_out="$(nix build .#qemu-olc --print-out-paths --no-link)"
+  for candidate in \
+    "$qemu_out/bin/qemu-system-x86_64" \
+    "$qemu_out/bin/qemu-kvm"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate" > "$cache_file"
+      RESOLVED_QEMU_BIN="$candidate"
+      return
+    fi
+  done
+
+  fail "unable to locate qemu-system-x86_64 in patched QEMU build output: $qemu_out"
+}
+
 resolve_image_path() {
   local image candidate
 
@@ -64,6 +93,7 @@ resolve_image_path() {
 KVM_DEVICE="${OLC_KVM_DEVICE:-/dev/kvm}"
 VM_IMAGES_DIR="${OLC_VM_IMAGES_DIR:-/vm-images}"
 VM_WORKSPACE="${OLC_VM_WORKSPACE:-/var/lib/ol-c/vms}"
+RESOLVED_QEMU_BIN=""
 SOURCE_DIR="$(resolve_source_dir)"
 IMAGE_PATH="$(resolve_image_path)"
 
@@ -92,7 +122,10 @@ export OLC_SOURCE_DIR="$SOURCE_DIR"
 export OLC_VM_IMAGE="$IMAGE_PATH"
 export OLC_QEMU_FRONTEND="browser"
 export OLC_VM_SCREEN_OPEN_BROWSER="${OLC_VM_SCREEN_OPEN_BROWSER:-0}"
-export OLC_VM_RUNTIME_DIR="${OLC_VM_RUNTIME_DIR:-${VM_WORKSPACE}/current}"
+export OLC_VM_DISK_SIZE="${OLC_VM_DISK_SIZE:-10G}"
+export OLC_VM_FAST_BOOT="${OLC_VM_FAST_BOOT:-1}"
+export OLC_VM_NETWORK_MODE="${OLC_VM_NETWORK_MODE:-none}"
+export OLC_SHARE_VM_IMAGES="${OLC_SHARE_VM_IMAGES:-0}"
 export TMPDIR="${TMPDIR:-${VM_WORKSPACE}/tmp}"
 VM_LINEAGE_ENV="${OLC_VM_LINEAGE_ENV:-/run/olc-vm-lineage.env}"
 
@@ -107,10 +140,27 @@ if [[ -z "${OLC_NOVNC_DIR:-}" && -n "${OLC_DEFAULT_NOVNC_DIR:-}" ]]; then
   export OLC_NOVNC_DIR="$OLC_DEFAULT_NOVNC_DIR"
 fi
 
+if [[ -z "${OLC_QEMU_BIN:-}" ]]; then
+  if [[ -n "${OLC_DEFAULT_QEMU_BIN:-}" && -x "${OLC_DEFAULT_QEMU_BIN}" ]]; then
+    export OLC_QEMU_BIN="$OLC_DEFAULT_QEMU_BIN"
+  else
+    resolve_cached_qemu_bin
+    export OLC_QEMU_BIN="$RESOLVED_QEMU_BIN"
+  fi
+fi
+
+export OLC_VM_WAIT_READY="${OLC_VM_WAIT_READY:-1}"
+export OLC_VM_READY_TIMEOUT_SECONDS="${OLC_VM_READY_TIMEOUT_SECONDS:-30}"
+export OLC_VM_READY_WARN_SECONDS="${OLC_VM_READY_WARN_SECONDS:-15}"
+
 echo "source: $OLC_SOURCE_DIR"
 echo "image: $OLC_VM_IMAGE"
 echo "workspace: $VM_WORKSPACE"
 echo "screen: browser tab"
+echo "disk size: $OLC_VM_DISK_SIZE"
+echo "fast boot: $OLC_VM_FAST_BOOT"
+echo "network mode: $OLC_VM_NETWORK_MODE"
+echo "share vm images: $OLC_SHARE_VM_IMAGES"
 
 cd "$SOURCE_DIR"
 exec "$SOURCE_DIR/launch-vm" "$@"

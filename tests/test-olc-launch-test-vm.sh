@@ -24,10 +24,21 @@ setup_case() {
   cleanup_case
   mkdir -p "$TEST_TMP_ROOT"
   CASE_TMP="$(mktemp -d "${TEST_TMP_ROOT}/olc-launch-test-vm.XXXXXX")"
-  mkdir -p "${CASE_TMP}/fakebin" "${CASE_TMP}/source" "${CASE_TMP}/images" "${CASE_TMP}/workspace" "${CASE_TMP}/novnc"
+  mkdir -p "${CASE_TMP}/fakebin" "${CASE_TMP}/source" "${CASE_TMP}/images" "${CASE_TMP}/workspace" "${CASE_TMP}/novnc" "${CASE_TMP}/qemu-store/bin"
   : > "${CASE_TMP}/images/guest.qcow2"
   : > "${CASE_TMP}/kvm"
   chmod 0666 "${CASE_TMP}/kvm"
+
+  cat >"${CASE_TMP}/fakebin/nix" <<EOF
+#!${TEST_FAKE_BASH}
+printf '%s\n' "\$*" > "${CASE_TMP}/nix.args"
+printf '%s\n' "${CASE_TMP}/qemu-store"
+EOF
+  cat >"${CASE_TMP}/qemu-store/bin/qemu-system-x86_64" <<EOF
+#!${TEST_FAKE_BASH}
+exit 0
+EOF
+  chmod +x "${CASE_TMP}/fakebin/nix" "${CASE_TMP}/qemu-store/bin/qemu-system-x86_64"
 
   cat >"${CASE_TMP}/source/launch-vm" <<EOF
 #!${TEST_FAKE_BASH}
@@ -36,8 +47,16 @@ printf '%s\n' "\$*" > "${CASE_TMP}/launch.args"
 printf '%s\n' "\${OLC_SOURCE_DIR:-}" > "${CASE_TMP}/launch.source-dir"
 printf '%s\n' "\${OLC_VM_IMAGE:-}" > "${CASE_TMP}/launch.vm-image"
 printf '%s\n' "\${OLC_QEMU_FRONTEND:-}" > "${CASE_TMP}/launch.frontend"
+printf '%s\n' "\${OLC_QEMU_BIN:-}" > "${CASE_TMP}/launch.qemu-bin"
 printf '%s\n' "\${OLC_NOVNC_DIR:-}" > "${CASE_TMP}/launch.novnc-dir"
 printf '%s\n' "\${OLC_VM_SCREEN_OPEN_BROWSER:-}" > "${CASE_TMP}/launch.open-browser"
+printf '%s\n' "\${OLC_VM_DISK_SIZE:-}" > "${CASE_TMP}/launch.disk-size"
+printf '%s\n' "\${OLC_VM_FAST_BOOT:-}" > "${CASE_TMP}/launch.fast-boot"
+printf '%s\n' "\${OLC_VM_NETWORK_MODE:-}" > "${CASE_TMP}/launch.network-mode"
+printf '%s\n' "\${OLC_VM_WAIT_READY:-}" > "${CASE_TMP}/launch.wait-ready"
+printf '%s\n' "\${OLC_VM_READY_TIMEOUT_SECONDS:-}" > "${CASE_TMP}/launch.ready-timeout"
+printf '%s\n' "\${OLC_VM_READY_WARN_SECONDS:-}" > "${CASE_TMP}/launch.ready-warn"
+printf '%s\n' "\${OLC_SHARE_VM_IMAGES:-}" > "${CASE_TMP}/launch.share-vm-images"
 printf '%s\n' "\${TMPDIR:-}" > "${CASE_TMP}/launch.tmpdir"
 printf '%s\n' "\${OLC_VM_PARENT_MACHINE_ID:-}" > "${CASE_TMP}/launch.parent-machine-id"
 printf '%s\n' "\${OLC_VM_PARENT_DEPTH:-}" > "${CASE_TMP}/launch.parent-depth"
@@ -76,6 +95,7 @@ test_launches_with_default_image_and_workspace() {
       OLC_VM_WORKSPACE="${CASE_TMP}/workspace" \
       OLC_KVM_DEVICE="${CASE_TMP}/kvm" \
       OLC_DEFAULT_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_DEFAULT_QEMU_BIN="${CASE_TMP}/qemu-store/bin/qemu-system-x86_64" \
       "${OLC_LAUNCH_TEST_VM}" --cpus 1
   )"
 
@@ -88,10 +108,57 @@ test_launches_with_default_image_and_workspace() {
   assert_eq "${CASE_TMP}/source" "$(cat "${CASE_TMP}/launch.source-dir")"
   assert_eq "${CASE_TMP}/images/guest.qcow2" "$(cat "${CASE_TMP}/launch.vm-image")"
   assert_eq "browser" "$(cat "${CASE_TMP}/launch.frontend")"
+  assert_eq "${CASE_TMP}/qemu-store/bin/qemu-system-x86_64" "$(cat "${CASE_TMP}/launch.qemu-bin")"
   assert_eq "${CASE_TMP}/novnc" "$(cat "${CASE_TMP}/launch.novnc-dir")"
   assert_eq "0" "$(cat "${CASE_TMP}/launch.open-browser")"
+  assert_eq "10G" "$(cat "${CASE_TMP}/launch.disk-size")"
+  assert_eq "1" "$(cat "${CASE_TMP}/launch.fast-boot")"
+  assert_eq "none" "$(cat "${CASE_TMP}/launch.network-mode")"
+  assert_eq "1" "$(cat "${CASE_TMP}/launch.wait-ready")"
+  assert_eq "30" "$(cat "${CASE_TMP}/launch.ready-timeout")"
+  assert_eq "15" "$(cat "${CASE_TMP}/launch.ready-warn")"
+  assert_eq "0" "$(cat "${CASE_TMP}/launch.share-vm-images")"
   assert_eq "${CASE_TMP}/workspace/tmp" "$(cat "${CASE_TMP}/launch.tmpdir")"
   [[ -d "${CASE_TMP}/workspace/tmp" ]] || fail "expected wrapper to create workspace tmp directory"
+  cleanup_case
+}
+
+test_uses_cached_qemu_bin_without_nix_build() {
+  local output
+  setup_case
+  mkdir -p "${CASE_TMP}/workspace/cache"
+  printf '%s\n' "${CASE_TMP}/qemu-store/bin/qemu-system-x86_64" > "${CASE_TMP}/workspace/cache/qemu-bin"
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      OLC_SOURCE_DIR="${CASE_TMP}/source" \
+      OLC_VM_IMAGES_DIR="${CASE_TMP}/images" \
+      OLC_VM_WORKSPACE="${CASE_TMP}/workspace" \
+      OLC_KVM_DEVICE="${CASE_TMP}/kvm" \
+      "${OLC_LAUNCH_TEST_VM}"
+  )"
+
+  assert_eq "${CASE_TMP}/qemu-store/bin/qemu-system-x86_64" "$(cat "${CASE_TMP}/launch.qemu-bin")"
+  [[ ! -f "${CASE_TMP}/nix.args" ]] || fail "expected cached qemu resolution to avoid nix build"
+  cleanup_case
+}
+
+test_builds_and_caches_qemu_bin_when_needed() {
+  local output
+  setup_case
+
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      OLC_SOURCE_DIR="${CASE_TMP}/source" \
+      OLC_VM_IMAGES_DIR="${CASE_TMP}/images" \
+      OLC_VM_WORKSPACE="${CASE_TMP}/workspace" \
+      OLC_KVM_DEVICE="${CASE_TMP}/kvm" \
+      "${OLC_LAUNCH_TEST_VM}"
+  )"
+
+  assert_eq "${CASE_TMP}/qemu-store/bin/qemu-system-x86_64" "$(cat "${CASE_TMP}/launch.qemu-bin")"
+  assert_eq "build .#qemu-olc --print-out-paths --no-link" "$(cat "${CASE_TMP}/nix.args")"
+  assert_eq "${CASE_TMP}/qemu-store/bin/qemu-system-x86_64" "$(cat "${CASE_TMP}/workspace/cache/qemu-bin")"
   cleanup_case
 }
 
@@ -215,6 +282,8 @@ test_rejects_direct_display_override() {
 }
 
 test_launches_with_default_image_and_workspace
+test_uses_cached_qemu_bin_without_nix_build
+test_builds_and_caches_qemu_bin_when_needed
 test_requires_nested_kvm_access
 test_rejects_missing_explicit_image
 test_passes_vm_lineage_to_child_launch

@@ -343,6 +343,7 @@ let
   '';
   olcLaunchTestVm = pkgs.writeShellScriptBin "olc-launch-test-vm" ''
     export OLC_DEFAULT_NOVNC_DIR="''${OLC_DEFAULT_NOVNC_DIR:-${pkgs.novnc}/share/webapps/novnc}"
+    export OLC_DEFAULT_QEMU_BIN="''${OLC_DEFAULT_QEMU_BIN:-${pkgs.qemu_kvm}/bin/qemu-system-x86_64}"
     exec ${pkgs.bash}/bin/bash ${../../olc-launch-test-vm} "$@"
   '';
   olcVmctl = pkgs.writeShellScriptBin "olc-vmctl" ''
@@ -353,11 +354,38 @@ let
 
     exec ${pkgs.nodejs}/bin/node ${../../tools}/olc-vmctl.mjs "$@"
   '';
+  olcFirefoxBidiUrl = pkgs.writeShellScriptBin "olc-firefox-bidi-url" ''
+    source_root="''${OLC_SOURCE_ROOT:-/source}"
+    if [ -x "$source_root/tools/olc-firefox-bidi-url.sh" ]; then
+      exec ${pkgs.bash}/bin/bash "$source_root/tools/olc-firefox-bidi-url.sh" "$@"
+    fi
+
+    exec ${pkgs.bash}/bin/bash ${../../tools}/olc-firefox-bidi-url.sh "$@"
+  '';
+  olcFirefoxBidi = pkgs.writeShellScriptBin "olc-firefox-bidi" ''
+    source_root="''${OLC_SOURCE_ROOT:-/source}"
+    if [ -x "$source_root/tools/olc-firefox-bidi.mjs" ]; then
+      exec ${pkgs.nodejs}/bin/node "$source_root/tools/olc-firefox-bidi.mjs" "$@"
+    fi
+
+    exec ${pkgs.nodejs}/bin/node ${../../tools}/olc-firefox-bidi.mjs "$@"
+  '';
+  olcVmBidi = pkgs.writeShellScriptBin "olc-vm-bidi" ''
+    source_root="''${OLC_SOURCE_ROOT:-/source}"
+    if [ -x "$source_root/tools/olc-vm-bidi.mjs" ]; then
+      exec ${pkgs.nodejs}/bin/node "$source_root/tools/olc-vm-bidi.mjs" "$@"
+    fi
+
+    exec ${pkgs.nodejs}/bin/node ${../../tools}/olc-vm-bidi.mjs "$@"
+  '';
 in {
   environment.systemPackages = [
     patchedFirefoxCommand
     codexCommand
+    olcFirefoxBidi
+    olcFirefoxBidiUrl
     olcLaunchTestVm
+    olcVmBidi
     olcVmctl
     pkgs.sudo
   ];

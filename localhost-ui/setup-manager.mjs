@@ -139,6 +139,7 @@ export async function createFirstUser(body, options = {}) {
   const preferredUid = options.preferredUid ?? process.env.OLC_FIRST_USER_UID ?? '1000';
   const memberOf = options.memberOf ?? process.env.OLC_FIRST_USER_GROUPS ?? 'olc-admin,wheel,kvm';
   const storage = options.storage ?? process.env.OLC_FIRST_USER_STORAGE ?? 'luks';
+  const diskSize = options.diskSize ?? process.env.OLC_FIRST_USER_DISK_SIZE ?? '8G';
 
   const provision = (async () => {
     const tempDir = await mkdtempFn(join(tempRoot, 'olc-first-user-'));
@@ -156,6 +157,7 @@ export async function createFirstUser(body, options = {}) {
         'create',
         username,
         `--storage=${storage}`,
+        `--disk-size=${diskSize}`,
         `--uid=${preferredUid}`,
         `--home-dir=${homeDir}`,
         `--shell=${shellBin}`,

@@ -84,6 +84,7 @@ test('first-user creation provisions through script-wrapped homectl create and v
   assert.equal(seenCalls[0].args[0], '-qefc');
   assert.match(seenCalls[0].args[1], /'\/bin\/homectl' 'create' 'alice'/);
   assert.match(seenCalls[0].args[1], /'--storage=luks'/);
+  assert.match(seenCalls[0].args[1], /'--disk-size=8G'/);
   assert.match(seenCalls[0].args[1], /'--uid=1000'/);
   assert.match(seenCalls[0].args[1], /'--home-dir=\/home\/alice'/);
   assert.match(seenCalls[0].args[1], /'--shell=\/bin\/bash'/);

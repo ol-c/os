@@ -3,6 +3,37 @@
 let
   localhostTls = config.olc.localhost.tlsPackage;
   firefoxBin = "${pkgs.firefox-unwrapped}/lib/firefox/firefox";
+  bidiRecorder = pkgs.writeShellScript "olc-firefox-bidi-recorder" ''
+    set -euo pipefail
+
+    bidi_env_path="$1"
+    bidi_log_path="$2"
+    launcher_pid="$3"
+
+    mkdir -p "$(dirname "$bidi_env_path")"
+    : > "$bidi_env_path"
+
+    for _ in $(seq 1 600); do
+      bidi_base_url="$(${pkgs.gnused}/bin/sed -n 's/^WebDriver BiDi listening on \(ws:\/\/127\.0\.0\.1:[0-9][0-9]*\)$/\1/p' "$bidi_log_path" | tail -n 1)"
+      if [ -n "$bidi_base_url" ]; then
+        {
+          printf 'OLC_FIREFOX_BIDI_ENABLED=1\n'
+          printf 'OLC_FIREFOX_BIDI_PORT=0\n'
+          printf 'OLC_FIREFOX_BIDI_BASE_URL=%s\n' "$bidi_base_url"
+          printf 'OLC_FIREFOX_BIDI_WS_URL=%s/session\n' "$bidi_base_url"
+        } > "$bidi_env_path"
+        exit 0
+      fi
+
+      if ! kill -0 "$launcher_pid" 2>/dev/null; then
+        exit 0
+      fi
+
+      sleep 0.1
+    done
+
+    exit 0
+  '';
   sessionPath = lib.makeBinPath [
     pkgs.coreutils
     pkgs.curl
@@ -21,6 +52,13 @@ let
   '';
   setupSessionScript = pkgs.writeShellScript "olc-setup-xsession" ''
     ${userXinitRc "https://localhost/setup"}
+  '';
+  fastBootCheck = ''
+    olc_fast_boot=0
+    if [ -r /sys/class/dmi/id/product_serial ] \
+      && ${pkgs.coreutils}/bin/tr -d '\n' < /sys/class/dmi/id/product_serial | ${pkgs.gnugrep}/bin/grep -Fq 'olc-fast-boot=1'; then
+      olc_fast_boot=1
+    fi
   '';
   waitForDisplayZeroRelease = ''
     display_zero_busy() {
@@ -62,6 +100,24 @@ let
     done
     log_display_zero_state after-wait
   '';
+  startxWithRetry = sessionScript: ''
+    startx_status=1
+    for attempt in $(seq 1 3); do
+      ${waitForDisplayZeroRelease}
+      if ${pkgs.xorg.xinit}/bin/startx ${sessionScript}; then
+        exit 0
+      fi
+      startx_status=$?
+      printf 'startx attempt %s failed with status=%s\n' "$attempt" "$startx_status"
+      if ! ${pkgs.procps}/bin/pgrep -x Xorg >/dev/null 2>&1 \
+        && ! ${pkgs.procps}/bin/pgrep -x X >/dev/null 2>&1 \
+        && ! ${pkgs.procps}/bin/pgrep -x Xorg.wrap >/dev/null 2>&1; then
+        rm -f /tmp/.X0-lock /tmp/.tX0-lock /tmp/.X11-unix/X0
+      fi
+      sleep 0.2
+    done
+    exit "$startx_status"
+  '';
   greetdUserSessionCommand = pkgs.writeShellScript "olc-greetd-user-session" ''
     export PATH='${sessionPath}:$PATH'
     exec > >(${pkgs.systemd}/bin/systemd-cat --identifier=olc-greetd-session) 2>&1
@@ -71,8 +127,7 @@ let
       "${pkgs.xorg.xinit}/bin/startx ${userSessionScript}"
     ${pkgs.getent}/bin/getent passwd "$(id -un)" || true
     ${pkgs.systemd}/bin/loginctl show-user "$(id -un)" || true
-    ${waitForDisplayZeroRelease}
-    exec ${pkgs.xorg.xinit}/bin/startx ${userSessionScript}
+    ${startxWithRetry userSessionScript}
   '';
   greetdSetupSessionCommand = pkgs.writeShellScript "olc-greetd-setup-session" ''
     export PATH='${sessionPath}:$PATH'
@@ -83,8 +138,7 @@ let
       "${pkgs.xorg.xinit}/bin/startx ${setupSessionScript}"
     ${pkgs.getent}/bin/getent passwd "$(id -un)" || true
     ${pkgs.systemd}/bin/loginctl show-user "$(id -un)" || true
-    ${waitForDisplayZeroRelease}
-    exec ${pkgs.xorg.xinit}/bin/startx ${setupSessionScript}
+    ${startxWithRetry setupSessionScript}
   '';
   userProfileScript = ''
     mkdir -p "$HOME/.mozilla/firefox/ol-c.default"
@@ -125,22 +179,33 @@ let
     set -x
     printf 'uid=%s user=%s home=%s pwd=%s start_url=%s\n' \
       "$(id -u)" "$(id -un)" "$HOME" "$PWD" "${startUrl}"
+    ${fastBootCheck}
+    printf 'olc_fast_boot=%s\n' "$olc_fast_boot"
     xsetroot -solid "#0f172a"
     ${pkgs.spice-vdagent}/bin/spice-vdagent &
     matchbox-window-manager -use_titlebar no -use_cursor yes &
     ${userProfileScript}
-    rm -rf "$HOME/.cache/mozilla/firefox/ol-c.default/startupCache"
+    firefox_runtime_dir="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ol-c-firefox"
+    firefox_bidi_env="''${firefox_runtime_dir}/bidi.env"
+    firefox_bidi_log="''${firefox_runtime_dir}/firefox.log"
+    mkdir -p "$firefox_runtime_dir"
+    rm -f "$firefox_bidi_env" "$firefox_bidi_log"
+    if [ "$olc_fast_boot" != "1" ]; then
+      rm -rf "$HOME/.cache/mozilla/firefox/ol-c.default/startupCache"
+    fi
     for _ in $(seq 1 40); do
       if curl --silent --fail --cacert ${localhostTls}/ca.crt https://localhost/ >/dev/null; then
         break
       fi
-      sleep 0.25
+      sleep 0.1
     done
     {
       printf 'expected_unwrapped=%s\n' '${firefoxBin}'
       printf 'firefox_launcher=%s\n' '${firefoxBin}'
-      printf 'moz_purge_caches=%s\n' '1'
+      printf 'moz_purge_caches=%s\n' "$([ "$olc_fast_boot" = "1" ] && printf 0 || printf 1)"
       printf 'profile=%s\n' "$HOME/.mozilla/firefox/ol-c.default"
+      printf 'bidi_env=%s\n' "$firefox_bidi_env"
+      printf 'bidi_log=%s\n' "$firefox_bidi_log"
     } > "$HOME/ol-c-firefox-launch.txt"
     cat "$HOME/ol-c-firefox-launch.txt"
     (
@@ -168,12 +233,28 @@ let
           xdotool key --window "$window_id" alt+F10
           break
         fi
-        sleep 0.25
+        sleep 0.1
       done
     ) &
-    env MOZ_PURGE_CACHES=1 ${firefoxBin} --no-remote --profile "$HOME/.mozilla/firefox/ol-c.default" --new-window ${startUrl} &
+    if [ "$olc_fast_boot" = "1" ]; then
+      ${firefoxBin} \
+        --no-remote \
+        --profile "$HOME/.mozilla/firefox/ol-c.default" \
+        --remote-debugging-port 0 \
+        --remote-allow-hosts localhost,127.0.0.1 \
+        --new-window ${startUrl} >>"$firefox_bidi_log" 2>&1 &
+    else
+      env MOZ_PURGE_CACHES=1 \
+        ${firefoxBin} \
+        --no-remote \
+        --profile "$HOME/.mozilla/firefox/ol-c.default" \
+        --remote-debugging-port 0 \
+        --remote-allow-hosts localhost,127.0.0.1 \
+        --new-window ${startUrl} >>"$firefox_bidi_log" 2>&1 &
+    fi
     launcher_pid="$!"
     printf 'launcher_pid=%s\n' "$launcher_pid" >> "$HOME/ol-c-firefox-launch.txt"
+    ${bidiRecorder} "$firefox_bidi_env" "$firefox_bidi_log" "$launcher_pid" &
     firefox_pid=""
     for _ in $(seq 1 80); do
       firefox_pid="$(${pkgs.procps}/bin/pgrep -n -u "$(id -u)" firefox 2>/dev/null || true)"
@@ -184,7 +265,7 @@ let
       if ! kill -0 "$launcher_pid" 2>/dev/null; then
         break
       fi
-      sleep 0.25
+      sleep 0.1
     done
     if [ -z "$firefox_pid" ]; then
       printf 'session_firefox_pid_not_found=1\n' >> "$HOME/ol-c-firefox-launch.txt"

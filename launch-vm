@@ -13,26 +13,28 @@ Options:
 Environment:
   OLC_VM_IMAGE      Existing VM image to boot. Skips build-vm when set.
   OLC_VM_DISK_SIZE  Disposable overlay disk virtual size. Default: 64G.
+  OLC_VM_FAST_BOOT  Tag the guest for nested fast-boot service trimming.
+                    Default: 0.
+  OLC_VM_NETWORK_MODE
+                    Guest network mode: user or none. Default: user.
+  OLC_VM_WAIT_READY Wait for a guest journald ready marker and fail on timeout.
+                    Default: 0.
+  OLC_VM_READY_TIMEOUT_SECONDS
+                    Ready-marker failure timeout. Default: 30.
+  OLC_VM_READY_WARN_SECONDS
+                    Warn when the ready marker is slower than this. Default: 15.
+  OLC_VM_READY_JOURNAL
+                    Shared journal path for ready-marker discovery. Default:
+                    <source-dir>/.olc-debug/journal.
   OLC_SHARE_VM_IMAGES
                           Mount the boot image directory at /vm-images. Default: 1.
-  OLC_QEMU_FRONTEND
-                          Graphical frontend: browser, spice, sdl, or gtk. Default: browser.
-  OLC_QEMU_DISPLAY  Direct QEMU display backend for debugging. Overrides frontend.
   OLC_QEMU_BIN      QEMU executable path. Default: built from .#qemu-olc for
-                    browser frontend, otherwise first qemu-system-x86_64 in PATH.
+                    the browser viewer path.
   OLC_QEMU_PACKAGE  Nix package for browser frontend QEMU. Default: .#qemu-olc.
   OLC_NOVNC_DIR           noVNC asset directory. Default: built from .#novnc.
   OLC_VM_SCREEN_OPEN_BROWSER
                           Open the browser viewer with xdg-open. Default: 1.
   OLC_VM_SCREEN_PORT      Local browser viewer HTTP port. Default: automatic.
-  OLC_VM_RUNTIME_DIR      Runtime metadata directory for the launched VM.
-                          Default: unset.
-  OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED
-                          SDL HiDPI mode for QEMU's own window. Default: 1.
-  OLC_QEMU_GDK_SCALE
-                          GTK scale if using a GTK display backend. Default: 1.
-  OLC_QEMU_GDK_DPI_SCALE
-                          GTK text DPI scale if using a GTK display backend. Default: 1.
   OLC_SOURCE_DIR          Host source tree to mount at /source. Default: this repo.
   OLC_VIRTIOFSD           virtiofsd executable path. Default: first virtiofsd in PATH.
   OLC_VIRTIOFSD_SANDBOX   virtiofsd sandbox mode. Default: none.
@@ -78,6 +80,19 @@ require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     fail "required command not found: $1"
   fi
+}
+
+epoch_ms() {
+  local seconds micros
+  IFS=. read -r seconds micros <<<"${EPOCHREALTIME:-0.000000}"
+  micros="${micros:-000000}"
+  printf '%s%03d\n' "$seconds" "$((10#${micros:0:3}))"
+}
+
+elapsed_ms() {
+  local started_ms="$1"
+  local ended_ms="${2:-$(epoch_ms)}"
+  printf '%s\n' "$((ended_ms - started_ms))"
 }
 
 check_source_dir_writable() {
@@ -126,7 +141,7 @@ resolve_novnc_dir() {
   local out_path candidate
 
   if [[ -n "${OLC_NOVNC_DIR:-}" ]]; then
-    printf '%s\n' "$OLC_NOVNC_DIR"
+    RESOLVED_NOVNC_DIR="$OLC_NOVNC_DIR"
     return
   fi
 
@@ -138,7 +153,7 @@ resolve_novnc_dir() {
     "$out_path/share/noVNC" \
     "$out_path"; do
     if [[ -f "$candidate/core/rfb.js" ]]; then
-      printf '%s\n' "$candidate"
+      RESOLVED_NOVNC_DIR="$candidate"
       return
     fi
   done
@@ -151,7 +166,7 @@ resolve_qemu_binary() {
 
   if [[ -n "${OLC_QEMU_BIN:-}" ]]; then
     [[ -x "$OLC_QEMU_BIN" ]] || fail "OLC_QEMU_BIN is not executable: $OLC_QEMU_BIN"
-    printf '%s\n' "$OLC_QEMU_BIN"
+    RESOLVED_QEMU_BIN="$OLC_QEMU_BIN"
     return
   fi
 
@@ -162,7 +177,7 @@ resolve_qemu_binary() {
       "$out_path/bin/qemu-system-x86_64" \
       "$out_path/bin/qemu-kvm"; do
       if [[ -x "$candidate" ]]; then
-        printf '%s\n' "$candidate"
+        RESOLVED_QEMU_BIN="$candidate"
         return
       fi
     done
@@ -172,7 +187,7 @@ resolve_qemu_binary() {
 
   candidate="$(resolve_command qemu-system-x86_64)"
   [[ -n "$candidate" ]] || fail "required command not found: qemu-system-x86_64"
-  printf '%s\n' "$candidate"
+  RESOLVED_QEMU_BIN="$candidate"
 }
 
 virtiofsd_supports_translate_ids() {
@@ -209,17 +224,110 @@ require_value() {
   fi
 }
 
+wait_for_vm_ready() {
+  local journalctl_bin parent_machine_id parent_depth expected_depth
+  local journal_args=()
+  local ready_started_s ready_started_ms ready_deadline_ms
+  local ready_output tail_output elapsed_ms_value ready_realtime_us ready_realtime_ms
+  local ready_machine_id ready_boot_id
+
+  [[ "$VM_WAIT_READY" == "1" ]] || return 0
+
+  journalctl_bin="$(resolve_command journalctl)"
+  [[ -n "$journalctl_bin" ]] || fail "required command not found: journalctl"
+
+  parent_machine_id="${OLC_VM_PARENT_MACHINE_ID:-}"
+  parent_depth="${OLC_VM_PARENT_DEPTH:-}"
+  expected_depth=""
+  if [[ -n "$parent_depth" ]]; then
+    expected_depth="$((parent_depth + 1))"
+  fi
+
+  ready_started_s="$(date +%s)"
+  ready_started_ms="$(epoch_ms)"
+  ready_deadline_ms="$((ready_started_ms + (VM_READY_TIMEOUT_SECONDS * 1000)))"
+  echo "waiting for ready marker: timeout=${VM_READY_TIMEOUT_SECONDS}s warn=${VM_READY_WARN_SECONDS}s journal=${VM_READY_JOURNAL}"
+
+  if [[ -d "$VM_READY_JOURNAL" ]]; then
+    journal_args=(--directory="$VM_READY_JOURNAL")
+  else
+    journal_args=(--file="$VM_READY_JOURNAL")
+  fi
+
+  while (( "$(epoch_ms)" < ready_deadline_ms )); do
+    if [[ ! -e "$VM_READY_JOURNAL" ]]; then
+      sleep 0.1
+      continue
+    fi
+
+    ready_output="$(
+      "$journalctl_bin" \
+        "${journal_args[@]}" \
+        --since="@$ready_started_s" \
+        --no-pager \
+        --output=export \
+        SYSLOG_IDENTIFIER=olc-vm-ready \
+        OLC_VM_READY=embedded-control-ready \
+        ${parent_machine_id:+"OLC_VM_PARENT_MACHINE_ID=$parent_machine_id"} \
+        ${expected_depth:+"OLC_VM_DEPTH=$expected_depth"} \
+        2>/dev/null || true
+    )"
+
+    if [[ -n "$ready_output" ]]; then
+      ready_machine_id="$(printf '%s\n' "$ready_output" | sed -n 's/^OLC_VM_MACHINE_ID=//p' | head -n 1)"
+      ready_boot_id="$(printf '%s\n' "$ready_output" | sed -n 's/^OLC_VM_BOOT_ID=//p' | head -n 1)"
+      if [[ -n "$ready_machine_id" ]]; then
+        VM_MACHINE_ID="$ready_machine_id"
+      fi
+      if [[ -n "$ready_boot_id" ]]; then
+        VM_BOOT_ID="$ready_boot_id"
+      fi
+      ready_realtime_us="$(printf '%s\n' "$ready_output" | sed -n 's/^__REALTIME_TIMESTAMP=//p' | head -n 1)"
+      if [[ -n "$ready_realtime_us" ]]; then
+        ready_realtime_ms="$((ready_realtime_us / 1000))"
+        elapsed_ms_value="$((ready_realtime_ms - LAUNCH_STARTED_MS))"
+      else
+        elapsed_ms_value="$(elapsed_ms "$LAUNCH_STARTED_MS")"
+      fi
+      if (( elapsed_ms_value > VM_READY_WARN_SECONDS * 1000 )); then
+        echo "warning: ready marker arrived after ${elapsed_ms_value}ms (warn budget ${VM_READY_WARN_SECONDS}s)" >&2
+      else
+        echo "ready marker arrived after ${elapsed_ms_value}ms"
+      fi
+      return
+    fi
+
+    sleep 0.1
+  done
+
+  echo "error: timed out waiting ${VM_READY_TIMEOUT_SECONDS}s for embedded VM ready marker" >&2
+  tail_output="$(
+    "$journalctl_bin" \
+      "${journal_args[@]}" \
+      --since="@$ready_started_s" \
+      --no-pager \
+      --output=short-precise \
+      ${parent_machine_id:+"OLC_VM_PARENT_MACHINE_ID=$parent_machine_id"} \
+      ${expected_depth:+"OLC_VM_DEPTH=$expected_depth"} \
+      2>/dev/null \
+      | tail -n 40 || true
+  )"
+  if [[ -n "$tail_output" ]]; then
+    printf '%s\n' "$tail_output" >&2
+  fi
+  exit 1
+}
+
 CPUS=2
 MEMORY_MB=4096
-QEMU_FRONTEND="${OLC_QEMU_FRONTEND:-browser}"
-QEMU_DISPLAY="${OLC_QEMU_DISPLAY:-}"
-QEMU_SDL_VIDEO_HIGHDPI_DISABLED="${OLC_QEMU_SDL_VIDEO_HIGHDPI_DISABLED:-1}"
-QEMU_GDK_SCALE="${OLC_QEMU_GDK_SCALE:-1}"
-QEMU_GDK_DPI_SCALE="${OLC_QEMU_GDK_DPI_SCALE:-1}"
+LAUNCH_STARTED_MS="$(epoch_ms)"
 VM_SCREEN_OPEN_BROWSER="${OLC_VM_SCREEN_OPEN_BROWSER:-1}"
 VM_SCREEN_PORT="${OLC_VM_SCREEN_PORT:-0}"
-VM_RUNTIME_DIR="${OLC_VM_RUNTIME_DIR:-}"
 SOURCE_DIR="${OLC_SOURCE_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
+VM_WAIT_READY="${OLC_VM_WAIT_READY:-0}"
+VM_READY_TIMEOUT_SECONDS="${OLC_VM_READY_TIMEOUT_SECONDS:-30}"
+VM_READY_WARN_SECONDS="${OLC_VM_READY_WARN_SECONDS:-15}"
+VM_READY_JOURNAL="${OLC_VM_READY_JOURNAL:-${SOURCE_DIR}/.olc-debug/journal}"
 VIRTIOFSD_SANDBOX="${OLC_VIRTIOFSD_SANDBOX:-none}"
 VIRTIOFSD_TRANSLATE_IDS="${OLC_VIRTIOFSD_TRANSLATE_IDS:-1}"
 VIRTIOFSD_HOST_UID="${OLC_VIRTIOFSD_HOST_UID:-$(id -u)}"
@@ -227,23 +335,26 @@ VIRTIOFSD_HOST_GID="${OLC_VIRTIOFSD_HOST_GID:-$(id -g)}"
 KVM_DEVICE="${OLC_KVM_DEVICE:-/dev/kvm}"
 VM_PARENT_MACHINE_ID="${OLC_VM_PARENT_MACHINE_ID:-}"
 VM_PARENT_DEPTH="${OLC_VM_PARENT_DEPTH:-}"
-SPICE_SOCKET_DIR=""
 VIRTIOFS_SOCKET_DIR=""
 VM_IMAGES_SOCKET_DIR=""
 VM_SCREEN_LOG=""
 VIRTIOFSD_PID=""
 VM_IMAGES_VIRTIOFSD_PID=""
 QEMU_PID=""
-VIEWER_PID=""
 VM_SCREEN_PID=""
 SHARE_VM_IMAGES="${OLC_SHARE_VM_IMAGES:-1}"
 VM_DISK_SIZE="${OLC_VM_DISK_SIZE:-64G}"
+VM_FAST_BOOT="${OLC_VM_FAST_BOOT:-0}"
+VM_NETWORK_MODE="${OLC_VM_NETWORK_MODE:-user}"
 VM_DISK_OVERLAY=""
 QMP_SOCKET_DIR=""
 QMP_SOCKET=""
-RUNTIME_METADATA_PATH=""
 VM_SCREEN_URL=""
 VM_SCREEN_RECONNECT_URL=""
+RESOLVED_QEMU_BIN=""
+VM_MACHINE_ID=""
+VM_BOOT_ID=""
+RESOLVED_NOVNC_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -285,31 +396,30 @@ if [[ "$VIRTIOFSD_TRANSLATE_IDS" == "1" ]]; then
   fi
 fi
 
-case "$QEMU_FRONTEND" in
-  browser|spice|sdl|gtk)
+case "$VM_NETWORK_MODE" in
+  user|none)
     ;;
   *)
-    fail "unsupported QEMU frontend: $QEMU_FRONTEND"
+    fail "unsupported VM network mode: $VM_NETWORK_MODE"
     ;;
 esac
 
-if [[ -n "$QEMU_DISPLAY" ]]; then
-  QEMU_FRONTEND="direct"
-elif [[ "$QEMU_FRONTEND" == "sdl" ]]; then
-  QEMU_DISPLAY="sdl,gl=off"
-elif [[ "$QEMU_FRONTEND" == "gtk" ]]; then
-  QEMU_DISPLAY="gtk,gl=off,zoom-to-fit=off"
+if [[ -n "${OLC_QEMU_DISPLAY:-}" ]]; then
+  fail "OLC_QEMU_DISPLAY is not supported. launch-vm renders VMs in the browser only."
 fi
 
-if [[ "$QEMU_FRONTEND" == "spice" ]]; then
-  require_command remote-viewer
-elif [[ "$QEMU_FRONTEND" == "browser" ]]; then
-  require_command node
-  NOVNC_DIR="$(resolve_novnc_dir)"
-  [[ -f "$NOVNC_DIR/core/rfb.js" ]] || fail "noVNC asset directory does not contain core/rfb.js: $NOVNC_DIR"
+if [[ -n "${OLC_QEMU_FRONTEND:-}" && "${OLC_QEMU_FRONTEND}" != "browser" ]]; then
+  fail "OLC_QEMU_FRONTEND=${OLC_QEMU_FRONTEND} is not supported. launch-vm renders VMs in the browser only."
 fi
 
-QEMU_BIN="$(resolve_qemu_binary)"
+QEMU_FRONTEND="browser"
+require_command node
+resolve_novnc_dir
+NOVNC_DIR="$RESOLVED_NOVNC_DIR"
+[[ -f "$NOVNC_DIR/core/rfb.js" ]] || fail "noVNC asset directory does not contain core/rfb.js: $NOVNC_DIR"
+
+resolve_qemu_binary
+QEMU_BIN="$RESOLVED_QEMU_BIN"
 
 if [[ ! -e "$KVM_DEVICE" && "${OLC_SKIP_KVM_CHECK:-0}" != "1" ]]; then
   fail "${KVM_DEVICE} is required"
@@ -339,6 +449,8 @@ qemu-img create -q \
 echo "booting image: $IMAGE_PATH"
 echo "runtime disk overlay: $VM_DISK_OVERLAY"
 echo "runtime disk size: $VM_DISK_SIZE"
+echo "fast boot: $VM_FAST_BOOT"
+echo "network mode: $VM_NETWORK_MODE"
 echo "graphical proof: Firefox launches as the in-guest UI shell"
 echo "serial output: terminal"
 echo "qemu frontend: $QEMU_FRONTEND"
@@ -355,47 +467,23 @@ echo "virtiofsd sandbox: $VIRTIOFSD_SANDBOX"
 if [[ "${#virtiofsd_id_args[@]}" -gt 0 ]]; then
   echo "virtiofsd id mapping: guest 1000:1000 -> host ${VIRTIOFSD_HOST_UID}:${VIRTIOFSD_HOST_GID}"
 fi
-if [[ "$QEMU_FRONTEND" == "browser" ]]; then
-  echo "viewer: browser tab"
-  echo "novnc assets: $NOVNC_DIR"
-fi
-if [[ -n "$QEMU_DISPLAY" ]]; then
-  echo "display backend: $QEMU_DISPLAY"
-fi
-echo "sdl hidpi disabled: SDL_VIDEO_HIGHDPI_DISABLED=$QEMU_SDL_VIDEO_HIGHDPI_DISABLED"
-echo "gtk scale: GDK_SCALE=$QEMU_GDK_SCALE GDK_DPI_SCALE=$QEMU_GDK_DPI_SCALE"
-
-export SDL_VIDEO_HIGHDPI_DISABLED="$QEMU_SDL_VIDEO_HIGHDPI_DISABLED"
-export GDK_SCALE="$QEMU_GDK_SCALE"
-export GDK_DPI_SCALE="$QEMU_GDK_DPI_SCALE"
+echo "viewer: browser tab"
+echo "novnc assets: $NOVNC_DIR"
 
 cleanup() {
+  local exit_status="$?"
   trap - EXIT INT TERM
-
-  if [[ -n "$VIEWER_PID" ]] && kill -0 "$VIEWER_PID" >/dev/null 2>&1; then
-    kill "$VIEWER_PID" >/dev/null 2>&1 || true
-    wait "$VIEWER_PID" >/dev/null 2>&1 || true
-  fi
 
   if [[ -n "$QEMU_PID" ]] && kill -0 "$QEMU_PID" >/dev/null 2>&1; then
     kill "$QEMU_PID" >/dev/null 2>&1 || true
-    wait "$QEMU_PID" >/dev/null 2>&1 || true
-  fi
-
-  if [[ -n "$SPICE_SOCKET_DIR" ]]; then
-    rm -rf "$SPICE_SOCKET_DIR"
   fi
 
   if [[ -n "$VM_SCREEN_PID" ]] && kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
     kill "$VM_SCREEN_PID" >/dev/null 2>&1 || true
-    wait "$VM_SCREEN_PID" >/dev/null 2>&1 || true
   fi
 
   if [[ -n "$VM_SCREEN_LOG" ]]; then
     rm -f "$VM_SCREEN_LOG"
-  fi
-  if [[ -n "$RUNTIME_METADATA_PATH" ]]; then
-    rm -f "$RUNTIME_METADATA_PATH"
   fi
   if [[ -n "$VM_DISK_OVERLAY" ]]; then
     rm -f "$VM_DISK_OVERLAY"
@@ -406,7 +494,6 @@ cleanup() {
 
   if [[ -n "$VIRTIOFSD_PID" ]] && kill -0 "$VIRTIOFSD_PID" >/dev/null 2>&1; then
     kill "$VIRTIOFSD_PID" >/dev/null 2>&1 || true
-    wait "$VIRTIOFSD_PID" >/dev/null 2>&1 || true
   fi
 
   if [[ -n "$VIRTIOFS_SOCKET_DIR" ]]; then
@@ -415,45 +502,16 @@ cleanup() {
 
   if [[ -n "$VM_IMAGES_VIRTIOFSD_PID" ]] && kill -0 "$VM_IMAGES_VIRTIOFSD_PID" >/dev/null 2>&1; then
     kill "$VM_IMAGES_VIRTIOFSD_PID" >/dev/null 2>&1 || true
-    wait "$VM_IMAGES_VIRTIOFSD_PID" >/dev/null 2>&1 || true
   fi
 
   if [[ -n "$VM_IMAGES_SOCKET_DIR" ]]; then
     rm -rf "$VM_IMAGES_SOCKET_DIR"
   fi
+
+  exit "$exit_status"
 }
 
 trap cleanup EXIT INT TERM
-
-write_runtime_metadata() {
-  local browser_json reconnect_json
-
-  if [[ -z "$VM_RUNTIME_DIR" ]]; then
-    return
-  fi
-
-  browser_json="null"
-  reconnect_json="null"
-  if [[ -n "$VM_SCREEN_URL" ]]; then
-    browser_json="\"$VM_SCREEN_URL\""
-  fi
-  if [[ -n "$VM_SCREEN_RECONNECT_URL" ]]; then
-    reconnect_json="\"$VM_SCREEN_RECONNECT_URL\""
-  fi
-
-  mkdir -p "$VM_RUNTIME_DIR"
-  RUNTIME_METADATA_PATH="${VM_RUNTIME_DIR}/vm.json"
-
-  cat >"$RUNTIME_METADATA_PATH" <<EOF
-{
-  "qmpSocket": "$QMP_SOCKET",
-  "browserUrl": $browser_json,
-  "reconnectUrl": $reconnect_json,
-  "frontend": "$QEMU_FRONTEND",
-  "pid": ${QEMU_PID:-null}
-}
-EOF
-}
 
 VIRTIOFS_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-virtiofs.XXXXXX")"
 VIRTIOFS_SOCKET="${VIRTIOFS_SOCKET_DIR}/source.sock"
@@ -472,7 +530,7 @@ for _ in $(seq 1 100); do
   fi
 
   if ! kill -0 "$VIRTIOFSD_PID" >/dev/null 2>&1; then
-    wait "$VIRTIOFSD_PID" || true
+    wait "$VIRTIOFSD_PID" 2>/dev/null || true
     fail "virtiofsd exited before creating the source socket"
   fi
 
@@ -500,7 +558,7 @@ if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
     fi
 
     if ! kill -0 "$VM_IMAGES_VIRTIOFSD_PID" >/dev/null 2>&1; then
-      wait "$VM_IMAGES_VIRTIOFSD_PID" || true
+      wait "$VM_IMAGES_VIRTIOFSD_PID" 2>/dev/null || true
       fail "virtiofsd exited before creating the VM images socket"
     fi
 
@@ -523,8 +581,6 @@ qemu_base_args=(
   -object "memory-backend-memfd,id=olc-mem,size=${MEMORY_MB}M,share=on"
   -numa "node,memdev=olc-mem"
   -drive "if=virtio,format=qcow2,file=$VM_DISK_OVERLAY"
-  -netdev user,id=olc-net
-  -device virtio-net-pci,netdev=olc-net
   -chardev "socket,id=ol-c-source,path=${VIRTIOFS_SOCKET}"
   -device "vhost-user-fs-pci,chardev=ol-c-source,tag=ol-c-source"
   "${vm_images_qemu_args[@]}"
@@ -539,176 +595,115 @@ qemu_base_args=(
   -serial mon:stdio
 )
 
-if [[ -n "$VM_PARENT_MACHINE_ID" ]]; then
+if [[ "$VM_NETWORK_MODE" == "user" ]]; then
   qemu_base_args+=(
-    -smbios "type=1,serial=olc-parent-machine-id=${VM_PARENT_MACHINE_ID};olc-parent-depth=${VM_PARENT_DEPTH:-0}"
+    -netdev user,id=olc-net
+    -device virtio-net-pci,netdev=olc-net
+  )
+fi
+
+smbios_serial_fields=()
+if [[ -n "$VM_PARENT_MACHINE_ID" ]]; then
+  smbios_serial_fields+=(
+    "olc-parent-machine-id=${VM_PARENT_MACHINE_ID}"
+    "olc-parent-depth=${VM_PARENT_DEPTH:-0}"
   )
   echo "parent machine id: $VM_PARENT_MACHINE_ID"
   echo "parent vm depth: ${VM_PARENT_DEPTH:-0}"
 fi
-
-write_runtime_metadata
-
-if [[ "$QEMU_FRONTEND" != "spice" ]]; then
-  if [[ "$QEMU_FRONTEND" == "browser" ]]; then
-    VNC_DISPLAY="$(find_browser_display)"
-    VNC_WEBSOCKET_PORT=$((5700 + VNC_DISPLAY))
-    VM_SCREEN_LOG="$(mktemp "${TMPDIR:-/tmp}/ol-c-vm-screen.XXXXXX.log")"
-
-    echo "vnc display: 127.0.0.1:${VNC_DISPLAY}"
-    echo "vnc websocket: 127.0.0.1:${VNC_WEBSOCKET_PORT}"
-
-    "$QEMU_BIN" \
-      "${qemu_base_args[@]}" \
-      -qmp "unix:${QMP_SOCKET},server=on,wait=off" \
-      -display none \
-      -chardev qemu-vdagent,id=ol-c-vdagent,name=vdagent,clipboard=on,mouse=off \
-      -device virtio-serial-pci \
-      -device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0 \
-      -vnc "127.0.0.1:${VNC_DISPLAY},websocket=127.0.0.1:${VNC_WEBSOCKET_PORT}" &
-    QEMU_PID="$!"
-
-    OLC_NOVNC_DIR="$NOVNC_DIR" \
-    OLC_VM_SCREEN_HOST="127.0.0.1" \
-    OLC_VM_SCREEN_PORT="$VM_SCREEN_PORT" \
-    OLC_VM_SCREEN_VNC_HOST="127.0.0.1" \
-    OLC_VM_SCREEN_VNC_WS_PORT="$VNC_WEBSOCKET_PORT" \
-      node "$(dirname -- "$0")/vm-screen/server.mjs" >"$VM_SCREEN_LOG" 2>&1 &
-    VM_SCREEN_PID="$!"
-
-    for _ in $(seq 1 100); do
-      if grep -q '^OLC_VM_SCREEN_URL ' "$VM_SCREEN_LOG"; then
-        break
-      fi
-
-      if ! kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
-        wait "$VM_SCREEN_PID" || true
-        if grep -q '^OLC_VM_SCREEN_URL ' "$VM_SCREEN_LOG"; then
-          break
-        fi
-        cat "$VM_SCREEN_LOG" >&2 || true
-        fail "VM screen server exited before reporting its URL"
-      fi
-
-      sleep 0.1
-    done
-
-    if ! grep -q '^OLC_VM_SCREEN_URL ' "$VM_SCREEN_LOG"; then
-      cat "$VM_SCREEN_LOG" >&2 || true
-      fail "timed out waiting for VM screen server URL"
-    fi
-
-    VM_SCREEN_URL="$(sed -n 's/^OLC_VM_SCREEN_URL //p' "$VM_SCREEN_LOG" | sed -n '1p')"
-    VM_SCREEN_RECONNECT_URL="${VM_SCREEN_URL/127.0.0.1/localhost}"
-    echo "browser url: $VM_SCREEN_URL"
-    echo "reconnect url: $VM_SCREEN_RECONNECT_URL"
-    write_runtime_metadata
-
-    if [[ "$VM_SCREEN_OPEN_BROWSER" == "1" ]] && command -v xdg-open >/dev/null 2>&1; then
-      xdg-open "$VM_SCREEN_URL" >/dev/null 2>&1 || true
-    fi
-
-    while true; do
-      EXITED_PID=""
-      set +e
-      wait -n -p EXITED_PID "$QEMU_PID" "$VM_SCREEN_PID"
-      EXITED_STATUS="$?"
-      set -e
-
-      if [[ "$EXITED_PID" == "$QEMU_PID" ]]; then
-        QEMU_PID=""
-        if kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
-          kill "$VM_SCREEN_PID" >/dev/null 2>&1 || true
-          wait "$VM_SCREEN_PID" >/dev/null 2>&1 || true
-          VM_SCREEN_PID=""
-        fi
-        exit "$EXITED_STATUS"
-      fi
-
-      if [[ "$EXITED_PID" == "$VM_SCREEN_PID" ]]; then
-        VM_SCREEN_PID=""
-        if kill -0 "$QEMU_PID" >/dev/null 2>&1; then
-          kill "$QEMU_PID" >/dev/null 2>&1 || true
-          wait "$QEMU_PID" >/dev/null 2>&1 || true
-          QEMU_PID=""
-        fi
-        exit "$EXITED_STATUS"
-      fi
-
-      exit "$EXITED_STATUS"
-    done
-  fi
-
-  "$QEMU_BIN" \
-    "${qemu_base_args[@]}" \
-    -qmp "unix:${QMP_SOCKET},server=on,wait=off" \
-    -display "$QEMU_DISPLAY" &
-  QEMU_PID="$!"
-  write_runtime_metadata
-  wait "$QEMU_PID"
-  QEMU_PID=""
-  exit 0
+if [[ "$VM_FAST_BOOT" == "1" ]]; then
+  smbios_serial_fields+=("olc-fast-boot=1")
+fi
+if [[ "$VM_NETWORK_MODE" != "user" ]]; then
+  smbios_serial_fields+=("olc-net=${VM_NETWORK_MODE}")
+fi
+if [[ "${#smbios_serial_fields[@]}" -gt 0 ]]; then
+  serial_payload="$(IFS=';'; printf '%s' "${smbios_serial_fields[*]}")"
+  qemu_base_args+=(
+    -smbios "type=1,serial=${serial_payload}"
+  )
 fi
 
-SPICE_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-spice.XXXXXX")"
-SPICE_SOCKET="${SPICE_SOCKET_DIR}/spice.sock"
-SPICE_URI="spice+unix://${SPICE_SOCKET}"
+VNC_DISPLAY="$(find_browser_display)"
+VNC_WEBSOCKET_PORT=$((5700 + VNC_DISPLAY))
+VM_SCREEN_LOG="$(mktemp "${TMPDIR:-/tmp}/ol-c-vm-screen.XXXXXX.log")"
 
-echo "spice socket: $SPICE_SOCKET"
-
+echo "vnc display: 127.0.0.1:${VNC_DISPLAY}"
+echo "vnc websocket: 127.0.0.1:${VNC_WEBSOCKET_PORT}"
 "$QEMU_BIN" \
   "${qemu_base_args[@]}" \
   -qmp "unix:${QMP_SOCKET},server=on,wait=off" \
   -display none \
-  -spice "unix=on,addr=${SPICE_SOCKET},disable-ticketing=on,agent-mouse=on,gl=off" \
+  -chardev qemu-vdagent,id=ol-c-vdagent,name=vdagent,clipboard=on,mouse=off \
   -device virtio-serial-pci \
-  -chardev spicevmc,id=ol-c-vdagent,name=vdagent \
-  -device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0 &
+  -device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0 \
+  -vnc "127.0.0.1:${VNC_DISPLAY},websocket=127.0.0.1:${VNC_WEBSOCKET_PORT}" &
 QEMU_PID="$!"
-write_runtime_metadata
+
+OLC_NOVNC_DIR="$NOVNC_DIR" \
+OLC_VM_SCREEN_HOST="127.0.0.1" \
+OLC_VM_SCREEN_PORT="$VM_SCREEN_PORT" \
+OLC_VM_SCREEN_VNC_HOST="127.0.0.1" \
+OLC_VM_SCREEN_VNC_WS_PORT="$VNC_WEBSOCKET_PORT" \
+  node "$(dirname -- "$0")/vm-screen/server.mjs" >"$VM_SCREEN_LOG" 2>&1 &
+VM_SCREEN_PID="$!"
 
 for _ in $(seq 1 100); do
-  if [[ -S "$SPICE_SOCKET" || -e "$SPICE_SOCKET" ]]; then
+  if grep -q '^OLC_VM_SCREEN_URL ' "$VM_SCREEN_LOG"; then
     break
   fi
 
-  if ! kill -0 "$QEMU_PID" >/dev/null 2>&1; then
-    wait "$QEMU_PID" || true
-    fail "QEMU exited before creating the SPICE socket"
+  if ! kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
+    wait "$VM_SCREEN_PID" 2>/dev/null || true
+    if grep -q '^OLC_VM_SCREEN_URL ' "$VM_SCREEN_LOG"; then
+      break
+    fi
+    cat "$VM_SCREEN_LOG" >&2 || true
+    fail "VM screen server exited before reporting its URL"
   fi
 
   sleep 0.1
 done
 
-[[ -S "$SPICE_SOCKET" || -e "$SPICE_SOCKET" ]] || fail "timed out waiting for SPICE socket: $SPICE_SOCKET"
+if ! grep -q '^OLC_VM_SCREEN_URL ' "$VM_SCREEN_LOG"; then
+  cat "$VM_SCREEN_LOG" >&2 || true
+  fail "timed out waiting for VM screen server URL"
+fi
 
-echo "viewer: remote-viewer $SPICE_URI"
-remote-viewer "$SPICE_URI" &
-VIEWER_PID="$!"
+VM_SCREEN_URL="$(sed -n 's/^OLC_VM_SCREEN_URL //p' "$VM_SCREEN_LOG" | sed -n '1p')"
+VM_SCREEN_RECONNECT_URL="${VM_SCREEN_URL/127.0.0.1/localhost}"
+echo "browser url: $VM_SCREEN_URL"
+echo "reconnect url: $VM_SCREEN_RECONNECT_URL"
+wait_for_vm_ready
+
+if [[ "$VM_SCREEN_OPEN_BROWSER" == "1" ]] && command -v xdg-open >/dev/null 2>&1; then
+  xdg-open "$VM_SCREEN_URL" >/dev/null 2>&1 || true
+fi
 
 while true; do
   EXITED_PID=""
   set +e
-  wait -n -p EXITED_PID "$QEMU_PID" "$VIEWER_PID"
+  wait -n -p EXITED_PID "$QEMU_PID" "$VM_SCREEN_PID"
   EXITED_STATUS="$?"
   set -e
 
-  if [[ "$EXITED_PID" == "$VIEWER_PID" ]]; then
-    VIEWER_PID=""
-    if kill -0 "$QEMU_PID" >/dev/null 2>&1; then
-      kill "$QEMU_PID" >/dev/null 2>&1 || true
-      wait "$QEMU_PID" >/dev/null 2>&1 || true
-      QEMU_PID=""
-    fi
-    exit 0
-  fi
-
   if [[ "$EXITED_PID" == "$QEMU_PID" ]]; then
     QEMU_PID=""
-    if kill -0 "$VIEWER_PID" >/dev/null 2>&1; then
-      kill "$VIEWER_PID" >/dev/null 2>&1 || true
-      wait "$VIEWER_PID" >/dev/null 2>&1 || true
-      VIEWER_PID=""
+    if kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
+      kill "$VM_SCREEN_PID" >/dev/null 2>&1 || true
+      VM_SCREEN_PID=""
+    fi
+    exit "$EXITED_STATUS"
+  fi
+
+  if [[ "$EXITED_PID" == "$VM_SCREEN_PID" ]]; then
+    VM_SCREEN_PID=""
+    if [[ -n "$VM_SCREEN_LOG" && -s "$VM_SCREEN_LOG" ]]; then
+      cat "$VM_SCREEN_LOG" >&2 || true
+    fi
+    if kill -0 "$QEMU_PID" >/dev/null 2>&1; then
+      kill "$QEMU_PID" >/dev/null 2>&1 || true
+      QEMU_PID=""
     fi
     exit "$EXITED_STATUS"
   fi

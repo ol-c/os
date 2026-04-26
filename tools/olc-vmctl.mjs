@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +11,7 @@ function fail(message) {
 }
 
 function usage() {
-  console.log(`Usage: olc-vmctl [--qmp PATH] [--runtime-dir DIR] <command> [args]
+  console.log(`Usage: olc-vmctl [--qmp PATH] <command> [args]
 
 Commands:
   key <name>              Send a key or key chord such as enter or ctrl+alt+delete.
@@ -26,14 +26,12 @@ Commands:
 
 Options:
   --qmp PATH              QMP unix socket path.
-  --runtime-dir DIR       Directory containing vm.json metadata.
   --help                  Show this help text.
 `);
 }
 
 function parseArgs(argv) {
   let qmpSocket = process.env.OLC_VM_QMP_SOCKET || '';
-  let runtimeDir = process.env.OLC_VM_RUNTIME_DIR || '/var/lib/ol-c/vms/current';
   const positional = [];
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -47,32 +45,56 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
-    if (arg === '--runtime-dir') {
-      runtimeDir = argv[index + 1] || '';
-      index += 1;
-      continue;
-    }
     positional.push(arg);
   }
 
-  return { qmpSocket, runtimeDir, positional };
+  return { qmpSocket, positional };
 }
 
-function resolveTarget(qmpSocket, runtimeDir) {
+function resolveTarget(qmpSocket) {
   if (qmpSocket) {
     return qmpSocket;
   }
 
   try {
-    const metadata = JSON.parse(readFileSync(join(runtimeDir, 'vm.json'), 'utf8'));
-    if (metadata?.qmpSocket) {
-      return metadata.qmpSocket;
+    const procRoot = process.env.OLC_VMCTL_PROC_ROOT || '/proc';
+    const candidates = [];
+    for (const entry of readdirSync(procRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) {
+        continue;
+      }
+      const pid = entry.name;
+      let cmdline;
+      try {
+        cmdline = readFileSync(join(procRoot, pid, 'cmdline'), 'utf8').split('\0').filter(Boolean);
+      } catch {
+        continue;
+      }
+      for (let index = 0; index < cmdline.length - 1; index += 1) {
+        if (cmdline[index] !== '-qmp') {
+          continue;
+        }
+        const match = cmdline[index + 1].match(/^unix:([^,]+),server=on,wait=off$/);
+        if (!match) {
+          continue;
+        }
+        try {
+          statSync(match[1]);
+        } catch {
+          continue;
+        }
+        candidates.push({ pid: Number.parseInt(pid, 10), path: match[1] });
+      }
+    }
+    candidates.sort((left, right) => right.pid - left.pid);
+    if (candidates[0]?.path) {
+      return candidates[0].path;
     }
   } catch {
     // fall through
   }
 
-  fail(`unable to resolve a QMP socket. Set --qmp PATH or provide vm metadata in ${join(runtimeDir, 'vm.json')}`);
+  fail('unable to resolve a QMP socket. Set --qmp PATH or launch a VM with a live QMP process.');
 }
 
 class QmpClient {
@@ -370,7 +392,7 @@ async function sendButtonCommand(client, rawButton, down) {
 }
 
 async function main() {
-  const { qmpSocket, runtimeDir, positional } = parseArgs(process.argv.slice(2));
+  const { qmpSocket, positional } = parseArgs(process.argv.slice(2));
   const [ command, ...args ] = positional;
   if (!command) {
     usage();
@@ -386,7 +408,7 @@ async function main() {
     return;
   }
 
-  const client = new QmpClient(resolveTarget(qmpSocket, runtimeDir));
+  const client = new QmpClient(resolveTarget(qmpSocket));
   await client.connect();
 
   try {

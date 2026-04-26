@@ -28,6 +28,35 @@
     "d /var/lib/ol-c/journal-mirror 0755 root root -"
   ];
 
+  systemd.generators.olc-nested-fast-boot = pkgs.writeShellScript "olc-nested-fast-boot-generator" ''
+    set -euo pipefail
+
+    output_dir="$1"
+    dmi_serial_path="/sys/class/dmi/id/product_serial"
+    serial=""
+
+    if [ ! -r "$dmi_serial_path" ]; then
+      exit 0
+    fi
+
+    serial="$(${pkgs.coreutils}/bin/tr -d '\n' < "$dmi_serial_path")"
+
+    mask_unit() {
+      ${pkgs.coreutils}/bin/ln -sf /dev/null "$output_dir/$1"
+    }
+
+    if printf '%s\n' "$serial" | ${pkgs.gnugrep}/bin/grep -Fq 'olc-fast-boot=1'; then
+      mask_unit growpart.service
+      mask_unit systemd-growfs-root.service
+      mask_unit systemd-journal-flush.service
+      mask_unit systemd-random-seed.service
+    fi
+
+    if printf '%s\n' "$serial" | ${pkgs.gnugrep}/bin/grep -Fq 'olc-net=none'; then
+      mask_unit dhcpcd.service
+    fi
+  '';
+
   systemd.services.olc-journal-lineage = {
     description = "Record ol-c VM lineage marker";
     after = [ "systemd-journald.service" ];
@@ -99,11 +128,11 @@
       state_dir="/var/lib/ol-c/journal-mirror"
       cursor_file="$state_dir/current.cursor"
       boot_file="$state_dir/current.boot-id"
+      machine_id="$(cat /etc/machine-id)"
       current_boot_id="$(cat /proc/sys/kernel/random/boot_id)"
       systemd_journal_remote="${pkgs.systemd}/lib/systemd/systemd-journal-remote"
       current_journal_dir="/source/.olc-debug/journal"
-      current_journal_file="$current_journal_dir/current.journal"
-      current_lock_file="$current_journal_dir/current.lock"
+      current_journal_file="$current_journal_dir/''${machine_id}-''${current_boot_id}.journal"
 
       mkdir -p "$state_dir"
 
@@ -139,19 +168,14 @@
         if [ -s "$export_file" ]; then
           last_cursor="$(${pkgs.gnugrep}/bin/grep -a '^__CURSOR=' "$export_file" | ${pkgs.coreutils}/bin/tail -n 1 | ${pkgs.coreutils}/bin/cut -d= -f2-)"
           if [ -n "$last_cursor" ]; then
-            ${pkgs.util-linux}/bin/flock -w 30 "$current_lock_file" \
-              ${pkgs.bash}/bin/bash -c \
-              '"$1" -o "$2" - < "$3"; chmod 0644 "$2"' \
-              _ \
-              "$systemd_journal_remote" \
-              "$current_journal_file" \
-              "$export_file"
+            "$systemd_journal_remote" -o "$current_journal_file" - < "$export_file"
+            chmod 0644 "$current_journal_file"
             printf '%s\n' "$last_cursor" > "$cursor_file"
           fi
         fi
 
         rm -rf "$tmpdir"
-        sleep 2
+        sleep 0.2
       done
     '';
   };

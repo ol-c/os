@@ -36,10 +36,10 @@ case "\$*" in
       printf '%s\n' 'c1'
     fi
     ;;
-  "show-session c1 --property=Name --property=Class --property=Remote --property=State")
+  "show-session c1 --property=Name --property=User --property=Remote --property=State")
     cat <<OLC_SESSION
 Name=\${OLC_TEST_SESSION_NAME:-vieweruser}
-Class=\${OLC_TEST_SESSION_CLASS:-user}
+User=\${OLC_TEST_SESSION_USER:-1000}
 Remote=\${OLC_TEST_SESSION_REMOTE:-no}
 State=\${OLC_TEST_SESSION_STATE:-active}
 OLC_SESSION

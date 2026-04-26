@@ -51,18 +51,19 @@ active_session="$(printf '%s\n' "$active_session" | sed -n '1p')"
 
 session_info="$("$loginctl_bin" show-session "$active_session" \
   --property=Name \
-  --property=Class \
+  --property=User \
   --property=Remote \
   --property=State \
   2>/dev/null || true)"
 
 session_name="$(parse_property "$session_info" Name)"
-session_class="$(parse_property "$session_info" Class)"
+if [[ -z "$session_name" ]]; then
+  session_name="$(parse_property "$session_info" User)"
+fi
 session_remote="$(parse_property "$session_info" Remote)"
 session_state="$(parse_property "$session_info" State)"
 
 [[ -n "$session_name" ]] || fail "active session ${active_session} does not have a user name"
-[[ "$session_class" == "user" ]] || fail "active session ${active_session} is not a user session"
 [[ "$session_remote" != "yes" ]] || fail "active session ${active_session} is remote"
 if [[ -n "$session_state" && "$session_state" != "active" ]]; then
   fail "active session ${active_session} is not active"

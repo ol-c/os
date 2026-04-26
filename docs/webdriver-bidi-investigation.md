@@ -99,7 +99,7 @@ so the active signed-in user's BiDi endpoint can be resolved directly without sc
 Add an explicit opt-in localhost-page automation path for the main Firefox session:
 
 1. keep launching Firefox with `--remote-debugging-port 0`
-2. keep recording the assigned BiDi WebSocket URL in runtime metadata
+2. keep exposing the assigned BiDi WebSocket URL through the `olc-firefox-bidi-url` helper and journal-backed readiness flow
 3. use the `olc-firefox-bidi-url` helper as the operator-facing lookup path
 4. add a thin helper that:
    - opens a BiDi session

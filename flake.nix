@@ -247,7 +247,7 @@
         overlays = [ qemuInputOverlay ];
       };
       overlayModule = {
-        nixpkgs.overlays = [ firefoxFastOverlay ];
+        nixpkgs.overlays = [ firefoxFastOverlay qemuInputOverlay ];
       };
       olcModule = ./nix/ol-c.nix;
     in {
