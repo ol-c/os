@@ -13,9 +13,9 @@ Build the current VM image with:
 Proof of success:
 - QEMU opens a VM window
 - Firefox launches automatically inside the guest
-- Firefox opens `https://localhost` as a normal interactive browser session
+- Firefox opens `https://localhost/` as a normal interactive browser session
 - the browser window is maximized to fill the VM display
-- Closing the final tab keeps the window open and reopens `https://localhost`
+- Closing the final tab keeps the window open and reopens `https://localhost/`
 
 Build and launch it with:
 
@@ -283,7 +283,7 @@ nix build .#firefox-localhost --print-build-logs
 ./launch-vm
 ```
 
-Then validate inside the VM by closing the final Firefox tab with the tab close button or `Ctrl+W` and confirming that Firefox stays open on `https://localhost`.
+Then validate inside the VM by closing the final Firefox tab with the tab close button or `Ctrl+W` and confirming that Firefox stays open on `https://localhost/`.
 
 `.#firefox-localhost` is the default packaged target used by `.#ol-c-image`. It applies the runtime browser chrome hunks from `patches/firefox/packaged/` into the Firefox `omni.ja` archives that contain the matching runtime assets. This fast path is intentionally limited to browser frontend assets such as `browser-commands.js`, `browser.js`, and `tabbrowser.js`.
 
@@ -297,7 +297,7 @@ Inside the guest, confirm the running package was built by this fast path with:
 cat /run/current-system/sw/lib/firefox/ol-c-localhost-patch.txt
 ```
 
-`Ctrl+N`, `Ctrl+T`, the toolbar new-tab controls, and closing the final tab should all land on `https://localhost`. The fast package keeps Firefox's normal `about:newtab` / `about:home` entry points in browser chrome, redirects those pages deeper in `AboutNewTabRedirector.sys.mjs`, and keeps the last-tab reopen behavior in `tabbrowser.js`.
+`Ctrl+N`, `Ctrl+T`, the toolbar new-tab controls, and closing the final tab should all land on `https://localhost/`. The fast package sets Firefox's browser-chrome new-tab URL to `https://localhost/`, keeps explicit `about:newtab` / `about:home` loads redirected in `AboutNewTabRedirector.sys.mjs`, disables hidden new-tab preloading for that non-`about:` URL, and keeps the last-tab reopen behavior on the shared `BROWSER_NEW_TAB_URL` path.
 
 ### 2. Full source compatibility path
 
@@ -354,7 +354,8 @@ olc-firefox-source status
 olc-firefox-source prepare
 olc-firefox-source shell
 olc-firefox-source mach build faster
-olc-firefox-source mach run --remote-debugging-port 0 --new-window https://localhost
+olc-firefox-source mach run --remote-debugging-port 0 --new-window https://localhost/
+olc-firefox-source open-window https://localhost/
 ```
 
 `./olc-init prepare` is the idempotent repo-level host step. It prepares reusable shared assets and is safe to run multiple times. Today that means copying the exact pinned Firefox source tarball into `.olc-firefox/cache/<identity>/`, then extracting it once into the pristine cache there. The first run may still show Nix fetching that tarball into the local machine's `/nix/store`; after that, host and child VMs reuse the repo-local cached copy under `/source`.
@@ -362,6 +363,14 @@ olc-firefox-source mach run --remote-debugging-port 0 --new-window https://local
 `olc-firefox-source status` is cheap: it resolves the pinned Firefox identity and reports whether the repo-local cached archive, the pristine cache, and the working instance already exist. `olc-firefox-source prepare` copies the pristine cached source tree into the working instance, applies `patches/firefox/packaged/` first and `patches/firefox/pending/` second with the standard `patch` tool, and reuses the same objdir across host and child VMs because the workspace lives under the shared `/source` mount.
 
 `olc-firefox-source shell` and `olc-firefox-source mach ...` automatically re-enter a second pinned Nix environment from `.#firefox-source`. That shell carries Firefox build-time host tools such as Python, LLVM tools, the nixpkgs WASI cross compiler and sysroot, `pkg-config`, and ALSA metadata, while still operating on the same shared source tree and objdir under `.olc-firefox/`.
+
+For manual GUI testing inside an already-logged-in guest, prefer:
+
+```sh
+olc-firefox-source open-window https://localhost/
+```
+
+That path launches the source-built `objdir/dist/bin/firefox` directly instead of going back through `mach run`, disables Firefox DBus remoting and process handoff so the packaged session browser does not steal the launch, and seeds an isolated test profile with the same localhost trust prefs as the packaged session profile so `https://localhost/` opens normally instead of landing on the certificate warning page.
 
 The helper warns when the current repo patch fingerprint differs from the existing shared source instance. Rebuild that shared tree from the current repo patch stack with:
 

@@ -193,13 +193,13 @@ open my $in, '<', $path or die "failed to read $path: $!\n";
 my $text = <$in>;
 close $in;
 
-my $count = ($text =~ s/const PREF_NEWTAB_SELF_LOADING =\n  "browser\.newtabpage\.activity-stream\.selfLoading\.enabled";\n/const PREF_NEWTAB_SELF_LOADING =\n  "browser.newtabpage.activity-stream.selfLoading.enabled";\n\nconst SECUREOS_LOCALHOST_URL = "https:\/\/localhost";\n/s);
+my $count = ($text =~ s/const PREF_NEWTAB_SELF_LOADING =\n  "browser\.newtabpage\.activity-stream\.selfLoading\.enabled";\n/const PREF_NEWTAB_SELF_LOADING =\n  "browser.newtabpage.activity-stream.selfLoading.enabled";\n\nconst SECUREOS_LOCALHOST_URL = "https:\/\/localhost\/";\n/s);
 die "failed to insert localhost redirect constant into $path\n" unless $count == 1;
 
 $count = ($text =~ s/if \(\n      uri\.spec\.startsWith\("about:home"\) \|\|\n      \(uri\.spec\.startsWith\("about:newtab"\) && lazy\.BUILTIN_NEWTAB_ENABLED\)\n    \) \{\n      chromeURI = Services\.io\.newURI\(this\.defaultURL\);\n    \}/if (uri.spec.startsWith("about:home") || uri.spec.startsWith("about:newtab")) {\n      chromeURI = Services.io.newURI(SECUREOS_LOCALHOST_URL);\n    }/s);
 die "failed to replace parent redirect block in $path\n" unless $count == 1;
 
-$count = ($text =~ s/if \(uri\.spec\.startsWith\("about:home"\)\) \{\n      let cacheChannel = AboutHomeStartupCacheChild\.maybeGetCachedPageChannel\(\n        uri,\n        loadInfo\n      \);\n      if \(cacheChannel\) \{\n        return cacheChannel;\n      \}\n      pageURI = Services\.io\.newURI\(this\.defaultURL\);\n    \} else \{\n      \/\/ The only other possibility is about:newtab\.\n      \/\/\n      \/\/ If about:newtab is being requested, then any subsequent request for\n      \/\/ about:home should _never_ request the cache \(which might be woefully\n      \/\/ out of date compared to about:newtab\), so we disqualify the cache if\n      \/\/ it still happens to be around\.\n      AboutHomeStartupCacheChild\.disqualifyCache\(\);\n\n      if \(lazy\.BUILTIN_NEWTAB_ENABLED\) \{\n        pageURI = Services\.io\.newURI\(this\.defaultURL\);\n      \} else \{\n        pageURI = this\.getChromeURI\(uri\);\n      \}\n    \}/if (uri.spec.startsWith("about:home") || uri.spec.startsWith("about:newtab")) {\n      \/\/ Keep browser chrome on the built-in about:newtab\/about:home path so\n      \/\/ default behaviors like urlbar focus still trigger, while the content\n      \/\/ load resolves to the SecureOS localhost shell.\n      AboutHomeStartupCacheChild.disqualifyCache();\n      pageURI = Services.io.newURI(SECUREOS_LOCALHOST_URL);\n    } else {\n      pageURI = this.getChromeURI(uri);\n    }/s);
+$count = ($text =~ s/if \(uri\.spec\.startsWith\("about:home"\)\) \{\n      let cacheChannel = AboutHomeStartupCacheChild\.maybeGetCachedPageChannel\(\n        uri,\n        loadInfo\n      \);\n      if \(cacheChannel\) \{\n        return cacheChannel;\n      \}\n      pageURI = Services\.io\.newURI\(this\.defaultURL\);\n    \} else \{\n      \/\/ The only other possibility is about:newtab\.\n      \/\/\n      \/\/ If about:newtab is being requested, then any subsequent request for\n      \/\/ about:home should _never_ request the cache \(which might be woefully\n      \/\/ out of date compared to about:newtab\), so we disqualify the cache if\n      \/\/ it still happens to be around\.\n      AboutHomeStartupCacheChild\.disqualifyCache\(\);\n\n      if \(lazy\.BUILTIN_NEWTAB_ENABLED\) \{\n        pageURI = Services\.io\.newURI\(this\.defaultURL\);\n      \} else \{\n        pageURI = this\.getChromeURI\(uri\);\n      \}\n    \}/if (uri.spec.startsWith("about:home") || uri.spec.startsWith("about:newtab")) {\n      \/\/ Keep explicit about:home\/about:newtab loads on the SecureOS localhost\n      \/\/ shell, and bypass the startup cache so the built-in page is not reused.\n      AboutHomeStartupCacheChild.disqualifyCache();\n      pageURI = Services.io.newURI(SECUREOS_LOCALHOST_URL);\n    } else {\n      pageURI = this.getChromeURI(uri);\n    }/s);
 die "failed to replace child redirect block in $path\n" unless $count == 1;
 
 open my $out, '>', $path or die "failed to write $path: $!\n";
@@ -208,8 +208,8 @@ close $out;
 PERL
     perl "$work_dir/patch-redirector-runtime.pl" "$redirector_runtime"
 
-    if ! grep -Fq 'default behaviors like urlbar focus still trigger' "$redirector_runtime"; then
-      echo "error: patched Firefox redirector runtime asset is missing the deeper localhost redirect contract note: $redirector_omni:$redirector_omni_path" >&2
+    if ! grep -Fq 'const SECUREOS_LOCALHOST_URL = "https://localhost/";' "$redirector_runtime"; then
+      echo "error: patched Firefox redirector runtime asset is missing the canonical localhost URL: $redirector_omni:$redirector_omni_path" >&2
       exit 1
     fi
     if ! grep -Fq 'pageURI = Services.io.newURI(SECUREOS_LOCALHOST_URL);' "$redirector_runtime"; then
@@ -218,6 +218,66 @@ PERL
     fi
     if ! grep -Fq 'chromeURI = Services.io.newURI(SECUREOS_LOCALHOST_URL);' "$redirector_runtime"; then
       echo "error: patched Firefox redirector runtime asset is missing the localhost parent redirect: $redirector_omni:$redirector_omni_path" >&2
+      exit 1
+    fi
+
+    apply_source_patch_to_runtime_asset \
+      "$localhost_patch" \
+      browser/base/content/utilityOverlay.js \
+      utilityOverlay.js \
+      'return SECUREOS_LOCALHOST_URL;'
+
+    utility_overlay_path="$(cat "$work_dir/utilityOverlay.js.applied-path")"
+    utility_overlay_omni="$(cat "$work_dir/utilityOverlay.js.applied-omni")"
+    utility_overlay_extract_dir=""
+    for entry in "''${extracted_omnis[@]}"; do
+      omni="''${entry%%:*}"
+      if [ "$omni" = "$utility_overlay_omni" ]; then
+        utility_overlay_extract_dir="''${entry#*:}"
+      fi
+    done
+    if [ -z "$utility_overlay_extract_dir" ]; then
+      echo "error: patched Firefox utilityOverlay runtime asset lost its extracted omni directory: $utility_overlay_omni:$utility_overlay_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'const SECUREOS_LOCALHOST_URL = "https://localhost/";' "$utility_overlay_extract_dir/$utility_overlay_path"; then
+      echo "error: patched Firefox utilityOverlay runtime asset is missing the canonical localhost URL: $utility_overlay_omni:$utility_overlay_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'return SECUREOS_LOCALHOST_URL;' "$utility_overlay_extract_dir/$utility_overlay_path"; then
+      echo "error: patched Firefox utilityOverlay runtime asset is missing the browser new-tab localhost override: $utility_overlay_omni:$utility_overlay_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'aURL == blankPageURL ||' "$utility_overlay_extract_dir/$utility_overlay_path"; then
+      echo "error: patched Firefox utilityOverlay runtime asset is missing the blank-page URL handling guard: $utility_overlay_omni:$utility_overlay_path" >&2
+      exit 1
+    fi
+
+    apply_source_patch_to_runtime_asset \
+      "$localhost_patch" \
+      browser/components/tabbrowser/NewTabPagePreloading.sys.mjs \
+      NewTabPagePreloading.sys.mjs \
+      'window.BROWSER_NEW_TAB_URL.startsWith("about:")'
+
+    preloading_path="$(cat "$work_dir/NewTabPagePreloading.sys.mjs.applied-path")"
+    preloading_omni="$(cat "$work_dir/NewTabPagePreloading.sys.mjs.applied-omni")"
+    preloading_extract_dir=""
+    for entry in "''${extracted_omnis[@]}"; do
+      omni="''${entry%%:*}"
+      if [ "$omni" = "$preloading_omni" ]; then
+        preloading_extract_dir="''${entry#*:}"
+      fi
+    done
+    if [ -z "$preloading_extract_dir" ]; then
+      echo "error: patched Firefox new-tab preloading runtime asset lost its extracted omni directory: $preloading_omni:$preloading_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'canPreloadForWindow(window)' "$preloading_extract_dir/$preloading_path"; then
+      echo "error: patched Firefox new-tab preloading runtime asset is missing per-window gating: $preloading_omni:$preloading_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'window.BROWSER_NEW_TAB_URL.startsWith("about:")' "$preloading_extract_dir/$preloading_path"; then
+      echo "error: patched Firefox new-tab preloading runtime asset is missing the non-about preload guard: $preloading_omni:$preloading_path" >&2
       exit 1
     fi
 
@@ -276,6 +336,24 @@ PERL
       echo "error: patched Firefox tabbrowser runtime asset still contains the old localhost trusted-tab replacement path: $tabbrowser_omni:$tabbrowser_omni_path" >&2
       exit 1
     fi
+
+    apply_source_patch_to_runtime_asset \
+      "$localhost_patch" \
+      browser/components/customizableui/CustomizeMode.sys.mjs \
+      CustomizeMode.sys.mjs \
+      'this.#window.openTrustedLinkIn(this.#window.BROWSER_NEW_TAB_URL, "window");'
+
+    apply_source_patch_to_runtime_asset \
+      "$localhost_patch" \
+      browser/components/profiles/ProfilesParent.sys.mjs \
+      ProfilesParent.sys.mjs \
+      'gBrowser.addTrustedTab(gBrowser.ownerGlobal.BROWSER_NEW_TAB_URL);'
+
+    apply_source_patch_to_runtime_asset \
+      "$localhost_patch" \
+      browser/components/tabbrowser/content/opentabs-splitview.mjs \
+      opentabs-splitview.mjs \
+      'this.getWindow().BROWSER_NEW_TAB_URL,'
 
     apply_source_patch_to_runtime_asset \
       "$localhost_patch" \

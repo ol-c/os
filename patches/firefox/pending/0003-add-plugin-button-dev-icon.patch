@@ -1,7 +1,8 @@
 diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
+index 20a4c8b..8c2aea8 100644
 --- a/browser/base/content/browser.js
 +++ b/browser/base/content/browser.js
-@@ -429,6 +429,131 @@
+@@ -429,6 +429,131 @@ var gSecureOSAppearanceBridge = {
  
  gSecureOSAppearanceBridge.init();
  
@@ -134,6 +135,7 @@ diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
  
  var gSecureOSFxaSyncUi = {
 diff --git a/browser/base/content/navigator-toolbox.inc.xhtml b/browser/base/content/navigator-toolbox.inc.xhtml
+index 3f7b850..7a76364 100644
 --- a/browser/base/content/navigator-toolbox.inc.xhtml
 +++ b/browser/base/content/navigator-toolbox.inc.xhtml
 @@ -467,6 +467,13 @@
@@ -151,9 +153,10 @@ diff --git a/browser/base/content/navigator-toolbox.inc.xhtml b/browser/base/con
                       class="toolbarbutton-1 chromeclass-toolbar-additional"
                       delegatesanchor="true"
 diff --git a/browser/base/content/test/general/browser_localhost_shell.js b/browser/base/content/test/general/browser_localhost_shell.js
+index e973356..74f695e 100644
 --- a/browser/base/content/test/general/browser_localhost_shell.js
 +++ b/browser/base/content/test/general/browser_localhost_shell.js
-@@ -29,6 +29,77 @@
+@@ -29,6 +29,77 @@ add_task(async function test_appearance_bridge_contract() {
    }
  });
  
@@ -228,13 +231,14 @@ diff --git a/browser/base/content/test/general/browser_localhost_shell.js b/brow
 +  }
 +});
 +
- add_task(async function test_new_tab_uses_firefox_new_tab_url() {
+ add_task(async function test_new_tab_uses_localhost_url() {
    let win = await BrowserTestUtils.openNewBrowserWindow();
    let originalOpenTrustedLinkIn = win.openTrustedLinkIn;
 diff --git a/browser/base/content/test/keyboard/browser_toolbarKeyNav.js b/browser/base/content/test/keyboard/browser_toolbarKeyNav.js
+index 73a95be..38ceba1 100644
 --- a/browser/base/content/test/keyboard/browser_toolbarKeyNav.js
 +++ b/browser/base/content/test/keyboard/browser_toolbarKeyNav.js
-@@ -18,7 +18,7 @@
+@@ -18,7 +18,7 @@ let gCUITestUtils = new CustomizableUITestUtils(window);
  
  const PERMISSIONS_PAGE =
    "https://example.com/browser/browser/base/content/test/permissions/permissions.html";
@@ -243,7 +247,7 @@ diff --git a/browser/base/content/test/keyboard/browser_toolbarKeyNav.js b/brows
  const sidebarRevampEnabled = Services.prefs.getBoolPref(
    "sidebar.revamp",
    false
-@@ -50,23 +50,23 @@
+@@ -50,23 +50,23 @@ function AddOldMenuSideButtons() {
      document.documentElement.getAttribute("fxastatus")
    );
    document.documentElement.setAttribute("fxastatus", "signed_in");
@@ -271,7 +275,7 @@ diff --git a/browser/base/content/test/keyboard/browser_toolbarKeyNav.js b/brows
    );
  }
  
-@@ -351,6 +351,7 @@
+@@ -351,6 +351,7 @@ add_task(async function testArrowsToolbarbuttons() {
      if (!sidebarRevampEnabled) {
        await expectFocusAfterKey("ArrowRight", "sidebar-button");
      }
@@ -279,7 +283,7 @@ diff --git a/browser/base/content/test/keyboard/browser_toolbarKeyNav.js b/brows
      await expectFocusAfterKey("ArrowRight", "unified-extensions-button");
      await expectFocusAfterKey("ArrowRight", "fxa-toolbar-menu-button");
      // This next check also confirms that the overflow menu button is skipped,
-@@ -364,6 +365,7 @@
+@@ -364,6 +365,7 @@ add_task(async function testArrowsToolbarbuttons() {
      );
      await expectFocusAfterKey("ArrowLeft", "fxa-toolbar-menu-button");
      await expectFocusAfterKey("ArrowLeft", "unified-extensions-button");
@@ -287,7 +291,7 @@ diff --git a/browser/base/content/test/keyboard/browser_toolbarKeyNav.js b/brows
      if (!sidebarRevampEnabled) {
        await expectFocusAfterKey("ArrowLeft", "sidebar-button");
      }
-@@ -453,6 +455,7 @@
+@@ -453,6 +455,7 @@ add_task(async function testArrowsOverflowButton() {
      if (!sidebarRevampEnabled) {
        await expectFocusAfterKey("ArrowRight", "sidebar-button");
      }
@@ -295,7 +299,7 @@ diff --git a/browser/base/content/test/keyboard/browser_toolbarKeyNav.js b/brows
      await expectFocusAfterKey("ArrowRight", "unified-extensions-button");
      await expectFocusAfterKey("ArrowRight", "fxa-toolbar-menu-button");
      await expectFocusAfterKey("ArrowRight", "nav-bar-overflow-button");
-@@ -461,9 +464,10 @@
+@@ -461,9 +464,10 @@ add_task(async function testArrowsOverflowButton() {
      resetToolbarWithoutDevEditionButtons();
      // Flush layout so its invisibility can be detected.
      document.getElementById("nav-bar-overflow-button").clientWidth;
@@ -308,7 +312,7 @@ diff --git a/browser/base/content/test/keyboard/browser_toolbarKeyNav.js b/brows
      await expectFocusAfterKey("ArrowLeft", "fxa-toolbar-menu-button");
    });
    RemoveOldMenuSideButtons();
-@@ -503,6 +507,7 @@
+@@ -503,6 +507,7 @@ add_task(async function testArrowsRtl() {
    if (!sidebarRevampEnabled) {
      await expectFocusAfterKey("ArrowLeft", "sidebar-button");
    }
@@ -317,6 +321,7 @@ diff --git a/browser/base/content/test/keyboard/browser_toolbarKeyNav.js b/brows
    await BrowserTestUtils.disableRtlLocale();
    RemoveOldMenuSideButtons();
 diff --git a/browser/themes/shared/toolbarbutton-icons.css b/browser/themes/shared/toolbarbutton-icons.css
+index 1228119..e2ae9d3 100644
 --- a/browser/themes/shared/toolbarbutton-icons.css
 +++ b/browser/themes/shared/toolbarbutton-icons.css
 @@ -177,6 +177,14 @@
