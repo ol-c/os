@@ -23,6 +23,12 @@ Build and launch it with:
 ./launch-vm
 ```
 
+`./launch-vm` now defaults to a build-friendlier guest size of `8` vCPUs and `16384` MB RAM so Firefox source-tree work is less constrained. Override either when needed:
+
+```sh
+./launch-vm --cpus 4 --memory 8192
+```
+
 ## Firefox Build Paths
 
 ol-c uses pinned nixpkgs Firefox for both browser package paths. We do not carry a separate Firefox source or version.
@@ -31,7 +37,7 @@ ol-c uses pinned nixpkgs Firefox for both browser package paths. We do not carry
 | --- | --- | --- |
 | `.#firefox-localhost` | Normal VM and packaged browser checks | The guest can run the patched browser chrome used by `.#ol-c-image` without a full Firefox source compile. |
 | `.#firefox-localhost-source` | Final source-build compatibility gate | The repo patch still applies through the pinned nixpkgs Firefox source build pipeline. |
-| `patched-firefox` | In-VM operator loop | A developer can launch a patched runtime from the installed Firefox without evaluating the dirty `/source` flake. |
+| `olc-firefox-source` | Shared source-tree development loop | A developer can iterate in the pinned Firefox source tree with standard `mach` commands while keeping `patches/firefox/pending/` out of shipped builds. |
 
 Normal VM validation:
 
@@ -291,7 +297,7 @@ Inside the guest, confirm the running package was built by this fast path with:
 cat /run/current-system/sw/lib/firefox/ol-c-localhost-patch.txt
 ```
 
-`Ctrl+N`, `Ctrl+T`, the toolbar new-tab controls, and closing the final tab should all land on `https://localhost`. The fast package rewrites the browser chrome call sites in `browser-commands.js`, `browser.js`, and `tabbrowser.js` while leaving Firefox's global `BROWSER_NEW_TAB_URL` getter intact, so `https://localhost` keeps normal page title handling instead of being treated as Firefox's built-in new-tab page.
+`Ctrl+N`, `Ctrl+T`, the toolbar new-tab controls, and closing the final tab should all land on `https://localhost`. The fast package keeps Firefox's normal `about:newtab` / `about:home` entry points in browser chrome, redirects those pages deeper in `AboutNewTabRedirector.sys.mjs`, and keeps the last-tab reopen behavior in `tabbrowser.js`.
 
 ### 2. Full source compatibility path
 
@@ -304,23 +310,66 @@ nix build .#firefox-localhost-source --print-build-logs
 
 Keep this as the final compatibility gate for Firefox updates, source patch drift, and any patch that touches C++, Rust, WebIDL, build files, generated interfaces, preprocessing-sensitive files, or test registration.
 
-### 3. Fast Firefox source iteration
+### 3. Shared Firefox source-tree iteration
 
 Use this when you are actively changing Firefox behavior and need quick feedback.
 
+This is the recommended Firefox development loop for browser behavior work, browser chrome work, and anything where confidence in Firefox's normal `mach` flow matters.
+
 The intended inner loop is:
 - boot the normal guest and use the in-browser terminal at `https://localhost/terminal`
-- edit dev-only browser chrome patch artifacts in `/source/patches/firefox/pending`
-- run `patched-firefox` from inside the guest to launch a fast patched runtime
-- validate the behavior change in that faster loop first
+- prepare the repo-level shared cache once with `./olc-init prepare`
+- prepare the shared pinned Firefox source tree with `olc-firefox-source prepare`
+- enter the shared source tree with `olc-firefox-source shell` or run `olc-firefox-source mach ...`
+- make changes directly in that shared source tree
+- use the standard Firefox loop there: `./mach build faster`, `./mach build`, and `./mach run`
+- validate the behavior change in that source-tree loop first
 - once the behavior is correct and ready to ship, promote the patch into `patches/firefox/packaged/`
 - rerun the fast packaged path above, then use the full source compatibility path as the source-build gate
 
+For quick visible proof work, stage the change under `patches/firefox/pending/`, validate it in the shared source tree, and leave it there until it is ready to become a shipped packaged patch.
+
 The new-tab behavior is additive. It should not replace or weaken the existing last-tab reopen behavior.
 
-`patched-firefox` is intentionally an operator launch path, not a build path. It uses the installed Firefox runtime at `/run/current-system/sw/lib/firefox`, symlinks unchanged runtime files into `/var/lib/ol-c/firefox-dev`, copies only mutable `omni.ja` files, applies the known runtime-safe browser chrome patches from `/source/patches/firefox/packaged` first and then `/source/patches/firefox/pending`, repacks the archives, infers `DISPLAY=:0` when the graphical session is active, and launches a dedicated dev profile.
+The shared source workflow intentionally lives under the gitignored repo-local workspace at:
 
-The command must not run `nix build`, `nix eval`, or evaluate `/source/flake.nix`; that would copy the dirty source tree into the Nix store before Firefox can start.
+```sh
+/source/.olc-firefox/
+```
+
+Each source instance is namespaced by Firefox identity, including the Firefox version, the pinned source store hash, and the pinned `nixpkgs` revision. The helper creates:
+- a repo-local cached source archive under `.olc-firefox/cache/<identity>/firefox-....tar.xz`
+- a pristine extracted source cache under `.olc-firefox/cache/<identity>/source`
+- a writable source tree under `.olc-firefox/instances/<identity>/source`
+- a reusable objdir under `.olc-firefox/instances/<identity>/objdir`
+- a generated `mozconfig` under `.olc-firefox/instances/<identity>/mozconfig`
+- a manifest that records the exact source archive and patch stack under `.olc-firefox/instances/<identity>/manifest.env`
+
+Inspect and bootstrap the shared source tree with:
+
+```sh
+./olc-init status
+./olc-init prepare
+olc-firefox-source status
+olc-firefox-source prepare
+olc-firefox-source shell
+olc-firefox-source mach build faster
+olc-firefox-source mach run --remote-debugging-port 0 --new-window https://localhost
+```
+
+`./olc-init prepare` is the idempotent repo-level host step. It prepares reusable shared assets and is safe to run multiple times. Today that means copying the exact pinned Firefox source tarball into `.olc-firefox/cache/<identity>/`, then extracting it once into the pristine cache there. The first run may still show Nix fetching that tarball into the local machine's `/nix/store`; after that, host and child VMs reuse the repo-local cached copy under `/source`.
+
+`olc-firefox-source status` is cheap: it resolves the pinned Firefox identity and reports whether the repo-local cached archive, the pristine cache, and the working instance already exist. `olc-firefox-source prepare` copies the pristine cached source tree into the working instance, applies `patches/firefox/packaged/` first and `patches/firefox/pending/` second with the standard `patch` tool, and reuses the same objdir across host and child VMs because the workspace lives under the shared `/source` mount.
+
+`olc-firefox-source shell` and `olc-firefox-source mach ...` automatically re-enter a second pinned Nix environment from `.#firefox-source`. That shell carries Firefox build-time host tools such as Python, LLVM tools, the nixpkgs WASI cross compiler and sysroot, `pkg-config`, and ALSA metadata, while still operating on the same shared source tree and objdir under `.olc-firefox/`.
+
+The helper warns when the current repo patch fingerprint differs from the existing shared source instance. Rebuild that shared tree from the current repo patch stack with:
+
+```sh
+olc-firefox-source recreate
+```
+
+The current dev-loop proof patch is `patches/firefox/pending/0003-add-plugin-button-dev-icon.patch`. It adds a dev-only appearance toggle button beside the unified extensions button, with a sun icon in light mode and a moon icon in dark mode, so the recommended shared source-tree loop has an obvious visible result while keeping the packaged VM build unchanged.
 
 ### Updating the repo patch
 
@@ -328,14 +377,14 @@ The packaged Firefox change in this repo lives at:
 - `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`
 - `patches/firefox/packaged/0002-hide-sync-fxa-ui.patch`
 
-The dev-only fast-loop directory is:
+The dev-only patch staging directory is:
 - `patches/firefox/pending/`
 
 The Nix packaging entry point is:
 - `flake.nix` package `.#firefox-localhost`
 - `flake.nix` package `.#firefox-localhost-source`
 
-Only patches in `patches/firefox/packaged/` are included in the normal packaged VM build. Files under `patches/firefox/pending/` are reserved for `patched-firefox` validation work and must not affect `./launch-vm`.
+Only patches in `patches/firefox/packaged/` are included in the normal packaged VM build. Files under `patches/firefox/pending/` are reserved for shared source-tree validation work and must not affect `./launch-vm`.
 
 When the Firefox source change is validated, update the packaged patch file, rerun the fast packaged build and launch flow above, run the full source compatibility path when the patch or Firefox version changes, and keep `tests/test-build-vm.sh` aligned with the expected packaging contract.
 

@@ -46,7 +46,7 @@ Success criteria:
 - Build and launch behavior are predictable.
 - Rebuild versus reuse behavior is explicit.
 - Fast iteration does not undermine reproducibility.
-- `patched-firefox` or the source-tree loop records the exact Firefox and `nixpkgs` identity being tested.
+- The source-tree loop records the exact Firefox and `nixpkgs` identity being tested.
 - A developer can validate Firefox behavior in the guest before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`.
 - The packaged build remains the gate for what ships.
 
@@ -174,13 +174,17 @@ Active milestone:
 - Milestone 6.
 
 Immediate next task:
-- Record the exact Firefox and `nixpkgs` identity for `patched-firefox` runs so developers can prove what runtime they validated before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`.
+- Use the proven shared Firefox source-tree workflow for fast browser-chrome iteration while keeping packaged Firefox builds blind to dev-only pending patches.
 
 Current Milestone 6 direction:
-- `patched-firefox` is the one-command in-VM operator path for launching a patched Firefox from the installed runtime.
-- Normal VM launch and pending Firefox patch testing stay separate: `./launch-vm` boots the packaged system from `patches/firefox/packaged`, while `patched-firefox` applies `packaged` first and `pending` second.
-- `patched-firefox` must not evaluate the dirty local `/source` flake on its launch path.
-- The fast path should reuse the installed runtime, symlink unchanged files, and rebuild only mutable `omni.ja` assets.
+- Make the standard Firefox source-tree loop the primary development path for Firefox behavior changes.
+- Keep the inner iteration loop fast: edit the shared source tree first, rebuild and relaunch the source-built browser, and only refresh repo patch artifacts after the UI is validated.
+- Use a repo-level init step to prepare reusable shared Firefox assets safely on any host.
+- Keep a pristine pinned Firefox source cache and the writable per-instance source trees under the shared repo-local gitignored workspace so host and child VMs can reuse build work.
+- Apply `patches/firefox/packaged` first and `patches/firefox/pending` second onto that shared source tree.
+- Keep the packaged Nix build and source-build paths as the gates for what ships.
+- Use `olc-firefox-source` as the one-command in-VM entrypoint for shared Firefox source work.
+- Normal VM launch and pending Firefox patch testing stay separate: `./launch-vm` boots the packaged system from `patches/firefox/packaged`, while `olc-firefox-source` applies `packaged` first and `pending` second in the shared source tree.
 - Packaged Firefox patches live under `patches/firefox/packaged/`; dev-only fast-loop patches live under `patches/firefox/pending/`.
 - Keep the packaged Nix paths explicitly blind to `patches/firefox/pending` in tests.
 
@@ -192,6 +196,7 @@ Parallel Milestone 6 track:
 - Prefer a parent-to-child Firefox BiDi bridge for page-level control of a child VM's browser session; keep `olc-vmctl` as the lower-level fallback for raw input and screenshots.
 
 Related design notes:
+- `docs/firefox-source-workflow-plan.md` holds the current shared source-tree workflow plan.
 - `docs/host-driven-vm-operator-plan.md` holds the current operator-proof plan.
 
 # Validation Status
@@ -203,7 +208,13 @@ Related design notes:
   - `bash tests/test-build-vm.sh`
   - `bash tests/test-launch-vm.sh`
   - `bash tests/test-build-firefox-remote.sh`
-  - `bash tests/test-olc-firefox-dev.sh`
+  - `bash tests/test-firefox-localhost-patch.sh`
+  - `bash tests/test-olc-firefox-source.sh`
+- The recommended shared source-tree loop is documented in `README.md` and `docs/firefox-source-workflow-plan.md`.
+- The current dev-only proof patch adds an appearance toggle button beside the unified extensions button from `patches/firefox/pending/0003-add-plugin-button-dev-icon.patch`.
+- A full standard source build succeeded with `./olc-firefox-source mach build -j 1`, and the source-built browser launched successfully as `Mozilla Firefox 149.0.2`.
+- Incremental browser-chrome rebuilds succeed with `./olc-firefox-source mach build faster`.
+- The current pending proof patch dry-runs cleanly against a packaged-only source baseline before it is refreshed in the repo.
 - `./build-vm` succeeds.
 - `./launch-vm` boots to the graphical browser surface and loads the localhost UI.
 - The packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`.
@@ -215,6 +226,16 @@ Related design notes:
 In-VM validation:
 - If Codex is running inside the ol-c guest and `/source` is the `ol-c-source` `virtiofs` mount, treat edits as host-synced repo edits and validate browser-surface work directly in the guest.
 - When a graphical Firefox session is live in the guest, local tools such as `xdotool` may be used for validation.
+
+Standard Firefox source loop notes:
+- Treat the shared source tree under `.olc-firefox/instances/.../source` as the fast working area. For UI iteration, edit that tree first instead of editing `patches/firefox/pending/*.patch` by hand.
+- The fast inner loop in this VM is: edit the shared source tree, run `./olc-firefox-source mach build faster`, then relaunch the source-built browser with `DISPLAY=:0 XAUTHORITY=/home/jason/.Xauthority ./olc-firefox-source mach run -- --new-window about:blank`.
+- Keep patch refresh separate from visual iteration. Once the browser UI looks correct, regenerate or refresh the pending patch from the live source diff, then rerun `bash tests/test-olc-firefox-source.sh` and `bash tests/test-firefox-localhost-patch.sh`.
+- If `olc-firefox-source` warns that the existing instance uses a different patch fingerprint, that warning is expected after repo patch edits. Use `olc-firefox-source recreate` only when the shared source tree itself must be rebuilt from the repo patch stack; avoid it during rapid live-source iteration.
+- `mach run` from this shell does not inherit the desktop session automatically. A `no DISPLAY environment variable specified` failure is an environment issue here, not a Firefox build failure.
+- Full clean source builds are much heavier than the fast loop in this VM. Prefer low parallelism such as `CARGO_BUILD_JOBS=2 ./olc-firefox-source mach build -j 2` or `./olc-firefox-source mach build -j 1` for clean proof builds; earlier higher-parallel runs were killed by OOM during mixed Rust and C++ compilation.
+- The shared source loop currently depends on the repo defaults that keep Firefox on the standard Clang/lld toolchain, normalize `AS` and `HOST_AS` away from raw `as`, and keep WASI linker flags from leaking into native link steps.
+- Firefox browser-chrome Mochitest runs were not a dependable signal in this VM session because startup automation failed before the test body ran due to missing `DISPLAY`, leftover Mochitest helper processes and ports after failed runs, and a later Marionette startup error. For now, treat the shared source build, patch dry-run, repo shell guards, and live source-built browser behavior as the reliable Milestone 6 validation loop here.
 
 Host-driven live analysis:
 - A parent ol-c guest can act as the effective host operator for a nested child VM by launching `olc-launch-test-vm`, opening the printed reconnect URL, and keeping that viewer open as the observation surface.
@@ -244,7 +265,6 @@ These decisions should be made when a later milestone actually requires them.
 
 These are non-priority tasks we can pick up any time as an option for the next thing to do, but are not pressing
 - Current select boxes like mute and light/dark mode should be toggle buttons with appropriate unicode icons
-- highlight URL bar when opening new tab (this was a regression from default behavior)
 - Ctrl+S crashes firefox
 - Future paste-into-VM fix: copy out of the browser-launched VM already works well. Paste should keep using the existing noVNC plus QEMU `qemu-vdagent` clipboard path, but keyboard paste needs to intercept `Ctrl+V` and host `Cmd+V` in capture phase before noVNC handles them, read host clipboard text during that user gesture, call `rfb.clipboardPasteFrom(text)`, then synthesize guest `Ctrl+V` so the active guest app actually pastes. Browser clipboard reads may be permission or prompt gated, so failure should show a concise hint.
 - Ctrl+Shift+C should not open dev tools in vm, we should make that copy

@@ -69,7 +69,7 @@ The operator service should support a narrow hybrid model, not only GUI playback
 Mode 1: `shell`
 
 - run a command or script as the active signed-in user
-- use this for fast, deterministic work such as editing files, running tests, checking logs, launching `patched-firefox`, or opening a terminal tab
+- use this for fast, deterministic work such as editing files, running tests, checking logs, launching `olc-firefox-source mach run`, or opening a terminal tab
 
 Mode 2: `gui`
 

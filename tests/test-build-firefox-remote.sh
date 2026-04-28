@@ -759,6 +759,8 @@ test_script_documents_archive_excludes() {
   contents="$(cat "${REMOTE_BUILD}")"
 
   assert_contains "$contents" "--exclude='./.git'"
+  assert_contains "$contents" "--exclude='./.olc-firefox'"
+  assert_contains "$contents" "--exclude='./.olc-debug'"
   assert_contains "$contents" "--exclude='./terminal-client/node_modules'"
   assert_contains "$contents" "--exclude='./result'"
   assert_contains "$contents" "--exclude='./result-*'"

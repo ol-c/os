@@ -1,0 +1,336 @@
+diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
+--- a/browser/base/content/browser.js
++++ b/browser/base/content/browser.js
+@@ -429,6 +429,131 @@
+ 
+ gSecureOSAppearanceBridge.init();
+ 
++var gSecureOSAppearanceToolbarButton = {
++  _button: null,
++  _togglePromise: null,
++  _initialized: false,
++  _waitingForLoad: false,
++  themePref: "extensions.activeThemeID",
++
++  init() {
++    if (this._initialized) {
++      return;
++    }
++
++    if (!this.bindButton()) {
++      if (!this._waitingForLoad) {
++        this._waitingForLoad = true;
++        window.addEventListener("DOMContentLoaded", this, { once: true });
++      }
++      return;
++    }
++
++    this._initialized = true;
++    Services.prefs.addObserver(this.themePref, this);
++    window.addEventListener("unload", this, { once: true });
++    this.syncButton();
++  },
++
++  bindButton() {
++    if (this._button) {
++      return true;
++    }
++
++    this._button = document.getElementById("olc-dev-build-button");
++    if (!this._button) {
++      return false;
++    }
++
++    this._button.addEventListener("command", this);
++    this._waitingForLoad = false;
++    return true;
++  },
++
++  uninit() {
++    if (this._waitingForLoad) {
++      window.removeEventListener("DOMContentLoaded", this);
++      this._waitingForLoad = false;
++    }
++
++    if (!this._initialized) {
++      return;
++    }
++
++    this._initialized = false;
++    Services.prefs.removeObserver(this.themePref, this);
++    if (this._button) {
++      this._button.removeEventListener("command", this);
++    }
++    this._button = null;
++  },
++
++  currentMode() {
++    return gSecureOSAppearanceBridge.currentMode();
++  },
++
++  nextMode() {
++    return this.currentMode() == "dark" ? "light" : "dark";
++  },
++
++  labelForMode(mode) {
++    return mode == "dark" ? "Switch to light mode" : "Switch to dark mode";
++  },
++
++  syncButton() {
++    if (!this._button) {
++      return;
++    }
++
++    let mode = this.currentMode();
++    this._button.setAttribute("olc-appearance-mode", mode);
++    this._button.setAttribute("aria-label", this.labelForMode(mode));
++    this._button.setAttribute("tooltiptext", this.labelForMode(mode));
++    this._button.setAttribute("aria-pressed", mode == "dark" ? "true" : "false");
++  },
++
++  async toggle() {
++    if (this._togglePromise) {
++      return this._togglePromise;
++    }
++
++    this._button?.setAttribute("disabled", "true");
++    this._togglePromise = gSecureOSAppearanceBridge
++      .setMode(this.nextMode())
++      .catch(error => {
++        Cu.reportError(error);
++      })
++      .finally(() => {
++        this._button?.removeAttribute("disabled");
++        this._togglePromise = null;
++        this.syncButton();
++      });
++    return this._togglePromise;
++  },
++
++  handleEvent(event) {
++    switch (event.type) {
++      case "DOMContentLoaded":
++        this.init();
++        break;
++      case "command":
++        this.toggle();
++        break;
++      case "unload":
++        this.uninit();
++        break;
++    }
++  },
++
++  observe(subject, topic, prefName) {
++    if (topic == "nsPref:changed" && prefName == this.themePref) {
++      this.syncButton();
++    }
++  },
++};
++
++gSecureOSAppearanceToolbarButton.init();
++
+ const SECUREOS_FXA_SYNC_UI_STYLE_ID = "olc-fxa-sync-ui-style";
+ 
+ var gSecureOSFxaSyncUi = {
+diff --git a/browser/base/content/navigator-toolbox.inc.xhtml b/browser/base/content/navigator-toolbox.inc.xhtml
+--- a/browser/base/content/navigator-toolbox.inc.xhtml
++++ b/browser/base/content/navigator-toolbox.inc.xhtml
+@@ -467,6 +467,13 @@
+                   </hbox>
+       </toolbarbutton>
+ 
++      <toolbarbutton id="olc-dev-build-button"
++                     class="toolbarbutton-1 chromeclass-toolbar-additional"
++                     aria-label="Switch to dark mode"
++                     tooltiptext="Switch to dark mode"
++                     olc-appearance-mode="light"
++                     overflows="false"
++                     removable="false"/>
+       <toolbarbutton id="unified-extensions-button"
+                      class="toolbarbutton-1 chromeclass-toolbar-additional"
+                      delegatesanchor="true"
+diff --git a/browser/base/content/test/general/browser_localhost_shell.js b/browser/base/content/test/general/browser_localhost_shell.js
+--- a/browser/base/content/test/general/browser_localhost_shell.js
++++ b/browser/base/content/test/general/browser_localhost_shell.js
+@@ -29,6 +29,77 @@
+   }
+ });
+ 
++add_task(async function test_appearance_toolbar_button_toggles_theme() {
++  let win = await BrowserTestUtils.openNewBrowserWindow();
++
++  try {
++    let button = win.document.getElementById("olc-dev-build-button");
++    ok(button, "The SecureOS appearance toolbar button should exist");
++    ok(
++      win.gSecureOSAppearanceToolbarButton,
++      "The SecureOS appearance toolbar controller should be available"
++    );
++    await TestUtils.waitForCondition(
++      () =>
++        win.gSecureOSAppearanceToolbarButton._initialized &&
++        win.gSecureOSAppearanceToolbarButton._button == button,
++      "Expected the appearance toolbar controller to bind to the toolbar button"
++    );
++
++    let originalMode = win.gSecureOSAppearanceBridge.currentMode();
++    let toggledMode = originalMode == "dark" ? "light" : "dark";
++    let originalAction =
++      originalMode == "dark"
++        ? "Switch to light mode"
++        : "Switch to dark mode";
++    let toggledAction =
++      toggledMode == "dark"
++        ? "Switch to light mode"
++        : "Switch to dark mode";
++
++    is(
++      button.getAttribute("olc-appearance-mode"),
++      originalMode,
++      "The toolbar button should reflect the current appearance mode"
++    );
++    is(
++      button.getAttribute("tooltiptext"),
++      originalAction,
++      "The toolbar button should advertise the next appearance mode"
++    );
++
++    button.click();
++
++    await TestUtils.waitForCondition(
++      () => win.gSecureOSAppearanceBridge.currentMode() == toggledMode,
++      "Expected the toolbar button to toggle the browser appearance mode"
++    );
++    await TestUtils.waitForCondition(
++      () => button.getAttribute("olc-appearance-mode") == toggledMode,
++      "Expected the toolbar button icon state to follow the new appearance mode"
++    );
++
++    is(
++      button.getAttribute("tooltiptext"),
++      toggledAction,
++      "The toolbar button should update its next-mode label after toggling"
++    );
++    is(
++      button.getAttribute("aria-pressed"),
++      toggledMode == "dark" ? "true" : "false",
++      "The toolbar button should expose whether dark mode is active"
++    );
++
++    await win.gSecureOSAppearanceBridge.setMode(originalMode);
++    await TestUtils.waitForCondition(
++      () => button.getAttribute("olc-appearance-mode") == originalMode,
++      "Expected the toolbar button to restore the original appearance state"
++    );
++  } finally {
++    await BrowserTestUtils.closeWindow(win);
++  }
++});
++
+ add_task(async function test_new_tab_uses_firefox_new_tab_url() {
+   let win = await BrowserTestUtils.openNewBrowserWindow();
+   let originalOpenTrustedLinkIn = win.openTrustedLinkIn;
+diff --git a/browser/base/content/test/keyboard/browser_toolbarKeyNav.js b/browser/base/content/test/keyboard/browser_toolbarKeyNav.js
+--- a/browser/base/content/test/keyboard/browser_toolbarKeyNav.js
++++ b/browser/base/content/test/keyboard/browser_toolbarKeyNav.js
+@@ -18,7 +18,7 @@
+ 
+ const PERMISSIONS_PAGE =
+   "https://example.com/browser/browser/base/content/test/permissions/permissions.html";
+-const afterUrlBarButton = "fxa-toolbar-menu-button";
++const afterUrlBarButton = "olc-dev-build-button";
+ const sidebarRevampEnabled = Services.prefs.getBoolPref(
+   "sidebar.revamp",
+   false
+@@ -50,23 +50,23 @@
+     document.documentElement.getAttribute("fxastatus")
+   );
+   document.documentElement.setAttribute("fxastatus", "signed_in");
+-  // The FxA button is supposed to be last, add these buttons before it.
++  // Keep the appearance toggle immediately before unified extensions.
+   CustomizableUI.addWidgetToArea(
+     "library-button",
+     "nav-bar",
+-    CustomizableUI.getWidgetIdsInArea("nav-bar").length - 3
++    CustomizableUI.getPlacementOfWidget("olc-dev-build-button").position
+   );
+   if (!sidebarRevampEnabled) {
+     CustomizableUI.addWidgetToArea(
+       "sidebar-button",
+       "nav-bar",
+-      CustomizableUI.getWidgetIdsInArea("nav-bar").length - 3
++      CustomizableUI.getPlacementOfWidget("olc-dev-build-button").position
+     );
+   }
+   CustomizableUI.addWidgetToArea(
+     "unified-extensions-button",
+     "nav-bar",
+-    CustomizableUI.getWidgetIdsInArea("nav-bar").length - 3
++    CustomizableUI.getPlacementOfWidget("olc-dev-build-button").position + 1
+   );
+ }
+ 
+@@ -351,6 +351,7 @@
+     if (!sidebarRevampEnabled) {
+       await expectFocusAfterKey("ArrowRight", "sidebar-button");
+     }
++    await expectFocusAfterKey("ArrowRight", "olc-dev-build-button");
+     await expectFocusAfterKey("ArrowRight", "unified-extensions-button");
+     await expectFocusAfterKey("ArrowRight", "fxa-toolbar-menu-button");
+     // This next check also confirms that the overflow menu button is skipped,
+@@ -364,6 +365,7 @@
+     );
+     await expectFocusAfterKey("ArrowLeft", "fxa-toolbar-menu-button");
+     await expectFocusAfterKey("ArrowLeft", "unified-extensions-button");
++    await expectFocusAfterKey("ArrowLeft", "olc-dev-build-button");
+     if (!sidebarRevampEnabled) {
+       await expectFocusAfterKey("ArrowLeft", "sidebar-button");
+     }
+@@ -453,6 +455,7 @@
+     if (!sidebarRevampEnabled) {
+       await expectFocusAfterKey("ArrowRight", "sidebar-button");
+     }
++    await expectFocusAfterKey("ArrowRight", "olc-dev-build-button");
+     await expectFocusAfterKey("ArrowRight", "unified-extensions-button");
+     await expectFocusAfterKey("ArrowRight", "fxa-toolbar-menu-button");
+     await expectFocusAfterKey("ArrowRight", "nav-bar-overflow-button");
+@@ -461,9 +464,10 @@
+     resetToolbarWithoutDevEditionButtons();
+     // Flush layout so its invisibility can be detected.
+     document.getElementById("nav-bar-overflow-button").clientWidth;
+-    // We reset the toolbar above so the unified extensions button is now the
+-    // "last" button.
++    // We reset the toolbar above so the appearance toggle and unified
++    // extensions buttons are back in their default positions.
+     await expectFocusAfterKey("ArrowLeft", "unified-extensions-button");
++    await expectFocusAfterKey("ArrowLeft", "olc-dev-build-button");
+     await expectFocusAfterKey("ArrowLeft", "fxa-toolbar-menu-button");
+   });
+   RemoveOldMenuSideButtons();
+@@ -503,6 +507,7 @@
+   if (!sidebarRevampEnabled) {
+     await expectFocusAfterKey("ArrowLeft", "sidebar-button");
+   }
++  await expectFocusAfterKey("ArrowLeft", "olc-dev-build-button");
+   await expectFocusAfterKey("ArrowLeft", "unified-extensions-button");
+   await BrowserTestUtils.disableRtlLocale();
+   RemoveOldMenuSideButtons();
+diff --git a/browser/themes/shared/toolbarbutton-icons.css b/browser/themes/shared/toolbarbutton-icons.css
+--- a/browser/themes/shared/toolbarbutton-icons.css
++++ b/browser/themes/shared/toolbarbutton-icons.css
+@@ -177,6 +177,14 @@
+   list-style-image: url("chrome://mozapps/skin/extensions/extension.svg");
+ }
+ 
++#olc-dev-build-button[olc-appearance-mode="light"] {
++  list-style-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='3' fill='context-fill'/%3E%3Cg stroke='context-fill' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M8 1.5v2'/%3E%3Cpath d='M8 12.5v2'/%3E%3Cpath d='M1.5 8h2'/%3E%3Cpath d='M12.5 8h2'/%3E%3Cpath d='M3.4 3.4l1.4 1.4'/%3E%3Cpath d='M11.2 11.2l1.4 1.4'/%3E%3Cpath d='M12.6 3.4l-1.4 1.4'/%3E%3Cpath d='M4.8 11.2l-1.4 1.4'/%3E%3C/g%3E%3C/svg%3E");
++}
++
++#olc-dev-build-button[olc-appearance-mode="dark"] {
++  list-style-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='context-fill' d='M11.8 10.7A5.85 5.85 0 0 1 5.3 4.2 6 6 0 1 0 11.8 10.7Z'/%3E%3C/svg%3E");
++}
++
+ #reset-pbm-toolbar-button {
+   list-style-image: url("chrome://browser/skin/flame.svg");
+ }

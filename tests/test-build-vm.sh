@@ -202,7 +202,7 @@ test_structural_contracts() {
   [[ "$session" == *'bidi.env'* && "$session" == *'WebDriver BiDi listening on'* ]] || fail "expected the graphical Firefox session to publish a BiDi endpoint record"
 
   [[ "$development" == *"trusted-users = [ \"root\" \"@wheel\" ];"* ]] || fail "expected development nix trust to follow wheel users"
-  [[ "$development" == *"d /var/lib/ol-c/firefox-dev 0775 root olc-admin -"* ]] || fail "expected Firefox dev workspace to belong to olc-admin"
+  [[ "$development" != *"d /var/lib/ol-c/firefox-dev 0775 root olc-admin -"* ]] || fail "expected the retired Firefox runtime workspace to be removed from the development profile"
   [[ "$development" == *"d /var/lib/ol-c/vms 0775 root olc-admin -"* ]] || fail "expected nested VM workspace to belong to olc-admin"
   [[ "$development" == *'OLC_DEFAULT_NOVNC_DIR'* ]] || fail "expected nested VM launches to inherit a default noVNC path"
   [[ "$development" == *'OLC_DEFAULT_QEMU_BIN'* ]] || fail "expected nested VM launches to inherit a default patched QEMU path"

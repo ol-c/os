@@ -242,6 +242,20 @@
         inherit system;
         overlays = [ firefoxSourceOverlay ];
       };
+      firefoxWasiSysRoot = firefoxSourcePkgs.runCommand "olc-firefox-source-wasi-sysroot" { } ''
+        mkdir -p $out/lib/wasm32-wasi
+        for lib in ${firefoxSourcePkgs.pkgsCross.wasi32.llvmPackages.libcxx}/lib/*; do
+          ln -s $lib $out/lib/wasm32-wasi
+        done
+      '';
+      firefoxWasmCc = firefoxSourcePkgs.writeShellScriptBin "olc-firefox-source-wasm-cc" ''
+        unset NIX_LDFLAGS
+        exec ${firefoxSourcePkgs.pkgsCross.wasi32.stdenv.cc}/bin/${firefoxSourcePkgs.pkgsCross.wasi32.stdenv.cc.targetPrefix}cc "$@"
+      '';
+      firefoxWasmCxx = firefoxSourcePkgs.writeShellScriptBin "olc-firefox-source-wasm-cxx" ''
+        unset NIX_LDFLAGS
+        exec ${firefoxSourcePkgs.pkgsCross.wasi32.stdenv.cc}/bin/${firefoxSourcePkgs.pkgsCross.wasi32.stdenv.cc.targetPrefix}c++ "$@"
+      '';
       qemuPkgs = import nixpkgs {
         inherit system;
         overlays = [ qemuInputOverlay ];
@@ -266,6 +280,32 @@
         novnc = basePkgs.novnc;
         qemu-olc = qemuPkgs.qemu_kvm;
         "ol-c-image" = self.nixosConfigurations."ol-c".config.system.build.images.qemu;
+      };
+
+      devShells.${system}.firefox-source = firefoxSourcePkgs.mkShell {
+        inputsFrom = [ firefoxSourcePkgs.firefox-unwrapped ];
+        packages = with firefoxSourcePkgs; [
+          python3
+          llvm
+          clang
+          llvmPackages.libclang
+          pkg-config
+          alsa-lib
+        ];
+        LIBCLANG_PATH = "${firefoxSourcePkgs.llvmPackages.libclang.lib}/lib";
+        WASM_CC = "${firefoxWasmCc}/bin/olc-firefox-source-wasm-cc";
+        WASM_CXX = "${firefoxWasmCxx}/bin/olc-firefox-source-wasm-cxx";
+        OLC_FIREFOX_WASI_SYSROOT = "${firefoxWasiSysRoot}";
+        MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE = "system";
+        MOZ_NOSPAM = "1";
+        shellHook = ''
+          export CC="${firefoxSourcePkgs.clang}/bin/clang"
+          export CXX="${firefoxSourcePkgs.clang}/bin/clang++"
+          export HOST_CC="''${HOST_CC:-$CC}"
+          export HOST_CXX="''${HOST_CXX:-$CXX}"
+          export AS="$CC"
+          export HOST_AS="$HOST_CC"
+        '';
       };
     };
 }

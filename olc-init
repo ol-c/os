@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+FIREFOX_SOURCE_HELPER="${ROOT_DIR}/olc-firefox-source"
+
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+need_cmd bash
+
+[ -x "$FIREFOX_SOURCE_HELPER" ] || die "required repo helper not found: $FIREFOX_SOURCE_HELPER"
+
+usage() {
+  cat <<'EOF'
+usage: olc-init <command>
+
+Commands:
+  status    Show repo init status for reusable shared assets.
+  prepare   Prepare reusable shared assets for this repo. Safe to run repeatedly.
+EOF
+}
+
+print_status() {
+  cat <<EOF
+repo_root: ${ROOT_DIR}
+firefox_source_cache:
+EOF
+  "$FIREFOX_SOURCE_HELPER" status
+}
+
+prepare_repo() {
+  "$FIREFOX_SOURCE_HELPER" prepare-cache
+}
+
+case "${1:-status}" in
+  status)
+    print_status
+    ;;
+  prepare)
+    prepare_repo
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac

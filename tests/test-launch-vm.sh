@@ -434,6 +434,32 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   cleanup_case
 }
 
+test_uses_build_friendly_default_resources() {
+  local output qemu_args
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_FAKE_QEMU_EXIT_EARLY=1 \
+      OLC_FAKE_VM_SCREEN_WAIT=1 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}"
+  )"
+  set -e
+
+  qemu_args="$(safe_cat "${CASE_TMP}/qemu.args")"
+  assert_contains "$qemu_args" "-smp 8"
+  assert_contains "$qemu_args" "-m 16384"
+  assert_contains "$qemu_args" "-object memory-backend-memfd,id=olc-mem,size=16384M,share=on"
+  assert_contains "$output" "runtime disk size: 64G"
+  cleanup_case
+}
+
 test_does_not_write_runtime_metadata() {
   local runtime_dir launch_log launcher_pid
   setup_case
@@ -898,6 +924,7 @@ test_requires_virtiofsd
 test_requires_kvm_by_default
 test_requires_source_directory_create_permissions
 test_invokes_qemu_with_expected_browser_args_by_default
+test_uses_build_friendly_default_resources
 test_resolves_nixpkgs_novnc_webapp_layout
 test_explicit_vm_image_skips_build
 test_missing_explicit_vm_image_fails

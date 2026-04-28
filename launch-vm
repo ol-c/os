@@ -6,8 +6,8 @@ usage() {
 Usage: launch-vm [options]
 
 Options:
-  --cpus N          Guest vCPU count. Default: 2.
-  --memory MB       Guest memory in megabytes. Default: 4096.
+  --cpus N          Guest vCPU count. Default: 8.
+  --memory MB       Guest memory in megabytes. Default: 16384.
   --help            Show this help text.
 
 Environment:
@@ -318,8 +318,8 @@ wait_for_vm_ready() {
   exit 1
 }
 
-CPUS=2
-MEMORY_MB=4096
+CPUS=8
+MEMORY_MB=16384
 LAUNCH_STARTED_MS="$(epoch_ms)"
 VM_SCREEN_OPEN_BROWSER="${OLC_VM_SCREEN_OPEN_BROWSER:-1}"
 VM_SCREEN_PORT="${OLC_VM_SCREEN_PORT:-0}"

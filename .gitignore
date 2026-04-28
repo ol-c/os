@@ -2,4 +2,6 @@
 !.gitignore
 /result
 /result-*
+.olc-firefox/
 *.log
+a.out

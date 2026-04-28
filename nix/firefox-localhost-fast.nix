@@ -9,6 +9,7 @@ in {
     nativeBuildInputs = [
       prev.patch
       prev.patchutils
+      prev.perl
       prev.unzip
       prev.zip
     ];
@@ -154,58 +155,125 @@ in {
       printf '%s\n' "$applied_omni" > "$work_dir/''${basename}.applied-omni"
     }
 
-    apply_source_patch_to_runtime_asset \
-      "$localhost_patch" \
-      browser/base/content/browser-commands.js \
-      browser-commands.js \
-      'url ??= SECUREOS_LOCALHOST_URL'
-
-    browser_commands_omni_path="$(cat "$work_dir/browser-commands.js.applied-path")"
-    browser_commands_omni="$(cat "$work_dir/browser-commands.js.applied-omni")"
-    browser_commands_extract_dir=""
+    redirector_omni_path=""
+    redirector_omni=""
+    redirector_extract_dir=""
     for entry in "''${extracted_omnis[@]}"; do
       omni="''${entry%%:*}"
-      if [ "$omni" = "$browser_commands_omni" ]; then
-        browser_commands_extract_dir="''${entry#*:}"
-      fi
+      extract_dir="''${entry#*:}"
+      while IFS= read -r candidate_path; do
+        if [ -n "$redirector_omni_path" ]; then
+          echo "error: found multiple AboutNewTabRedirector.sys.mjs runtime assets:" >&2
+          echo "  $redirector_omni:$redirector_omni_path" >&2
+          echo "  $omni:$candidate_path" >&2
+          exit 1
+        fi
+        redirector_omni="$omni"
+        redirector_omni_path="$candidate_path"
+        redirector_extract_dir="$extract_dir"
+      done < <(
+        find "$extract_dir" -type f -path '*/AboutNewTabRedirector.sys.mjs' \
+          | sed "s#^$extract_dir/##" \
+          | LC_ALL=C sort
+      )
     done
-    if [ -z "$browser_commands_extract_dir" ]; then
-      echo "error: patched Firefox browser-commands runtime asset lost its extracted omni directory: $browser_commands_omni:$browser_commands_omni_path" >&2
-      exit 1
-    fi
-    if grep -Fq 'url ??= BROWSER_NEW_TAB_URL;' "$browser_commands_extract_dir/$browser_commands_omni_path"; then
-      echo "error: patched Firefox browser commands runtime asset can still default new tabs to Firefox's stock new-tab URL: $browser_commands_omni:$browser_commands_omni_path" >&2
+    if [ -z "$redirector_omni_path" ] || [ -z "$redirector_extract_dir" ]; then
+      echo "error: failed to locate AboutNewTabRedirector.sys.mjs in extracted Firefox runtime" >&2
       exit 1
     fi
 
-    apply_source_patch_to_runtime_asset \
-      "$localhost_patch" \
-      browser/components/tabbrowser/content/tabbrowser.js \
-      tabbrowser.js \
-      'this.addTrustedTab(SECUREOS_LOCALHOST_URL'
+    redirector_runtime="$redirector_extract_dir/$redirector_omni_path"
+    cat > "$work_dir/patch-redirector-runtime.pl" <<'PERL'
+use strict;
+use warnings;
 
-    tabbrowser_omni_path="$(cat "$work_dir/tabbrowser.js.applied-path")"
-    tabbrowser_omni="$(cat "$work_dir/tabbrowser.js.applied-omni")"
+my $path = shift @ARGV or die "missing runtime path\n";
+local $/ = undef;
+open my $in, '<', $path or die "failed to read $path: $!\n";
+my $text = <$in>;
+close $in;
+
+my $count = ($text =~ s/const PREF_NEWTAB_SELF_LOADING =\n  "browser\.newtabpage\.activity-stream\.selfLoading\.enabled";\n/const PREF_NEWTAB_SELF_LOADING =\n  "browser.newtabpage.activity-stream.selfLoading.enabled";\n\nconst SECUREOS_LOCALHOST_URL = "https:\/\/localhost";\n/s);
+die "failed to insert localhost redirect constant into $path\n" unless $count == 1;
+
+$count = ($text =~ s/if \(\n      uri\.spec\.startsWith\("about:home"\) \|\|\n      \(uri\.spec\.startsWith\("about:newtab"\) && lazy\.BUILTIN_NEWTAB_ENABLED\)\n    \) \{\n      chromeURI = Services\.io\.newURI\(this\.defaultURL\);\n    \}/if (uri.spec.startsWith("about:home") || uri.spec.startsWith("about:newtab")) {\n      chromeURI = Services.io.newURI(SECUREOS_LOCALHOST_URL);\n    }/s);
+die "failed to replace parent redirect block in $path\n" unless $count == 1;
+
+$count = ($text =~ s/if \(uri\.spec\.startsWith\("about:home"\)\) \{\n      let cacheChannel = AboutHomeStartupCacheChild\.maybeGetCachedPageChannel\(\n        uri,\n        loadInfo\n      \);\n      if \(cacheChannel\) \{\n        return cacheChannel;\n      \}\n      pageURI = Services\.io\.newURI\(this\.defaultURL\);\n    \} else \{\n      \/\/ The only other possibility is about:newtab\.\n      \/\/\n      \/\/ If about:newtab is being requested, then any subsequent request for\n      \/\/ about:home should _never_ request the cache \(which might be woefully\n      \/\/ out of date compared to about:newtab\), so we disqualify the cache if\n      \/\/ it still happens to be around\.\n      AboutHomeStartupCacheChild\.disqualifyCache\(\);\n\n      if \(lazy\.BUILTIN_NEWTAB_ENABLED\) \{\n        pageURI = Services\.io\.newURI\(this\.defaultURL\);\n      \} else \{\n        pageURI = this\.getChromeURI\(uri\);\n      \}\n    \}/if (uri.spec.startsWith("about:home") || uri.spec.startsWith("about:newtab")) {\n      \/\/ Keep browser chrome on the built-in about:newtab\/about:home path so\n      \/\/ default behaviors like urlbar focus still trigger, while the content\n      \/\/ load resolves to the SecureOS localhost shell.\n      AboutHomeStartupCacheChild.disqualifyCache();\n      pageURI = Services.io.newURI(SECUREOS_LOCALHOST_URL);\n    } else {\n      pageURI = this.getChromeURI(uri);\n    }/s);
+die "failed to replace child redirect block in $path\n" unless $count == 1;
+
+open my $out, '>', $path or die "failed to write $path: $!\n";
+print {$out} $text;
+close $out;
+PERL
+    perl "$work_dir/patch-redirector-runtime.pl" "$redirector_runtime"
+
+    if ! grep -Fq 'default behaviors like urlbar focus still trigger' "$redirector_runtime"; then
+      echo "error: patched Firefox redirector runtime asset is missing the deeper localhost redirect contract note: $redirector_omni:$redirector_omni_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'pageURI = Services.io.newURI(SECUREOS_LOCALHOST_URL);' "$redirector_runtime"; then
+      echo "error: patched Firefox redirector runtime asset is missing the localhost child redirect: $redirector_omni:$redirector_omni_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'chromeURI = Services.io.newURI(SECUREOS_LOCALHOST_URL);' "$redirector_runtime"; then
+      echo "error: patched Firefox redirector runtime asset is missing the localhost parent redirect: $redirector_omni:$redirector_omni_path" >&2
+      exit 1
+    fi
+
+    tabbrowser_omni_path=""
+    tabbrowser_omni=""
     tabbrowser_extract_dir=""
     for entry in "''${extracted_omnis[@]}"; do
       omni="''${entry%%:*}"
-      if [ "$omni" = "$tabbrowser_omni" ]; then
-        tabbrowser_extract_dir="''${entry#*:}"
-      fi
+      extract_dir="''${entry#*:}"
+      while IFS= read -r candidate_path; do
+        if [ -n "$tabbrowser_omni_path" ]; then
+          echo "error: found multiple tabbrowser.js runtime assets:" >&2
+          echo "  $tabbrowser_omni:$tabbrowser_omni_path" >&2
+          echo "  $omni:$candidate_path" >&2
+          exit 1
+        fi
+        tabbrowser_omni="$omni"
+        tabbrowser_omni_path="$candidate_path"
+        tabbrowser_extract_dir="$extract_dir"
+      done < <(
+        find "$extract_dir" -type f -path '*/tabbrowser.js' \
+          | sed "s#^$extract_dir/##" \
+          | LC_ALL=C sort
+      )
     done
-    if [ -z "$tabbrowser_extract_dir" ]; then
-      echo "error: patched Firefox tabbrowser runtime asset lost its extracted omni directory: $tabbrowser_omni:$tabbrowser_omni_path" >&2
+    if [ -z "$tabbrowser_omni_path" ] || [ -z "$tabbrowser_extract_dir" ]; then
+      echo "error: failed to locate tabbrowser.js in extracted Firefox runtime" >&2
       exit 1
     fi
-    if ! grep -Fq 'DOMWindowClose' "$tabbrowser_extract_dir/$tabbrowser_omni_path"; then
-      echo "error: patched Firefox tabbrowser runtime asset does not contain DOMWindowClose handling: $tabbrowser_omni:$tabbrowser_omni_path" >&2
+
+    tabbrowser_runtime="$tabbrowser_extract_dir/$tabbrowser_omni_path"
+    cat > "$work_dir/patch-tabbrowser-runtime.pl" <<'PERL'
+use strict;
+use warnings;
+
+my $path = shift @ARGV or die "missing runtime path\n";
+local $/ = undef;
+open my $in, '<', $path or die "failed to read $path: $!\n";
+my $text = <$in>;
+close $in;
+
+my $count = ($text =~ s/if \(this\.tabs\.length == 1\) \{\n          \/\/ We already did PermitUnload in the content process\n          \/\/ for this tab \(the only one in the window\)\. So we don't\n          \/\/ need to do it again for any tabs\.\n          window\.skipNextCanClose = true;/if (this.tabs.length == 1) {\n          \/\/ We already did PermitUnload in the content process\n          \/\/ for this tab (the only one in the window). So we don't\n          \/\/ need to do it again for any tabs.\n          if (\n            !Services.prefs.getBoolPref("browser.tabs.closeWindowWithLastTab")\n          ) {\n            let tab = this.getTabForBrowser(browser);\n            if (tab) {\n              this.removeTab(tab, {\n                animate: false,\n                skipPermitUnload: true,\n                closeWindowWithLastTab: false,\n              });\n              event.preventDefault();\n              return;\n            }\n          }\n\n          window.skipNextCanClose = true;/s);
+die "failed to replace DOMWindowClose last-tab block in $path\n" unless $count == 1;
+
+open my $out, '>', $path or die "failed to write $path: $!\n";
+print {$out} $text;
+close $out;
+PERL
+    perl "$work_dir/patch-tabbrowser-runtime.pl" "$tabbrowser_runtime"
+
+    if ! grep -Fq 'closeWindowWithLastTab: false,' "$tabbrowser_runtime"; then
+      echo "error: patched Firefox tabbrowser runtime asset is missing the removeTab last-tab path: $tabbrowser_omni:$tabbrowser_omni_path" >&2
       exit 1
     fi
-    sed -i \
-      's#this\.addTrustedTab(BROWSER_NEW_TAB_URL,#this.addTrustedTab(SECUREOS_LOCALHOST_URL,#g' \
-      "$tabbrowser_extract_dir/$tabbrowser_omni_path"
-    if grep -Fq 'this.addTrustedTab(BROWSER_NEW_TAB_URL,' "$tabbrowser_extract_dir/$tabbrowser_omni_path"; then
-      echo "error: patched Firefox tabbrowser runtime asset still contains stock trusted new-tab replacement calls: $tabbrowser_omni:$tabbrowser_omni_path" >&2
+    if grep -Fq 'this.addTrustedTab(SECUREOS_LOCALHOST_URL' "$tabbrowser_runtime"; then
+      echo "error: patched Firefox tabbrowser runtime asset still contains the old localhost trusted-tab replacement path: $tabbrowser_omni:$tabbrowser_omni_path" >&2
       exit 1
     fi
 
@@ -236,19 +304,9 @@ in {
       echo "error: patched Firefox browser.js runtime asset is missing built-in dark theme activation: $browser_js_omni:$browser_js_path" >&2
       exit 1
     fi
-    sed -i \
-      's#openTrustedLinkIn(BROWSER_NEW_TAB_URL,#openTrustedLinkIn("https://localhost",#g' \
-      "$browser_js_extract_dir/$browser_js_path"
-    sed -i \
-      '/window.openDialog(/,/);/ s#BROWSER_NEW_TAB_URL#"https://localhost"#g' \
-      "$browser_js_extract_dir/$browser_js_path"
-    if grep -Fq 'openTrustedLinkIn(BROWSER_NEW_TAB_URL,' "$browser_js_extract_dir/$browser_js_path"; then
-      echo "error: patched Firefox browser.js runtime asset can still open trusted tabs with Firefox's stock new-tab URL: $browser_js_omni:$browser_js_path" >&2
-      exit 1
-    fi
-    if sed -n '/window.openDialog(/,/);/p' "$browser_js_extract_dir/$browser_js_path" \
+    if ! sed -n '/window.openDialog(/,/);/p' "$browser_js_extract_dir/$browser_js_path" \
       | grep -Fq 'BROWSER_NEW_TAB_URL'; then
-      echo "error: patched Firefox browser.js runtime asset can still open windows with Firefox's stock new-tab URL: $browser_js_omni:$browser_js_path" >&2
+      echo "error: patched Firefox browser.js runtime asset lost Firefox's stock window new-tab entry point unexpectedly: $browser_js_omni:$browser_js_path" >&2
       exit 1
     fi
 
@@ -278,8 +336,8 @@ in {
       echo "OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1"
       echo "OLC_FIREFOX_FXA_SYNC_UI_PATCH_APPLIED=1"
       printf 'patch_stack=%s\n' "''${firefox_patches[*]}"
-      printf 'browser_commands_omni=%s\n' "$browser_commands_omni"
-      printf 'browser_commands_path=%s\n' "$browser_commands_omni_path"
+      printf 'redirector_omni=%s\n' "$redirector_omni"
+      printf 'redirector_path=%s\n' "$redirector_omni_path"
       printf 'browser_js_omni=%s\n' "$browser_js_omni"
       printf 'browser_js_path=%s\n' "$browser_js_path"
       printf 'tabbrowser_omni=%s\n' "$tabbrowser_omni"

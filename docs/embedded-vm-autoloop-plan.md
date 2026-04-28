@@ -5,7 +5,7 @@
 This is feasible with the current repo shape, and the shortest path is to treat it as a layered operator workflow inside the ol-c guest:
 
 - run Codex inside the parent ol-c VM against live `/source`
-- let it use the fastest proof surface first (`patched-firefox`, targeted tests, service restarts, localhost checks)
+- let it use the fastest proof surface first (`olc-firefox-source`, targeted tests, service restarts, localhost checks)
 - escalate only when needed to an embedded child ol-c VM via `olc-launch-test-vm`
 - keep edits on live `/source` so host, parent VM, and child-VM launch tooling all see the same tree immediately
 
@@ -18,7 +18,7 @@ The repo already has most of the hard prerequisites:
 - host repo is mounted read-write in the guest at `/source` via `virtiofs`
 - the first human admin prefers UID `1000`, which preserves the synced-dev path
 - the guest has a `codex` command intended for in-VM development
-- the guest has a fast browser-runtime loop via `patched-firefox`
+- the guest has a shared Firefox source-tree loop via `olc-firefox-source`
 - the guest can boot a child ol-c VM through `olc-launch-test-vm`
 - the parent launcher exposes boot images at `/vm-images`
 - child-VM runtime state is already scoped to `/var/lib/ol-c/vms`
@@ -34,7 +34,7 @@ Add a documented in-guest operator workflow with this order:
 1. Analyze repo state in `/source`
 2. Edit `/source`
 3. Run targeted local checks first
-4. If browser-runtime-only change: use `patched-firefox`
+4. If Firefox browser behavior change: use `olc-firefox-source`
 5. If system/session/boot behavior change: use `olc-launch-test-vm`
 6. Collect proof artifacts and stop with a clear result
 
@@ -53,7 +53,7 @@ Add one in-guest command whose job is to drive the loop, not to replace Codex it
   - chooses validation tier from changed paths and task hints
   - invokes either:
     - repo tests only
-    - `patched-firefox`
+    - `olc-firefox-source`
     - `olc-launch-test-vm`
   - stores logs and a result summary under a fixed runtime directory
 
@@ -68,9 +68,9 @@ Recommended default routing:
 - `localhost-ui/`, `terminal-client/`, docs-only, small JS/UI edits:
   - run targeted tests
   - optionally validate parent VM localhost surface
-  - use `patched-firefox` only if browser chrome/runtime assets changed
+  - use `olc-firefox-source` only if browser chrome/runtime assets changed
 - `patches/firefox/pending/`:
-  - use `patched-firefox`
+  - use `olc-firefox-source`
   - do not boot child VM by default
 - `nix/modules/`, `launch-vm`, `build-vm`, session/login/setup, shared-repo, nested-VM launcher:
   - run contract tests
@@ -91,7 +91,7 @@ Capture:
 - repo revision / dirty state
 - changed files
 - tests run
-- `patched-firefox` manifest if used
+- `olc-firefox-source status` and instance manifest if used
 - child VM reconnect URL and logs if used
 - final pass/fail summary
 
@@ -146,12 +146,12 @@ No browser API changes are required for v1. This is an in-guest developer/operat
   - falls back cleanly if `/source` is unavailable
   - writes an artifact bundle and summary
 - Routing tests:
-  - `patches/firefox/pending/*` chooses `patched-firefox`
+  - `patches/firefox/pending/*` chooses `olc-firefox-source`
   - `nix/modules/*` chooses child VM validation
   - localhost-only edits do not boot a child VM by default
 - Runtime smoke tests in guest:
   - a localhost UI task can complete with edits + tests only
-  - a Firefox runtime patch task can complete via `patched-firefox`
+  - a Firefox browser patch task can complete via `olc-firefox-source`
   - a login/session task escalates to `olc-launch-test-vm`
 - Failure handling:
   - Codex failure is captured and summarized
@@ -167,7 +167,7 @@ No browser API changes are required for v1. This is an in-guest developer/operat
 - The default source model is live `/source`, not an isolated copy.
 - The default validation policy is tiered:
   - cheap local checks first
-  - `patched-firefox` for browser-runtime tasks
+  - `olc-firefox-source` for Firefox browser tasks
   - child VM only when system/boot/session behavior needs proof
 - Child-VM orchestration should remain explicit and narrow, not the default for all tasks.
 - The goal is autonomous analyze/edit/run within the guest, not fully unattended release publishing or host-side orchestration.

@@ -1,25 +1,3 @@
-diff --git a/browser/base/content/browser-commands.js b/browser/base/content/browser-commands.js
-index 75ddd82..50ce2a5 100644
---- a/browser/base/content/browser-commands.js
-+++ b/browser/base/content/browser-commands.js
-@@ -9,6 +9,8 @@ var kSkipCacheFlags =
-   Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_PROXY |
-   Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE;
- 
-+const SECUREOS_LOCALHOST_URL = "https://localhost";
-+
- var BrowserCommands = {
-   back(aEvent) {
-     const where = BrowserUtils.whereToOpenLink(aEvent, false, true);
-@@ -292,7 +294,7 @@ var BrowserCommands = {
- 
-   openTab({ event, url } = {}) {
-     let werePassedURL = !!url;
--    url ??= BROWSER_NEW_TAB_URL;
-+    url ??= SECUREOS_LOCALHOST_URL;
-     let searchClipboard =
-       gMiddleClickNewTabUsesPasteboard && event?.button == 1;
- 
 diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
 index 0ea3d82..43ccbe9 100644
 --- a/browser/base/content/browser.js
@@ -130,24 +108,76 @@ index 0ea3d82..43ccbe9 100644
  ChromeUtils.defineLazyGetter(this, "RTL_UI", () => {
    return Services.locale.isAppLocaleRTL;
  });
-@@ -1340,7 +1432,7 @@ function openLocation(event) {
-     AppConstants.BROWSER_CHROME_URL,
-     "_blank",
-     "chrome,all,dialog=no",
--    BROWSER_NEW_TAB_URL
-+    "https://localhost"
-   );
- }
+diff --git a/browser/components/newtab/AboutNewTabRedirector.sys.mjs b/browser/components/newtab/AboutNewTabRedirector.sys.mjs
+index 9e0579f..8623a9d 100644
+--- a/browser/components/newtab/AboutNewTabRedirector.sys.mjs
++++ b/browser/components/newtab/AboutNewTabRedirector.sys.mjs
+@@ -60,6 +60,8 @@
+ const PREF_NEWTAB_SELF_LOADING =
+   "browser.newtabpage.activity-stream.selfLoading.enabled";
  
-@@ -1879,7 +1971,7 @@ let gFileMenu = {
-  *        A click event on a userContext File Menu option
-  */
- function openNewUserContextTab(event) {
--  openTrustedLinkIn(BROWSER_NEW_TAB_URL, "tab", {
-+  openTrustedLinkIn("https://localhost", "tab", {
-     userContextId: parseInt(event.target.getAttribute("data-usercontextid")),
-   });
- }
++const SECUREOS_LOCALHOST_URL = "https://localhost";
++
+ /**
+  * The AboutHomeStartupCacheChild is responsible for connecting the
+  * AboutNewTabRedirectorChild with a cached document and script for about:home
+@@ -526,11 +528,8 @@ export class AboutNewTabRedirectorParent extends BaseAboutNewTabRedirector {
+   newChannel(uri, loadInfo) {
+     let chromeURI = this.getChromeURI(uri);
+ 
+-    if (
+-      uri.spec.startsWith("about:home") ||
+-      (uri.spec.startsWith("about:newtab") && lazy.BUILTIN_NEWTAB_ENABLED)
+-    ) {
+-      chromeURI = Services.io.newURI(this.defaultURL);
++    if (uri.spec.startsWith("about:home") || uri.spec.startsWith("about:newtab")) {
++      chromeURI = Services.io.newURI(SECUREOS_LOCALHOST_URL);
+     }
+ 
+     let resultChannel = Services.io.newChannelFromURIWithLoadInfo(
+       chromeURI,
+       loadInfo
+     );
+     resultChannel.originalURI = uri;
+@@ -581,29 +580,14 @@ export class AboutNewTabRedirectorChild extends BaseAboutNewTabRedirector {
+     }
+ 
+     let pageURI;
+ 
+-    if (uri.spec.startsWith("about:home")) {
+-      let cacheChannel = AboutHomeStartupCacheChild.maybeGetCachedPageChannel(
+-        uri,
+-        loadInfo
+-      );
+-      if (cacheChannel) {
+-        return cacheChannel;
+-      }
+-      pageURI = Services.io.newURI(this.defaultURL);
+-    } else {
+-      // The only other possibility is about:newtab.
+-      //
+-      // If about:newtab is being requested, then any subsequent request for
+-      // about:home should _never_ request the cache (which might be woefully
+-      // out of date compared to about:newtab), so we disqualify the cache if
+-      // it still happens to be around.
++    if (uri.spec.startsWith("about:home") || uri.spec.startsWith("about:newtab")) {
++      // Keep browser chrome on the built-in about:newtab/about:home path so
++      // default behaviors like urlbar focus still trigger, while the content
++      // load resolves to the SecureOS localhost shell.
+       AboutHomeStartupCacheChild.disqualifyCache();
+-
+-      if (lazy.BUILTIN_NEWTAB_ENABLED) {
+-        pageURI = Services.io.newURI(this.defaultURL);
+-      } else {
+-        pageURI = this.getChromeURI(uri);
+-      }
++      pageURI = Services.io.newURI(SECUREOS_LOCALHOST_URL);
++    } else {
++      pageURI = this.getChromeURI(uri);
+     }
+ 
+     let resultChannel = Services.io.newChannelFromURIWithLoadInfo(
+       pageURI,
 diff --git a/browser/base/content/test/general/browser.toml b/browser/base/content/test/general/browser.toml
 index 3831809..10e1246 100644
 --- a/browser/base/content/test/general/browser.toml
@@ -198,7 +228,7 @@ index 0000000..6c0f0d1
 +  }
 +});
 +
-+add_task(async function test_new_tab_uses_localhost_url() {
++add_task(async function test_new_tab_uses_firefox_new_tab_url() {
 +  let win = await BrowserTestUtils.openNewBrowserWindow();
 +  let originalOpenTrustedLinkIn = win.openTrustedLinkIn;
 +  let openedURL = null;
@@ -229,8 +259,8 @@ index 0000000..6c0f0d1
 +    );
 +    is(
 +      openedURL,
-+      SECUREOS_LOCALHOST_URL,
-+      "Opening a new tab should load the SecureOS localhost surface"
++      win.BROWSER_NEW_TAB_URL,
++      "Opening a new tab should stay on Firefox's built-in new-tab open path"
 +    );
 +    is(openedWhere, "tab", "The new-tab command should still open a tab");
 +  } finally {
@@ -239,7 +269,7 @@ index 0000000..6c0f0d1
 +  }
 +});
 +
-+add_task(async function test_close_last_tab_uses_localhost_replacement_url() {
++add_task(async function test_close_last_tab_uses_new_tab_replacement_url() {
 +  await SpecialPowers.pushPrefEnv({
 +    set: [["browser.tabs.closeWindowWithLastTab", false]],
 +  });
@@ -276,8 +306,8 @@ index 0000000..6c0f0d1
 +    );
 +    is(
 +      replacementURL,
-+      SECUREOS_LOCALHOST_URL,
-+      "Closing the final tab should reopen the SecureOS localhost surface"
++      win.BROWSER_NEW_TAB_URL,
++      "Closing the final tab should reopen Firefox's built-in new-tab URL"
 +    );
 +    is(win.gBrowser.tabs.length, 1, "The browser window should remain open");
 +  } finally {
@@ -286,7 +316,7 @@ index 0000000..6c0f0d1
 +  }
 +});
 +
-+add_task(async function test_dom_window_close_last_tab_uses_localhost() {
++add_task(async function test_dom_window_close_last_tab_uses_new_tab_url() {
 +  await SpecialPowers.pushPrefEnv({
 +    set: [["browser.tabs.closeWindowWithLastTab", false]],
 +  });
@@ -328,8 +358,8 @@ index 0000000..6c0f0d1
 +    );
 +    is(
 +      replacementURL,
-+      SECUREOS_LOCALHOST_URL,
-+      "A content-requested final-tab close should reopen localhost"
++      win.BROWSER_NEW_TAB_URL,
++      "A content-requested final-tab close should reopen Firefox's built-in new-tab URL"
 +    );
 +    is(win.gBrowser.tabs.length, 1, "The browser window should remain open");
 +  } finally {
@@ -396,46 +426,10 @@ index 0000000..6c0f0d1
 +  }
 +});
 diff --git a/browser/components/tabbrowser/content/tabbrowser.js b/browser/components/tabbrowser/content/tabbrowser.js
-index d88bc0e..67f4e8a 100644
+index d88bc0e..1ceb9a2 100644
 --- a/browser/components/tabbrowser/content/tabbrowser.js
 +++ b/browser/components/tabbrowser/content/tabbrowser.js
-@@ -19,6 +19,8 @@
-       "chrome://global/skin/icons/highlights.svg",
-   };
- 
-+  const SECUREOS_LOCALHOST_URL = "https://localhost";
-+
-   const {
-     LOAD_FLAGS_NONE,
-     LOAD_FLAGS_FROM_EXTERNAL,
-@@ -3002,7 +3004,7 @@
-       Services.obs.notifyObservers(
-         {
-           wrappedJSObject: new Promise(resolve => {
--            this.selectedTab = this.addTrustedTab(BROWSER_NEW_TAB_URL, {
-+            this.selectedTab = this.addTrustedTab(SECUREOS_LOCALHOST_URL, {
-               tabIndex: tab._tPos + 1,
-               userContextId: tab.userContextId,
-               tabGroup: tab.group,
-@@ -5784,7 +5786,7 @@
-       aTab._mouseleave();
- 
-       if (newTab) {
--        this.addTrustedTab(BROWSER_NEW_TAB_URL, {
-+        this.addTrustedTab(SECUREOS_LOCALHOST_URL, {
-           skipAnimation: true,
-           // In the event that insertAfterCurrent is set and the current tab is
-           // inside a group that is being closed we want to avoid creating the
-@@ -6085,7 +6087,7 @@
-           if (firefoxViewAvailable) {
-             FirefoxViewHandler.openTab("opentabs");
-           } else {
--            this.selectedTab = this.addTrustedTab(BROWSER_NEW_TAB_URL, {
-+            this.selectedTab = this.addTrustedTab(SECUREOS_LOCALHOST_URL, {
-               skipAnimation: true,
-             });
-           }
-@@ -8487,6 +8489,23 @@
+@@ -8487,6 +8487,21 @@
            // We already did PermitUnload in the content process
            // for this tab (the only one in the window). So we don't
            // need to do it again for any tabs.
@@ -444,12 +438,10 @@ index d88bc0e..67f4e8a 100644
 +          ) {
 +            let tab = this.getTabForBrowser(browser);
 +            if (tab) {
-+              this.addTrustedTab(SECUREOS_LOCALHOST_URL, {
-+                skipAnimation: true,
-+              });
 +              this.removeTab(tab, {
 +                animate: false,
 +                skipPermitUnload: true,
++                closeWindowWithLastTab: false,
 +              });
 +              event.preventDefault();
 +              return;

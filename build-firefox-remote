@@ -278,6 +278,8 @@ make_source_archive() {
 
   tar -czf "$archive" \
     --exclude='./.git' \
+    --exclude='./.olc-firefox' \
+    --exclude='./.olc-debug' \
     --exclude='./.codex-home' \
     --exclude='./.tmp-tests' \
     --exclude='./.gcp-builds' \
