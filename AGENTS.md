@@ -23,6 +23,7 @@ Define milestones by the proof they provide, not by premature architecture choic
 - Milestone 3: browser-based system controls.
 - Milestone 4: synced in-VM development against a host-shared repo.
 - Milestone 5: first-boot onboarding, persistent machine state, and a test-prefill path.
+- Milestone 6: predictable, fast, and reproducible Firefox and VM development loop.
 
 ## Milestone 6: Development Loop
 
@@ -171,10 +172,10 @@ Question this milestone answers:
 # Current Focus
 
 Active milestone:
-- Milestone 6.
+- Milestone 7.
 
 Immediate next task:
-- Use the proven shared Firefox source-tree workflow for fast browser-chrome iteration while keeping packaged Firefox builds blind to dev-only pending patches.
+- Decide whether self-hosting ol-c development inside ol-c should be a primary workflow or a later capability.
 
 Current Milestone 6 direction:
 - Make the standard Firefox source-tree loop the primary development path for Firefox behavior changes.
@@ -202,6 +203,13 @@ Related design notes:
 # Validation Status
 
 - The repo has moved from unsupported `nixos-24.11` to `nixos-25.11`.
+- Milestone 6 success criteria are confirmed:
+  - Build and launch behavior are predictable.
+  - Rebuild versus reuse behavior is explicit.
+  - Fast iteration does not undermine reproducibility.
+  - The source-tree loop records the exact Firefox and `nixpkgs` identity being tested.
+  - A developer can validate Firefox behavior in the guest before refreshing `patches/firefox/packaged/0001-close-last-tab-to-localhost.patch`.
+  - The packaged build remains the gate for what ships.
 - Fast deterministic checks currently passing:
   - `node --test localhost-ui/*.test.mjs`
   - `cd terminal-client && npm test && npm run build`
@@ -234,6 +242,7 @@ Standard Firefox source loop notes:
 - For a visible source-built browser inside an already-logged-in guest, prefer `olc-firefox-source open-window https://localhost/` over `mach run`. That helper launches `objdir/dist/bin/firefox` directly, disables Firefox DBus remoting and process handoff, resolves the live X session env automatically, and seeds an isolated profile with the same localhost trust prefs as the packaged session so `https://localhost/` does not fall back to the certificate warning page.
 - Keep patch refresh separate from visual iteration. Once the browser UI looks correct, regenerate or refresh the pending patch from the live source diff, then rerun `bash tests/test-olc-firefox-source.sh` and `bash tests/test-firefox-localhost-patch.sh`.
 - If `olc-firefox-source` warns that the existing instance uses a different patch fingerprint, that warning is expected after repo patch edits. Use `olc-firefox-source recreate` only when the shared source tree itself must be rebuilt from the repo patch stack; avoid it during rapid live-source iteration.
+- The shared source workflow makes rebuild-versus-reuse behavior explicit, but first-time initialization is still expensive because the pinned Firefox source archive and build environment must be realized locally. A future speed-up option is to consume a trusted remote cache if the upstream Nix project provides one for this path, or to host an ol-c-controlled cache once that tradeoff is worth the operational cost.
 - `mach run` from this shell does not inherit the desktop session automatically. A `no DISPLAY environment variable specified` failure is an environment issue here, not a Firefox build failure.
 - Full clean source builds are much heavier than the fast loop in this VM. Prefer low parallelism such as `CARGO_BUILD_JOBS=2 ./olc-firefox-source mach build -j 2` or `./olc-firefox-source mach build -j 1` for clean proof builds; earlier higher-parallel runs were killed by OOM during mixed Rust and C++ compilation.
 - The shared source loop currently depends on the repo defaults that keep Firefox on the standard Clang/lld toolchain, normalize `AS` and `HOST_AS` away from raw `as`, and keep WASI linker flags from leaking into native link steps.
