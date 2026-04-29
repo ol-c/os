@@ -18,8 +18,51 @@ function createStateProvider(initialState) {
   };
 }
 
+function createSetupProgressProvider(initialProgress = {
+  inProgress: false,
+  result: 'idle',
+  step: 'idle',
+  username: null,
+  startedAt: null,
+  finishedAt: null,
+  latestMessage: null,
+  events: [],
+}) {
+  let progress = {
+    ...initialProgress,
+    events: initialProgress.events.map(event => ({ ...event })),
+  };
+  const listeners = new Set();
+
+  function clone() {
+    return {
+      ...progress,
+      events: progress.events.map(event => ({ ...event })),
+    };
+  }
+
+  return {
+    getProgress: () => clone(),
+    publish(nextProgress) {
+      progress = {
+        ...nextProgress,
+        events: (nextProgress.events || []).map(event => ({ ...event })),
+      };
+      const snapshot = clone();
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
 async function withServer(fn, options = {}) {
   const state = createStateProvider(options.runtimeState || { setupMode: false, activeUser: null });
+  const setupProgress = createSetupProgressProvider(options.setupProgress);
   const createFirstUserCalls = [];
   const setupCompletions = [];
   const app = createOlcApp({
@@ -30,10 +73,12 @@ async function withServer(fn, options = {}) {
       }
       return { ok: true, message: 'Setup complete. Returning to the login prompt.' };
     },
+    getSetupProgress: () => setupProgress.getProgress(),
     getRuntimeState: () => state.getState(),
     onSetupCompleted: payload => {
       setupCompletions.push(payload);
     },
+    subscribeSetupProgress: listener => setupProgress.subscribe(listener),
     systemControls: createSystemControls(
       createFakeSystemAdapter(createDefaultSystemStatus(options.hardwareTest)),
       { pollIntervalMs: 0 },
@@ -49,6 +94,7 @@ async function withServer(fn, options = {}) {
     await fn({
       baseUrl: `http://127.0.0.1:${port}`,
       createFirstUserCalls,
+      publishSetupProgress: nextProgress => setupProgress.publish(nextProgress),
       setState: nextState => state.setState(nextState),
       setupCompletions,
     });
@@ -88,6 +134,39 @@ async function readStatusEvent(stream) {
       return JSON.parse(dataLine.slice('data: '.length));
     }
   }
+}
+
+function createStatusEventReader(stream) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  return {
+    async nextStatus() {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          throw new Error('SSE stream ended before status event');
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop();
+
+        for (const event of events) {
+          if (!event.includes('event: status')) {
+            continue;
+          }
+
+          const dataLine = event.split('\n').find(line => line.startsWith('data: '));
+          return JSON.parse(dataLine.slice('data: '.length));
+        }
+      }
+    },
+    release() {
+      reader.releaseLock();
+    },
+  };
 }
 
 test('fresh machines render the setup page at root', async () => {
@@ -132,6 +211,7 @@ test('setup status and first-user creation are routed through the setup API', as
     const status = await requestJson(baseUrl, '/api/setup/status');
     assert.equal(status.response.status, 200);
     assert.equal(status.body.setupMode, true);
+    assert.equal(status.body.progress.inProgress, false);
 
     const created = await requestJson(baseUrl, '/api/setup/first-user', {
       method: 'POST',
@@ -204,6 +284,48 @@ test('editor API lists, reads, and saves files as the active signed-in user', as
         home: process.env.HOME || tmpdir(),
       },
     },
+  });
+});
+
+test('setup progress SSE sends initial and live provisioning updates', async () => {
+  await withServer(async ({ baseUrl, publishSetupProgress }) => {
+    const response = await fetch(`${baseUrl}/api/setup/events`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /text\/event-stream/);
+
+    const reader = createStatusEventReader(response.body);
+    const initial = await reader.nextStatus();
+    assert.equal(initial.inProgress, false);
+    assert.equal(initial.result, 'idle');
+
+    publishSetupProgress({
+      inProgress: true,
+      result: 'running',
+      step: 'creating',
+      username: 'alice',
+      startedAt: '2026-04-29T00:00:00.000Z',
+      finishedAt: null,
+      latestMessage: 'Creating encrypted home for alice.',
+      events: [
+        {
+          seq: 1,
+          kind: 'info',
+          step: 'creating',
+          message: 'Creating encrypted home for alice.',
+          timestamp: '2026-04-29T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const update = await reader.nextStatus();
+    assert.equal(update.inProgress, true);
+    assert.equal(update.latestMessage, 'Creating encrypted home for alice.');
+    assert.equal(update.events.length, 1);
+
+    reader.release();
+    await response.body.cancel();
+  }, {
+    runtimeState: { setupMode: true, activeUser: { name: 'olc-setup' } },
   });
 });
 

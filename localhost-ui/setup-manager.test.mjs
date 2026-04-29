@@ -4,7 +4,12 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
-import { createFirstUser, validateFirstUserInput } from './setup-manager.mjs';
+import {
+  createFirstUser,
+  getSetupProgress,
+  subscribeSetupProgress,
+  validateFirstUserInput,
+} from './setup-manager.mjs';
 
 test('first-user validation accepts a secure basic username and password', () => {
   assert.deepEqual(validateFirstUserInput({
@@ -39,8 +44,12 @@ test('first-user validation rejects bad usernames and weak passwords', () => {
 
 test('first-user creation provisions through script-wrapped homectl create and verifies the result', async () => {
   const seenCalls = [];
+  const progressSnapshots = [];
   let passwordInput = null;
   const tempRoot = await mkdtemp(join(tmpdir(), 'olc-setup-test-'));
+  const unsubscribe = subscribeSetupProgress(snapshot => {
+    progressSnapshots.push(snapshot);
+  });
 
   function spawnProcess(command, args) {
     seenCalls.push({ command, args });
@@ -67,39 +76,59 @@ test('first-user creation provisions through script-wrapped homectl create and v
     return child;
   }
 
-  const result = await createFirstUser({
-    username: 'alice',
-    password: 'correct horse battery',
-    confirmPassword: 'correct horse battery',
-  }, {
-    tempRoot,
-    homectlBin: '/bin/homectl',
-    scriptBin: '/bin/script',
-    shellBin: '/bin/bash',
-    spawnProcess,
-  });
+  try {
+    const result = await createFirstUser({
+      username: 'alice',
+      password: 'correct horse battery',
+      confirmPassword: 'correct horse battery',
+    }, {
+      tempRoot,
+      homectlBin: '/bin/homectl',
+      scriptBin: '/bin/script',
+      shellBin: '/bin/bash',
+      spawnProcess,
+    });
 
-  assert.equal(seenCalls.length, 2);
-  assert.equal(seenCalls[0].command, '/bin/script');
-  assert.equal(seenCalls[0].args[0], '-qefc');
-  assert.match(seenCalls[0].args[1], /'\/bin\/homectl' 'create' 'alice'/);
-  assert.match(seenCalls[0].args[1], /'--storage=luks'/);
-  assert.match(seenCalls[0].args[1], /'--disk-size=8G'/);
-  assert.match(seenCalls[0].args[1], /'--uid=1000'/);
-  assert.match(seenCalls[0].args[1], /'--home-dir=\/home\/alice'/);
-  assert.match(seenCalls[0].args[1], /'--shell=\/bin\/bash'/);
-  assert.match(seenCalls[0].args[1], /'--member-of=olc-admin,wheel,kvm'/);
-  assert.match(seenCalls[0].args[1], /'--access-mode=0700'/);
-  assert.equal(seenCalls[0].args[2], '/dev/null');
-  assert.equal(passwordInput, 'correct horse battery\ncorrect horse battery\n');
-  assert.equal(seenCalls[1].command, '/bin/homectl');
-  assert.deepEqual(seenCalls[1].args, [
-    'inspect',
-    'alice',
-    '--json=short',
-    '--no-pager',
-  ]);
-  assert.equal(result.username, 'alice');
+    assert.equal(seenCalls.length, 2);
+    assert.equal(seenCalls[0].command, '/bin/script');
+    assert.equal(seenCalls[0].args[0], '-qefc');
+    assert.match(seenCalls[0].args[1], /'\/bin\/homectl' 'create' 'alice'/);
+    assert.match(seenCalls[0].args[1], /'--storage=luks'/);
+    assert.match(seenCalls[0].args[1], /'--disk-size=8G'/);
+    assert.match(seenCalls[0].args[1], /'--uid=1000'/);
+    assert.match(seenCalls[0].args[1], /'--home-dir=\/home\/alice'/);
+    assert.match(seenCalls[0].args[1], /'--shell=\/bin\/bash'/);
+    assert.match(seenCalls[0].args[1], /'--member-of=olc-admin,wheel,kvm'/);
+    assert.match(seenCalls[0].args[1], /'--access-mode=0700'/);
+    assert.equal(seenCalls[0].args[2], '/dev/null');
+    assert.equal(passwordInput, 'correct horse battery\ncorrect horse battery\n');
+    assert.equal(seenCalls[1].command, '/bin/homectl');
+    assert.deepEqual(seenCalls[1].args, [
+      'inspect',
+      'alice',
+      '--json=short',
+      '--no-pager',
+    ]);
+    assert.equal(result.username, 'alice');
+
+    const finalProgress = getSetupProgress();
+    assert.equal(finalProgress.inProgress, false);
+    assert.equal(finalProgress.result, 'succeeded');
+    assert.equal(finalProgress.step, 'complete');
+    assert.equal(finalProgress.username, 'alice');
+    assert.deepEqual(
+      finalProgress.events.map(event => event.message),
+      [
+        'Starting secure account setup for alice.',
+        'Creating encrypted home for alice.',
+        'Verifying account details for alice.',
+        'Setup complete. Returning to the login screen.',
+      ],
+    );
+    assert.equal(progressSnapshots.some(snapshot => snapshot.inProgress), true);
+  } finally {
+    unsubscribe();
+  }
 });
 
 test('first-user creation times out cleanly when provisioning never exits', async () => {

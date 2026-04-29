@@ -44,10 +44,142 @@ function commandError(message, statusCode = 500) {
   return error;
 }
 
+const setupProgressHistoryLimit = 8;
+
+let setupProgress = {
+  inProgress: false,
+  result: 'idle',
+  step: 'idle',
+  username: null,
+  startedAt: null,
+  finishedAt: null,
+  latestMessage: null,
+  events: [],
+};
+
+const setupProgressListeners = new Set();
+
+function cloneSetupProgress(progress = setupProgress) {
+  return {
+    ...progress,
+    events: progress.events.map(event => ({ ...event })),
+  };
+}
+
+function publishSetupProgress() {
+  const snapshot = cloneSetupProgress();
+  for (const listener of setupProgressListeners) {
+    listener(snapshot);
+  }
+}
+
+function stripAnsi(value) {
+  return String(value || '').replaceAll(/\u001B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+}
+
+function normalizeProgressLine(value) {
+  return stripAnsi(value)
+    .replaceAll('\u0008', '')
+    .trim();
+}
+
+function appendSetupProgress(message, options = {}) {
+  const normalized = normalizeProgressLine(message);
+  if (!normalized) {
+    return;
+  }
+
+  const nextEvent = {
+    seq: (setupProgress.events.at(-1)?.seq ?? 0) + 1,
+    kind: options.kind ?? 'info',
+    step: options.step ?? setupProgress.step,
+    message: normalized,
+    timestamp: new Date().toISOString(),
+  };
+
+  setupProgress = {
+    ...setupProgress,
+    step: options.step ?? setupProgress.step,
+    latestMessage: normalized,
+    events: [
+      ...setupProgress.events.slice(-(setupProgressHistoryLimit - 1)),
+      nextEvent,
+    ],
+  };
+  publishSetupProgress();
+}
+
+function beginSetupProgress(username) {
+  setupProgress = {
+    inProgress: true,
+    result: 'running',
+    step: 'starting',
+    username,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    latestMessage: null,
+    events: [],
+  };
+  publishSetupProgress();
+}
+
+function finishSetupProgress(message, options = {}) {
+  if (message) {
+    appendSetupProgress(message, options);
+  }
+
+  setupProgress = {
+    ...setupProgress,
+    inProgress: false,
+    result: options.result ?? setupProgress.result,
+    step: options.step ?? setupProgress.step,
+    finishedAt: new Date().toISOString(),
+  };
+  publishSetupProgress();
+}
+
+function createOutputLineBuffer(onLine) {
+  let buffer = '';
+
+  function flushLine(line) {
+    const normalized = normalizeProgressLine(line);
+    if (normalized) {
+      onLine(normalized);
+    }
+  }
+
+  return {
+    push(chunk) {
+      buffer += String(chunk);
+      const parts = buffer.split(/\r\n|\r|\n/g);
+      buffer = parts.pop() ?? '';
+      for (const part of parts) {
+        flushLine(part);
+      }
+    },
+    flush() {
+      flushLine(buffer);
+      buffer = '';
+    },
+  };
+}
+
+export function getSetupProgress() {
+  return cloneSetupProgress();
+}
+
+export function subscribeSetupProgress(listener) {
+  setupProgressListeners.add(listener);
+  return () => {
+    setupProgressListeners.delete(listener);
+  };
+}
+
 async function runCommand(command, args, options = {}) {
   const {
     env = process.env,
     spawnProcess = spawn,
+    onOutputLine = null,
     stdinPath = null,
     timeoutMs = 120_000,
   } = options;
@@ -55,6 +187,7 @@ async function runCommand(command, args, options = {}) {
   await new Promise((resolve, reject) => {
     let settled = false;
     let output = '';
+    const outputLines = onOutputLine ? createOutputLineBuffer(onOutputLine) : null;
     const child = spawnProcess(command, args, {
       env,
       stdio: [ 'pipe', 'pipe', 'pipe' ],
@@ -80,6 +213,7 @@ async function runCommand(command, args, options = {}) {
       settled = true;
       clearTimeout(timer);
       input?.destroy();
+      outputLines?.flush();
       if (error) {
         reject(error);
         return;
@@ -89,10 +223,14 @@ async function runCommand(command, args, options = {}) {
     }
 
     child.stdout?.on('data', chunk => {
-      output += String(chunk);
+      const text = String(chunk);
+      output += text;
+      outputLines?.push(text);
     });
     child.stderr?.on('data', chunk => {
-      output += String(chunk);
+      const text = String(chunk);
+      output += text;
+      outputLines?.push(text);
     });
     input?.on('error', error => finish(error));
     child.on('error', error => finish(error));
@@ -141,6 +279,9 @@ export async function createFirstUser(body, options = {}) {
   const storage = options.storage ?? process.env.OLC_FIRST_USER_STORAGE ?? 'luks';
   const diskSize = options.diskSize ?? process.env.OLC_FIRST_USER_DISK_SIZE ?? '8G';
 
+  beginSetupProgress(username);
+  appendSetupProgress(`Starting secure account setup for ${username}.`, { step: 'starting' });
+
   const provision = (async () => {
     const tempDir = await mkdtempFn(join(tempRoot, 'olc-first-user-'));
     const passwordPath = join(tempDir, `${username}.password`);
@@ -166,6 +307,7 @@ export async function createFirstUser(body, options = {}) {
         '--no-pager',
       ];
 
+      appendSetupProgress(`Creating encrypted home for ${username}.`, { step: 'creating' });
       await runCommand(scriptBin, [
         '-qefc',
         createCommand.map(shellEscape).join(' '),
@@ -175,11 +317,13 @@ export async function createFirstUser(body, options = {}) {
           ...process.env,
           LC_ALL: 'C',
         },
+        onOutputLine: line => appendSetupProgress(line, { step: 'creating', kind: 'command' }),
         spawnProcess,
         timeoutMs,
         stdinPath: passwordPath,
       });
 
+      appendSetupProgress(`Verifying account details for ${username}.`, { step: 'verifying' });
       await runCommand(homectlBin, [
         'inspect',
         username,
@@ -190,9 +334,21 @@ export async function createFirstUser(body, options = {}) {
           ...process.env,
           LC_ALL: 'C',
         },
+        onOutputLine: line => appendSetupProgress(line, { step: 'verifying', kind: 'command' }),
         spawnProcess,
         timeoutMs: Math.min(timeoutMs, 10_000),
       });
+      finishSetupProgress('Setup complete. Returning to the login screen.', {
+        result: 'succeeded',
+        step: 'complete',
+      });
+    } catch (error) {
+      finishSetupProgress(error.message, {
+        result: 'failed',
+        step: 'error',
+        kind: 'error',
+      });
+      throw error;
     } finally {
       await rmFn(tempDir, { recursive: true, force: true });
     }

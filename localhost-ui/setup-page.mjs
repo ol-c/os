@@ -100,9 +100,30 @@ export function setupHtml() {
         font-size: 0.92rem;
       }
 
-      .error {
-        color: var(--error);
+      .status {
         min-height: 1.25rem;
+      }
+
+      .status[data-error="true"] {
+        color: var(--error);
+      }
+
+      .status-log {
+        margin: 0;
+        min-height: 5.5rem;
+        padding: 0.8rem 0.9rem;
+        border: 1px solid rgba(95, 103, 95, 0.25);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.58);
+        color: var(--muted);
+        font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace;
+        font-size: 0.85rem;
+        line-height: 1.45;
+        white-space: pre-wrap;
+      }
+
+      .status-log:empty {
+        display: none;
       }
     </style>
   </head>
@@ -126,18 +147,64 @@ export function setupHtml() {
           <input id="confirm-password" name="confirm-password" type="password" autocomplete="new-password" required />
         </label>
         <button id="submit" type="submit">Create first admin</button>
-        <p id="message" class="error" role="status" aria-live="polite"></p>
+        <p id="message" class="status" data-error="false" role="status" aria-live="polite"></p>
+        <pre id="setup-progress" class="status-log" aria-live="polite"></pre>
       </form>
     </main>
     <script>
       const form = document.getElementById('setup-form');
       const submit = document.getElementById('submit');
       const message = document.getElementById('message');
+      const progress = document.getElementById('setup-progress');
+      const defaultSubmitText = submit.textContent;
+      let setupEvents = null;
+
+      function setStatus(text, error = false) {
+        message.textContent = text;
+        message.dataset.error = error ? 'true' : 'false';
+      }
+
+      function renderSetupProgress(payload) {
+        if (!payload || typeof payload !== 'object') {
+          return;
+        }
+
+        const events = Array.isArray(payload.events) ? payload.events : [];
+        const recentLines = events
+          .slice(-6)
+          .map(event => event && event.message)
+          .filter(Boolean);
+
+        progress.textContent = recentLines.join('\\n');
+
+        if (payload.latestMessage) {
+          setStatus(payload.latestMessage, payload.result === 'failed');
+        }
+      }
+
+      function connectSetupEvents() {
+        if (setupEvents || typeof EventSource !== 'function') {
+          return;
+        }
+
+        setupEvents = new EventSource('/api/setup/events');
+        setupEvents.addEventListener('status', event => {
+          try {
+            renderSetupProgress(JSON.parse(event.data));
+          } catch {
+          }
+        });
+      }
+
+      connectSetupEvents();
 
       form.addEventListener('submit', async event => {
         event.preventDefault();
         submit.disabled = true;
-        message.textContent = '';
+        submit.textContent = 'Creating admin...';
+        setStatus('Starting secure account setup...');
+        progress.textContent = '';
+        connectSetupEvents();
 
         const body = {
           username: document.getElementById('username').value.trim(),
@@ -156,10 +223,11 @@ export function setupHtml() {
             throw new Error(payload.error || 'Setup failed.');
           }
 
-          message.textContent = payload.message || 'Setup complete. Returning to the login prompt.';
+          setStatus(payload.message || 'Setup complete. Returning to the login prompt.');
         } catch (error) {
-          message.textContent = error.message;
+          setStatus(error.message, true);
           submit.disabled = false;
+          submit.textContent = defaultSubmitText;
         }
       });
     </script>

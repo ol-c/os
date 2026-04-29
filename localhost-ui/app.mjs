@@ -142,7 +142,18 @@ export function createOlcApp(options) {
   const {
     createFirstUser,
     getRuntimeState,
+    getSetupProgress = () => ({
+      inProgress: false,
+      result: 'idle',
+      step: 'idle',
+      username: null,
+      startedAt: null,
+      finishedAt: null,
+      latestMessage: null,
+      events: [],
+    }),
     onSetupCompleted = () => {},
+    subscribeSetupProgress = () => () => {},
     systemControls,
     terminalUpstreamUrl = 'https://127.0.0.1:9443',
   } = options;
@@ -235,11 +246,40 @@ export function createOlcApp(options) {
     }
 
     const state = await requireRuntimeState();
+    const progress = getSetupProgress();
     writeJson(res, 200, {
       ok: true,
       setupMode: state.setupMode,
       activeUser: state.activeUser ? state.activeUser.name : null,
+      progress,
     });
+  }
+
+  async function handleSetupEvents(req, res) {
+    if (req.method !== 'GET') {
+      writeJson(res, 405, { ok: false, error: 'method not allowed' }, { allow: 'GET' });
+      return;
+    }
+
+    setNoStore(res);
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    res.write(': connected\n\n');
+
+    const unsubscribe = subscribeSetupProgress(progress => {
+      sendSse(res, 'status', progress);
+    });
+
+    req.on('close', unsubscribe);
+
+    try {
+      sendSse(res, 'status', getSetupProgress());
+    } catch (error) {
+      sendSse(res, 'error', { error: error.message });
+    }
   }
 
   async function handleSetupCreate(req, res) {
@@ -356,6 +396,11 @@ export function createOlcApp(options) {
 
     if (reqUrl.pathname === '/api/setup/status') {
       await handleSetupStatus(req, res);
+      return;
+    }
+
+    if (reqUrl.pathname === '/api/setup/events') {
+      await handleSetupEvents(req, res);
       return;
     }
 
