@@ -48,10 +48,16 @@ let
     pkgs.xorg.xsetroot
   ];
   userSessionScript = pkgs.writeShellScript "olc-user-xsession" ''
-    ${userXinitRc "https://localhost"}
+    ${userXinitRc {
+      startUrl = "https://localhost";
+      kiosk = false;
+    }}
   '';
   setupSessionScript = pkgs.writeShellScript "olc-setup-xsession" ''
-    ${userXinitRc "https://localhost/setup"}
+    ${userXinitRc {
+      startUrl = "https://localhost/setup";
+      kiosk = true;
+    }}
   '';
   fastBootCheck = ''
     olc_fast_boot=0
@@ -172,13 +178,25 @@ let
     user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
     OLC_USERJS
   '';
-  userXinitRc = startUrl: ''
+  firefoxLaunchArgs = { startUrl, kiosk ? false }:
+    lib.concatStringsSep " " (
+      [
+        firefoxBin
+        "--no-remote"
+        ''--profile "$HOME/.mozilla/firefox/ol-c.default"''
+        "--remote-debugging-port 0"
+        "--remote-allow-hosts localhost,127.0.0.1"
+      ]
+      ++ lib.optional kiosk "--kiosk"
+      ++ [ "--new-window ${startUrl}" ]
+    );
+  userXinitRc = { startUrl, kiosk ? false }: ''
     export PATH='${sessionPath}:$PATH'
     exec > >(${pkgs.systemd}/bin/systemd-cat --identifier=olc-xsession) 2>&1
     export PS4='+xsession:''${LINENO}: '
     set -x
-    printf 'uid=%s user=%s home=%s pwd=%s start_url=%s\n' \
-      "$(id -u)" "$(id -un)" "$HOME" "$PWD" "${startUrl}"
+    printf 'uid=%s user=%s home=%s pwd=%s start_url=%s kiosk=%s\n' \
+      "$(id -u)" "$(id -un)" "$HOME" "$PWD" "${startUrl}" "${if kiosk then "1" else "0"}"
     ${fastBootCheck}
     printf 'olc_fast_boot=%s\n' "$olc_fast_boot"
     xsetroot -solid "#0f172a"
@@ -203,6 +221,7 @@ let
       printf 'expected_unwrapped=%s\n' '${firefoxBin}'
       printf 'firefox_launcher=%s\n' '${firefoxBin}'
       printf 'moz_purge_caches=%s\n' "$([ "$olc_fast_boot" = "1" ] && printf 0 || printf 1)"
+      printf 'kiosk=%s\n' "${if kiosk then "1" else "0"}"
       printf 'profile=%s\n' "$HOME/.mozilla/firefox/ol-c.default"
       printf 'bidi_env=%s\n' "$firefox_bidi_env"
       printf 'bidi_log=%s\n' "$firefox_bidi_log"
@@ -237,20 +256,10 @@ let
       done
     ) &
     if [ "$olc_fast_boot" = "1" ]; then
-      ${firefoxBin} \
-        --no-remote \
-        --profile "$HOME/.mozilla/firefox/ol-c.default" \
-        --remote-debugging-port 0 \
-        --remote-allow-hosts localhost,127.0.0.1 \
-        --new-window ${startUrl} >>"$firefox_bidi_log" 2>&1 &
+      ${firefoxLaunchArgs { inherit startUrl kiosk; }} >>"$firefox_bidi_log" 2>&1 &
     else
       env MOZ_PURGE_CACHES=1 \
-        ${firefoxBin} \
-        --no-remote \
-        --profile "$HOME/.mozilla/firefox/ol-c.default" \
-        --remote-debugging-port 0 \
-        --remote-allow-hosts localhost,127.0.0.1 \
-        --new-window ${startUrl} >>"$firefox_bidi_log" 2>&1 &
+        ${firefoxLaunchArgs { inherit startUrl kiosk; }} >>"$firefox_bidi_log" 2>&1 &
     fi
     launcher_pid="$!"
     printf 'launcher_pid=%s\n' "$launcher_pid" >> "$HOME/ol-c-firefox-launch.txt"

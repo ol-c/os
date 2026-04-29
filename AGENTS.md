@@ -160,6 +160,7 @@ Question this milestone answers:
 
 - `https://localhost/terminal` provides fresh in-browser terminal sessions.
 - `https://localhost/edit` provides a browser text editor that uses the active signed-in user's filesystem permissions.
+- First boot launches Firefox in kiosk mode on `https://localhost/setup` so setup can own the browser surface until the first admin is created.
 - `edit` from an in-browser terminal opens `/edit`, and `edit <path>` opens a specific file.
 - The normal `./launch-vm` path uses a browser tab as the VM display through local-only QEMU VNC WebSocket plus pinned noVNC assets.
 - `./launch-vm` now also bridges guest audio into that browser viewer through a local-only raw PCM stream captured from a per-VM Pulse/PipeWire sink.
@@ -282,7 +283,6 @@ These are non-priority tasks we can pick up any time as an option for the next t
 - Ctrl+S crashes firefox
 - Future paste-into-VM fix: copy out of the browser-launched VM already works well. Paste should keep using the existing noVNC plus QEMU `qemu-vdagent` clipboard path, but keyboard paste needs to intercept `Ctrl+V` and host `Cmd+V` in capture phase before noVNC handles them, read host clipboard text during that user gesture, call `rfb.clipboardPasteFrom(text)`, then synthesize guest `Ctrl+V` so the active guest app actually pastes. Browser clipboard reads may be permission or prompt gated, so failure should show a concise hint.
 - Ctrl+Shift+C should not open dev tools in vm, we should make that copy
-- remove "connected" and "clipboard ready" chrome
 - make sure password save offer on initial account creation doesn't show
 - investigate browser terminal breakage after printing nested-child serial boot output with heavy raw OSC/ANSI control sequences; likely fix is to filter or redirect that boot stream before it hits the browser terminal session
 - investigate Codex CLI exits back to a raw shell prompt during nested-child launch work; likely trigger is the same unfiltered serial boot/control-sequence stream reaching the interactive Codex terminal, so prefer redirecting child serial logs to files and only tailing filtered output on demand

@@ -95,8 +95,13 @@ test('serves the VM screen without external assets', async () => {
     assert.match(script, /drainWheelAxis\(pos, baseMask, 'y', 1 << 3, 1 << 4\)/);
     assert.doesNotMatch(script, /https?:\/\/(?!127\.0\.0\.1)/);
 
-    assert.match(html, /id="clipboard-hint"/);
-    assert.match(html, /Clipboard ready/);
+    assert.match(html, /id="viewer-message"[^>]*hidden/);
+    assert.doesNotMatch(html, /id="status"/);
+    assert.doesNotMatch(html, /id="clipboard-hint"/);
+    assert.doesNotMatch(html, /id="audio-hint"/);
+    assert.doesNotMatch(html, /Connecting/);
+    assert.doesNotMatch(html, /Clipboard ready/);
+    assert.doesNotMatch(html, /Click VM to enable audio/);
     assert.doesNotMatch(html, /Paste to VM/);
     assert.doesNotMatch(html, /Copy from VM/);
 
@@ -125,8 +130,9 @@ test('serves embedded VM audio bridge metadata and PCM stream when enabled', asy
 
   try {
     const html = await fetch(url).then(response => response.text());
-    assert.match(html, /id="audio-hint"/);
-    assert.match(html, /Click VM to enable audio/);
+    assert.match(html, /id="viewer-message"[^>]*hidden/);
+    assert.doesNotMatch(html, /id="audio-hint"/);
+    assert.doesNotMatch(html, /Click VM to enable audio/);
     assert.match(html, /"audio":\{"enabled":true,"path":"\/audio-stream","sampleRate":48000,"channels":2,"format":"s16le"\}/);
 
     const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
@@ -135,6 +141,7 @@ test('serves embedded VM audio bridge metadata and PCM stream when enabled', asy
     assert.match(script, /createScriptProcessor\(audioProcessorFrameCount, 0, config\.audio\.channels\)/);
     assert.match(script, /ensureAudioBridge\(\);/);
     assert.match(script, /window\.addEventListener\('pointerdown'/);
+    assert.doesNotMatch(script, /Click VM to enable audio/);
 
     const response = await fetch(new URL('/audio-stream', url));
     assert.equal(response.status, 200);
@@ -142,6 +149,111 @@ test('serves embedded VM audio bridge metadata and PCM stream when enabled', asy
     const { value } = await reader.read();
     assert.deepEqual(Array.from(value.slice(0, 4)), [ 0, 0, 255, 127 ]);
     await reader.cancel();
+  } finally {
+    await stopServer(child);
+    await rm(noVncDir, { recursive: true, force: true });
+  }
+});
+
+test('viewer keeps routine connection and clipboard events out of the viewport chrome', async () => {
+  const noVncDir = await fakeNoVncTree();
+  const { child, url } = await startServer({ OLC_NOVNC_DIR: noVncDir });
+
+  try {
+    const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
+    const rfbHandlers = new Map();
+    const windowHandlers = new Map();
+    const screen = {
+      focus() {},
+      addEventListener() {},
+    };
+    const viewerMessage = { textContent: '', hidden: true };
+    const document = {
+      title: 'ol-c VM',
+      getElementById(id) {
+        return { screen, 'viewer-message': viewerMessage }[id];
+      },
+    };
+    let hostClipboardText = '';
+    let pastedText = '';
+    let pastePrevented = false;
+
+    class FakeRFB {
+      constructor() {
+        this._rfbConnectionState = 'connected';
+        this._viewOnly = false;
+      }
+
+      addEventListener(type, handler) {
+        rfbHandlers.set(type, handler);
+      }
+
+      clipboardPasteFrom(text) {
+        pastedText = text;
+      }
+
+      focus() {}
+    }
+
+    const context = {
+      FakeRFB,
+      document,
+      navigator: {
+        clipboard: {
+          async writeText(text) {
+            hostClipboardText = text;
+          },
+        },
+      },
+      window: {
+        OLC_VM_SCREEN: { host: '127.0.0.1', port: 5720, audio: { enabled: false } },
+        location: { protocol: 'http:' },
+        addEventListener(type, handler) {
+          windowHandlers.set(type, handler);
+        },
+        clearTimeout() {},
+        setTimeout() {
+          return 1;
+        },
+      },
+    };
+
+    vm.runInNewContext(
+      script.replace("import RFB from '/novnc/core/rfb.js';", 'const RFB = FakeRFB;'),
+      context,
+    );
+
+    rfbHandlers.get('connect')();
+    assert.equal(document.title, 'ol-c VM');
+    assert.equal(viewerMessage.hidden, true);
+    assert.equal(viewerMessage.textContent, '');
+
+    rfbHandlers.get('clipboard')({ detail: { text: 'from guest' } });
+    await Promise.resolve();
+    assert.equal(hostClipboardText, 'from guest');
+    assert.equal(viewerMessage.hidden, true);
+    assert.equal(viewerMessage.textContent, '');
+
+    windowHandlers.get('paste')({
+      clipboardData: {
+        getData(type) {
+          assert.equal(type, 'text/plain');
+          return 'from host';
+        },
+      },
+      preventDefault() {
+        pastePrevented = true;
+      },
+    });
+    assert.equal(pastedText, 'from host');
+    assert.equal(pastePrevented, true);
+    assert.equal(viewerMessage.hidden, true);
+    assert.equal(viewerMessage.textContent, '');
+
+    rfbHandlers.get('disconnect')({ detail: { clean: false } });
+    assert.equal(document.title, 'ol-c VM - Disconnected unexpectedly');
+    assert.equal(viewerMessage.hidden, false);
+    assert.equal(viewerMessage.textContent, 'Disconnected unexpectedly');
   } finally {
     await stopServer(child);
     await rm(noVncDir, { recursive: true, force: true });
@@ -168,9 +280,7 @@ test('viewer starts audio fetch before gesture and retries audio context creatio
       },
       addEventListener() {},
     };
-    const status = { textContent: '' };
-    const clipboardHint = { textContent: '' };
-    const audioHint = { textContent: '' };
+    const viewerMessage = { textContent: '', hidden: true };
     let audioContextInstances = 0;
     let audioResumeCalls = 0;
 
@@ -197,9 +307,7 @@ test('viewer starts audio fetch before gesture and retries audio context creatio
         getElementById(id) {
           return {
             screen,
-            status,
-            'clipboard-hint': clipboardHint,
-            'audio-hint': audioHint,
+            'viewer-message': viewerMessage,
           }[id];
         },
       },
@@ -238,7 +346,8 @@ test('viewer starts audio fetch before gesture and retries audio context creatio
     );
 
     assert.deepEqual(fetchCalls, [ '/audio-stream' ]);
-    assert.equal(audioHint.textContent, 'Click VM to enable audio');
+    assert.equal(viewerMessage.hidden, true);
+    assert.equal(viewerMessage.textContent, '');
     assert.equal(screen.focusCalls, 1);
 
     context.window.AudioContext = class WorkingAudioContext {
@@ -291,9 +400,7 @@ test('viewer trims stale pre-gesture audio to keep playback near live', async ()
       focus() {},
       addEventListener() {},
     };
-    const status = { textContent: '' };
-    const clipboardHint = { textContent: '' };
-    const audioHint = { textContent: '' };
+    const viewerMessage = { textContent: '', hidden: true };
     const oldSample = 1000;
     const liveSample = 20000;
     const sampleRate = 48000;
@@ -349,9 +456,7 @@ test('viewer trims stale pre-gesture audio to keep playback near live', async ()
         getElementById(id) {
           return {
             screen,
-            status,
-            'clipboard-hint': clipboardHint,
-            'audio-hint': audioHint,
+            'viewer-message': viewerMessage,
           }[id];
         },
       },
@@ -426,7 +531,8 @@ test('viewer trims stale pre-gesture audio to keep playback near live', async ()
 
     assert.ok(left[0] > 0.5, `expected live audio tail, got ${left[0]}`);
     assert.ok(right[0] > 0.5, `expected live audio tail, got ${right[0]}`);
-    assert.notEqual(audioHint.textContent, 'Audio buffering');
+    assert.equal(viewerMessage.hidden, true);
+    assert.equal(viewerMessage.textContent, '');
   } finally {
     await stopServer(child);
     await rm(noVncDir, { recursive: true, force: true });
@@ -449,8 +555,7 @@ test('viewer wheel capture drains repeated steps and preserves remainder', async
         }
       },
     };
-    const status = { textContent: '' };
-    const clipboardHint = { textContent: '' };
+    const viewerMessage = { textContent: '', hidden: true };
     const canvas = {
       getBoundingClientRect() {
         return {
@@ -489,7 +594,7 @@ test('viewer wheel capture drains repeated steps and preserves remainder', async
       },
       document: {
         getElementById(id) {
-          return { screen, status, 'clipboard-hint': clipboardHint }[id];
+          return { screen, 'viewer-message': viewerMessage }[id];
         },
       },
       navigator: {},

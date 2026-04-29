@@ -210,7 +210,7 @@ This proof prefers image reuse over building a full image inside the parent VM. 
 - `users.nix` owns the setup account, tty1 login behavior, and the shared shell prompt helpers
 - `packages.nix` owns the shared guest package list
 - `localhost-ui.nix` owns the generated localhost TLS material, trusted CA, stable `ol-c-terminal` service, and reloadable `ol-c-ui` service
-- `graphical-session.nix` owns X, matchbox, guest graphical session setup, Firefox profile setup, and browser launch
+- `graphical-session.nix` owns X, matchbox, guest graphical session setup, Firefox profile setup, and browser launch, including setup-session Firefox kiosk mode on `https://localhost/setup`
 
 The localhost HTTPS service source lives in `localhost-ui/server.mjs`. The stable terminal service source lives in `localhost-ui/terminal-server.mjs`. Nix wires both into the guest and provides the runtime paths for TLS material, terminal assets, `ttyd`, and bash.
 

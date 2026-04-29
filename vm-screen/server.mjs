@@ -97,7 +97,6 @@ function indexHtml() {
     port: Number.parseInt(vncWebsocketPort, 10),
     audio: audioConfig(),
   });
-  const audioHint = audioEnabled ? '\n  <div id="audio-hint">Click VM to enable audio</div>' : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -121,48 +120,28 @@ function indexHtml() {
       height: 100vh;
     }
 
-    #status {
-      position: fixed;
-      top: 8px;
-      left: 8px;
-      z-index: 2;
-      padding: 5px 7px;
-      border-radius: 4px;
-      background: rgba(16, 20, 24, 0.78);
-      color: #f4f7f8;
-      font-size: 13px;
+    #viewer-message[hidden] {
+      display: none;
     }
 
-    #clipboard-hint {
+    #viewer-message {
       position: fixed;
-      top: 8px;
-      right: 8px;
+      right: 10px;
+      bottom: 10px;
       z-index: 2;
-      padding: 5px 6px;
-      border-radius: 4px;
+      max-width: min(28rem, calc(100vw - 20px));
+      padding: 6px 8px;
+      border-radius: 6px;
       background: rgba(16, 20, 24, 0.78);
       color: #f4f7f8;
       font-size: 13px;
-    }
-
-    #audio-hint {
-      position: fixed;
-      right: 8px;
-      bottom: 8px;
-      z-index: 2;
-      padding: 5px 6px;
-      border-radius: 4px;
-      background: rgba(16, 20, 24, 0.78);
-      color: #f4f7f8;
-      font-size: 13px;
+      pointer-events: none;
     }
   </style>
 </head>
 <body>
   <div id="screen"></div>
-  <div id="status">Connecting</div>
-  <div id="clipboard-hint">Clipboard ready</div>
-  ${audioHint}
+  <div id="viewer-message" role="status" aria-live="polite" hidden></div>
   <script>window.OLC_VM_SCREEN = ${config};</script>
   <script type="module" src="/screen.js"></script>
 </body>
@@ -173,15 +152,13 @@ function screenJs() {
   return `import RFB from '/novnc/core/rfb.js';
 
 const screen = document.getElementById('screen');
-const status = document.getElementById('status');
-const clipboardHint = document.getElementById('clipboard-hint');
-const audioHint = document.getElementById('audio-hint');
+const viewerMessage = document.getElementById('viewer-message');
 const config = window.OLC_VM_SCREEN;
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const url = protocol + '//' + config.host + ':' + config.port + '/';
 let latestVmClipboardText = '';
-let clipboardHintTimer = 0;
-let audioHintTimer = 0;
+let viewerMessageTimer = 0;
+let persistentViewerMessage = false;
 const wheelState = { x: 0, y: 0 };
 const wheelStep = 50;
 const wheelLineHeight = 19;
@@ -195,29 +172,53 @@ let pendingAudioBytes = new Uint8Array(0);
 const audioQueue = [];
 const audioProcessorFrameCount = 1024;
 
-function setStatus(message) {
-  status.textContent = message;
-}
-
-function setClipboardHint(message) {
-  clipboardHint.textContent = message;
-  window.clearTimeout(clipboardHintTimer);
-  clipboardHintTimer = window.setTimeout(() => {
-    clipboardHint.textContent = 'Clipboard ready';
-  }, 3500);
-}
-
-function setAudioHint(message, persist = true) {
-  if (!audioHint) {
+function setViewerMessage(message, { persist = false } = {}) {
+  if (!viewerMessage) {
+    return;
+  }
+  if (persistentViewerMessage && !persist) {
     return;
   }
 
-  audioHint.textContent = message;
-  window.clearTimeout(audioHintTimer);
+  persistentViewerMessage = persist;
+  viewerMessage.textContent = message;
+  viewerMessage.hidden = false;
+  window.clearTimeout(viewerMessageTimer);
   if (!persist) {
-    audioHintTimer = window.setTimeout(() => {
-      audioHint.textContent = 'Click VM to enable audio';
+    viewerMessageTimer = window.setTimeout(() => {
+      viewerMessage.hidden = true;
+      viewerMessage.textContent = '';
     }, 3500);
+  }
+}
+
+function clearViewerMessage() {
+  if (!viewerMessage) {
+    return;
+  }
+
+  window.clearTimeout(viewerMessageTimer);
+  persistentViewerMessage = false;
+  viewerMessage.hidden = true;
+  viewerMessage.textContent = '';
+}
+
+function setStatus(message, { visible = false } = {}) {
+  document.title = message === 'Connected' ? 'ol-c VM' : 'ol-c VM - ' + message;
+  if (visible) {
+    setViewerMessage(message, { persist: true });
+  } else if (message === 'Connected') {
+    clearViewerMessage();
+  }
+}
+
+function setAudioProblem(message) {
+  setViewerMessage(message);
+}
+
+function setAudioHint(message) {
+  if (message === 'Browser audio unsupported' || message === 'Audio unavailable') {
+    setAudioProblem(message);
   }
 }
 
@@ -269,23 +270,28 @@ function drainWheelAxis(pos, baseMask, axis, negativeMask, positiveMask) {
   wheelState[axis] -= steps * wheelStep;
 }
 
-async function copyLatestVmClipboardToHost() {
+async function copyLatestVmClipboardToHost({ notify = false } = {}) {
   if (latestVmClipboardText.length === 0) {
-    setClipboardHint('No VM clipboard text');
+    if (notify) {
+      setViewerMessage('No VM clipboard text');
+    }
     return false;
   }
 
   if (!navigator.clipboard?.writeText) {
-    setClipboardHint('Host clipboard unavailable');
+    if (notify) {
+      setViewerMessage('Host clipboard unavailable');
+    }
     return false;
   }
 
   try {
     await navigator.clipboard.writeText(latestVmClipboardText);
-    setClipboardHint('Copied from VM');
     return true;
   } catch {
-    setClipboardHint('Press Ctrl+Shift+C to copy from VM');
+    if (notify) {
+      setViewerMessage('Press Ctrl+Shift+C to copy from VM');
+    }
     return false;
   }
 }
@@ -319,7 +325,6 @@ function trimQueuedAudio() {
   }
 
   dropQueuedAudioFrames(queuedAudioFrames - targetFrames);
-  setAudioHint('Audio latency trimmed', false);
 }
 
 function queueAudioChunk(value) {
@@ -412,7 +417,6 @@ function drainAudioInto(outputChannels) {
 
   if (written < frameCount) {
     audioPrimed = false;
-    setAudioHint('Audio buffering', false);
   }
 }
 
@@ -441,7 +445,6 @@ function ensureAudioBridge() {
       sampleRate: config.audio.sampleRate,
     });
   } catch {
-    setAudioHint('Click VM to enable audio');
     return false;
   }
 
@@ -461,12 +464,6 @@ function ensureAudioBridge() {
   audioProcessor.connect(audioContext.destination);
   audioBridgeReady = true;
 
-  if (audioContext.state === 'running') {
-    setAudioHint('Audio connecting');
-  } else {
-    setAudioHint('Click VM to enable audio');
-  }
-
   return true;
 }
 
@@ -477,13 +474,8 @@ async function resumeAudioPlayback() {
 
   try {
     await audioContext.resume();
-    if (queuedAudioFrames > 0) {
-      setAudioHint('Audio on');
-    } else {
-      setAudioHint('Audio waiting for guest');
-    }
   } catch {
-    setAudioHint('Click VM to enable audio');
+    return;
   }
 }
 
@@ -512,9 +504,8 @@ async function streamAudioToBrowser() {
         }
       }
 
-      setAudioHint('Audio reconnecting');
     } catch {
-      setAudioHint('Audio reconnecting');
+      setAudioHint('Audio unavailable');
     }
 
     await new Promise(resolve => {
@@ -549,14 +540,13 @@ screen.addEventListener('wheel', event => {
 
 rfb.addEventListener('connect', () => setStatus('Connected'));
 rfb.addEventListener('disconnect', event => {
-  setStatus(event.detail.clean ? 'Disconnected' : 'Disconnected unexpectedly');
+  setStatus(event.detail.clean ? 'Disconnected' : 'Disconnected unexpectedly', { visible: true });
 });
-rfb.addEventListener('credentialsrequired', () => setStatus('Credentials required'));
-rfb.addEventListener('securityfailure', () => setStatus('Security failure'));
+rfb.addEventListener('credentialsrequired', () => setStatus('Credentials required', { visible: true }));
+rfb.addEventListener('securityfailure', () => setStatus('Security failure', { visible: true }));
 rfb.addEventListener('clipboard', event => {
   latestVmClipboardText = event.detail?.text || '';
   if (latestVmClipboardText.length === 0) {
-    setClipboardHint('VM clipboard empty');
     return;
   }
 
@@ -571,7 +561,6 @@ window.addEventListener('paste', event => {
 
   event.preventDefault();
   rfb.clipboardPasteFrom(text);
-  setClipboardHint('Pasted to VM');
   rfb.focus();
 });
 
@@ -579,7 +568,7 @@ window.addEventListener('keydown', event => {
   void resumeAudioPlayback();
   if (event.ctrlKey && event.shiftKey && event.code === 'KeyC') {
     event.preventDefault();
-    void copyLatestVmClipboardToHost();
+    void copyLatestVmClipboardToHost({ notify: true });
   }
 });
 
