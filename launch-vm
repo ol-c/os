@@ -32,6 +32,15 @@ Environment:
                     the browser viewer path.
   OLC_QEMU_PACKAGE  Nix package for browser frontend QEMU. Default: .#qemu-olc.
   OLC_NOVNC_DIR           noVNC asset directory. Default: built from .#novnc.
+  OLC_VM_AUDIO_MODE       Embedded VM audio mode: browser or none.
+                    Default: browser.
+  OLC_VM_AUDIO_PULSE_SERVER
+                    PulseAudio/PipeWire server for embedded VM audio.
+                    Default: unix:/run/user/<uid>/pulse/native.
+  OLC_PACTL         pactl executable path. Default: first pactl in PATH or
+                    built from .#pulseaudio.
+  OLC_PAREC         parec executable path. Default: first parec in PATH or
+                    built from .#pulseaudio.
   OLC_VM_SCREEN_OPEN_BROWSER
                           Open the browser viewer with xdg-open. Default: 1.
   OLC_VM_SCREEN_PORT      Local browser viewer HTTP port. Default: automatic.
@@ -190,6 +199,90 @@ resolve_qemu_binary() {
   RESOLVED_QEMU_BIN="$candidate"
 }
 
+resolve_pulseaudio_tool() {
+  local env_name="$1"
+  local tool_name="$2"
+  local override="${!env_name:-}"
+  local out_path candidate
+
+  if [[ -n "$override" ]]; then
+    [[ -x "$override" ]] || fail "${env_name} is not executable: $override"
+    printf '%s\n' "$override"
+    return
+  fi
+
+  candidate="$(resolve_command "$tool_name")"
+  if [[ -n "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return
+  fi
+
+  require_command nix
+  out_path="$(nix build .#pulseaudio --print-out-paths --no-link)"
+  candidate="$out_path/bin/$tool_name"
+  [[ -x "$candidate" ]] || fail "unable to locate ${tool_name} in pulseaudio build output: $out_path"
+  printf '%s\n' "$candidate"
+}
+
+setup_vm_audio() {
+  local audio_args_json
+
+  case "$VM_AUDIO_MODE" in
+    none)
+      AUDIO_QEMU_ARGS=(
+        -audiodev none,id=olc-audio
+      )
+      return
+      ;;
+    browser)
+      ;;
+    *)
+      fail "unsupported VM audio mode: $VM_AUDIO_MODE"
+      ;;
+  esac
+
+  PACTL_BIN="$(resolve_pulseaudio_tool OLC_PACTL pactl)"
+  PAREC_BIN="$(resolve_pulseaudio_tool OLC_PAREC parec)"
+
+  if ! PULSE_SERVER="$VM_AUDIO_PULSE_SERVER" "$PACTL_BIN" info >/dev/null 2>&1; then
+    fail "unable to connect to PulseAudio/PipeWire server for VM audio: $VM_AUDIO_PULSE_SERVER"
+  fi
+
+  AUDIO_SINK_NAME="olc_vm_${$}_${RANDOM}"
+  AUDIO_SINK_MODULE_ID="$(
+    PULSE_SERVER="$VM_AUDIO_PULSE_SERVER" \
+      "$PACTL_BIN" load-module module-null-sink \
+      "sink_name=$AUDIO_SINK_NAME" \
+      "rate=$VM_AUDIO_SAMPLE_RATE" \
+      "channels=$VM_AUDIO_CHANNELS" \
+      "format=$VM_AUDIO_FORMAT"
+  )"
+  AUDIO_SINK_MODULE_ID="$(printf '%s' "$AUDIO_SINK_MODULE_ID" | tr -d '\n')"
+  [[ "$AUDIO_SINK_MODULE_ID" =~ ^[0-9]+$ ]] || fail "failed to create VM audio bridge sink: ${AUDIO_SINK_MODULE_ID:-<empty>}"
+
+  audio_args_json="$(printf '["--device=%s.monitor","--rate=%s","--channels=%s","--format=%s","--raw","--latency-msec=20"]' \
+    "$AUDIO_SINK_NAME" \
+    "$VM_AUDIO_SAMPLE_RATE" \
+    "$VM_AUDIO_CHANNELS" \
+    "$VM_AUDIO_FORMAT")"
+
+  AUDIO_QEMU_ARGS=(
+    -audiodev "pa,id=olc-audio,server=${VM_AUDIO_PULSE_SERVER},out.latency=20000"
+  )
+  AUDIO_QEMU_ENV=(
+    "PULSE_SERVER=${VM_AUDIO_PULSE_SERVER}"
+    "PULSE_SINK=${AUDIO_SINK_NAME}"
+  )
+  VM_SCREEN_AUDIO_ENV=(
+    "OLC_VM_SCREEN_AUDIO_ENABLED=1"
+    "OLC_VM_SCREEN_AUDIO_BIN=${PAREC_BIN}"
+    "OLC_VM_SCREEN_AUDIO_ARGS_JSON=${audio_args_json}"
+    "OLC_VM_SCREEN_AUDIO_SAMPLE_RATE=${VM_AUDIO_SAMPLE_RATE}"
+    "OLC_VM_SCREEN_AUDIO_CHANNELS=${VM_AUDIO_CHANNELS}"
+    "OLC_VM_SCREEN_AUDIO_FORMAT=${VM_AUDIO_FORMAT}"
+  )
+}
+
 virtiofsd_supports_translate_ids() {
   "$VIRTIOFSD" --help 2>&1 | grep -q -- '--translate-uid'
 }
@@ -332,6 +425,11 @@ VIRTIOFSD_SANDBOX="${OLC_VIRTIOFSD_SANDBOX:-none}"
 VIRTIOFSD_TRANSLATE_IDS="${OLC_VIRTIOFSD_TRANSLATE_IDS:-1}"
 VIRTIOFSD_HOST_UID="${OLC_VIRTIOFSD_HOST_UID:-$(id -u)}"
 VIRTIOFSD_HOST_GID="${OLC_VIRTIOFSD_HOST_GID:-$(id -g)}"
+VM_AUDIO_MODE="${OLC_VM_AUDIO_MODE:-browser}"
+VM_AUDIO_PULSE_SERVER="${OLC_VM_AUDIO_PULSE_SERVER:-unix:/run/user/$(id -u)/pulse/native}"
+VM_AUDIO_SAMPLE_RATE=48000
+VM_AUDIO_CHANNELS=2
+VM_AUDIO_FORMAT="s16le"
 KVM_DEVICE="${OLC_KVM_DEVICE:-/dev/kvm}"
 VM_PARENT_MACHINE_ID="${OLC_VM_PARENT_MACHINE_ID:-}"
 VM_PARENT_DEPTH="${OLC_VM_PARENT_DEPTH:-}"
@@ -352,6 +450,13 @@ QMP_SOCKET=""
 VM_SCREEN_URL=""
 VM_SCREEN_RECONNECT_URL=""
 RESOLVED_QEMU_BIN=""
+PACTL_BIN=""
+PAREC_BIN=""
+AUDIO_SINK_NAME=""
+AUDIO_SINK_MODULE_ID=""
+declare -a AUDIO_QEMU_ARGS=()
+declare -a AUDIO_QEMU_ENV=()
+declare -a VM_SCREEN_AUDIO_ENV=()
 VM_MACHINE_ID=""
 VM_BOOT_ID=""
 RESOLVED_NOVNC_DIR=""
@@ -420,6 +525,7 @@ NOVNC_DIR="$RESOLVED_NOVNC_DIR"
 
 resolve_qemu_binary
 QEMU_BIN="$RESOLVED_QEMU_BIN"
+setup_vm_audio
 
 if [[ ! -e "$KVM_DEVICE" && "${OLC_SKIP_KVM_CHECK:-0}" != "1" ]]; then
   fail "${KVM_DEVICE} is required"
@@ -468,6 +574,11 @@ if [[ "${#virtiofsd_id_args[@]}" -gt 0 ]]; then
   echo "virtiofsd id mapping: guest 1000:1000 -> host ${VIRTIOFSD_HOST_UID}:${VIRTIOFSD_HOST_GID}"
 fi
 echo "viewer: browser tab"
+if [[ "$VM_AUDIO_MODE" == "browser" ]]; then
+  echo "audio: browser bridge via ${AUDIO_SINK_NAME}.monitor"
+else
+  echo "audio: disabled"
+fi
 echo "novnc assets: $NOVNC_DIR"
 
 cleanup() {
@@ -480,6 +591,10 @@ cleanup() {
 
   if [[ -n "$VM_SCREEN_PID" ]] && kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
     kill "$VM_SCREEN_PID" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -n "$AUDIO_SINK_MODULE_ID" && -n "$PACTL_BIN" ]]; then
+    PULSE_SERVER="$VM_AUDIO_PULSE_SERVER" "$PACTL_BIN" unload-module "$AUDIO_SINK_MODULE_ID" >/dev/null 2>&1 || true
   fi
 
   if [[ -n "$VM_SCREEN_LOG" ]]; then
@@ -589,7 +704,7 @@ qemu_base_args=(
   -device qemu-xhci,id=ol-c-usb
   -device usb-kbd,bus=ol-c-usb.0
   -device usb-tablet,bus=ol-c-usb.0
-  -audiodev none,id=olc-audio
+  "${AUDIO_QEMU_ARGS[@]}"
   -device intel-hda
   -device hda-duplex,audiodev=olc-audio
   -serial mon:stdio
@@ -630,7 +745,7 @@ VM_SCREEN_LOG="$(mktemp "${TMPDIR:-/tmp}/ol-c-vm-screen.XXXXXX.log")"
 
 echo "vnc display: 127.0.0.1:${VNC_DISPLAY}"
 echo "vnc websocket: 127.0.0.1:${VNC_WEBSOCKET_PORT}"
-"$QEMU_BIN" \
+env "${AUDIO_QEMU_ENV[@]}" "$QEMU_BIN" \
   "${qemu_base_args[@]}" \
   -qmp "unix:${QMP_SOCKET},server=on,wait=off" \
   -display none \
@@ -640,11 +755,14 @@ echo "vnc websocket: 127.0.0.1:${VNC_WEBSOCKET_PORT}"
   -vnc "127.0.0.1:${VNC_DISPLAY},websocket=127.0.0.1:${VNC_WEBSOCKET_PORT}" &
 QEMU_PID="$!"
 
-OLC_NOVNC_DIR="$NOVNC_DIR" \
-OLC_VM_SCREEN_HOST="127.0.0.1" \
-OLC_VM_SCREEN_PORT="$VM_SCREEN_PORT" \
-OLC_VM_SCREEN_VNC_HOST="127.0.0.1" \
-OLC_VM_SCREEN_VNC_WS_PORT="$VNC_WEBSOCKET_PORT" \
+env \
+  OLC_NOVNC_DIR="$NOVNC_DIR" \
+  OLC_VM_SCREEN_HOST="127.0.0.1" \
+  OLC_VM_SCREEN_PORT="$VM_SCREEN_PORT" \
+  OLC_VM_SCREEN_VNC_HOST="127.0.0.1" \
+  OLC_VM_SCREEN_VNC_WS_PORT="$VNC_WEBSOCKET_PORT" \
+  PULSE_SERVER="$VM_AUDIO_PULSE_SERVER" \
+  "${VM_SCREEN_AUDIO_ENV[@]}" \
   node "$(dirname -- "$0")/vm-screen/server.mjs" >"$VM_SCREEN_LOG" 2>&1 &
 VM_SCREEN_PID="$!"
 

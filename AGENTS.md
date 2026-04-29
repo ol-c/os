@@ -162,6 +162,7 @@ Question this milestone answers:
 - `https://localhost/edit` provides a browser text editor that uses the active signed-in user's filesystem permissions.
 - `edit` from an in-browser terminal opens `/edit`, and `edit <path>` opens a specific file.
 - The normal `./launch-vm` path uses a browser tab as the VM display through local-only QEMU VNC WebSocket plus pinned noVNC assets.
+- `./launch-vm` now also bridges guest audio into that browser viewer through a local-only raw PCM stream captured from a per-VM Pulse/PipeWire sink.
 - `launch-vm` also exposes a local-only QMP socket and prints it as `qmp socket:`.
 - `launch-vm` can wait for the guest `olc-vm-ready` journal marker and surface readiness failures.
 - In-VM development uses a host-shared repo mounted at `/source` via `virtiofs`.
@@ -212,6 +213,7 @@ Related design notes:
   - The packaged build remains the gate for what ships.
 - Fast deterministic checks currently passing:
   - `node --test localhost-ui/*.test.mjs`
+  - `node --test vm-screen/server.test.mjs`
   - `cd terminal-client && npm test && npm run build`
   - `bash tests/test-build-vm.sh`
   - `bash tests/test-launch-vm.sh`

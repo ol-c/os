@@ -31,6 +31,8 @@ setup_case() {
   cat >"${CASE_TMP}/fakebin/qemu-system-x86_64" <<EOF
 #!${TEST_FAKE_BASH}
 printf '%s\n' "\$*" > "${CASE_TMP}/qemu.args"
+printf '%s\n' "\${PULSE_SERVER:-}" > "${CASE_TMP}/qemu.pulse-server"
+printf '%s\n' "\${PULSE_SINK:-}" > "${CASE_TMP}/qemu.pulse-sink"
 qmp_socket=""
 vnc_enabled=0
 for arg in "\$@"; do
@@ -106,6 +108,12 @@ EOF
 printf '%s\n' "\$*" > "${CASE_TMP}/node.args"
 printf '%s\n' "\${OLC_NOVNC_DIR:-}" > "${CASE_TMP}/node.novnc-dir"
 printf '%s\n' "\${OLC_VM_SCREEN_VNC_WS_PORT:-}" > "${CASE_TMP}/node.vnc-ws-port"
+printf '%s\n' "\${OLC_VM_SCREEN_AUDIO_ENABLED:-}" > "${CASE_TMP}/node.audio-enabled"
+printf '%s\n' "\${OLC_VM_SCREEN_AUDIO_BIN:-}" > "${CASE_TMP}/node.audio-bin"
+printf '%s\n' "\${OLC_VM_SCREEN_AUDIO_ARGS_JSON:-}" > "${CASE_TMP}/node.audio-args-json"
+printf '%s\n' "\${OLC_VM_SCREEN_AUDIO_SAMPLE_RATE:-}" > "${CASE_TMP}/node.audio-sample-rate"
+printf '%s\n' "\${OLC_VM_SCREEN_AUDIO_CHANNELS:-}" > "${CASE_TMP}/node.audio-channels"
+printf '%s\n' "\${PULSE_SERVER:-}" > "${CASE_TMP}/node.pulse-server"
 printf '%s\n' 'OLC_VM_SCREEN_URL http://127.0.0.1:6080/'
 if [[ "\${OLC_FAKE_VM_SCREEN_WAIT:-0}" != "1" ]]; then
   exit "\${OLC_FAKE_VM_SCREEN_EXIT_STATUS:-0}"
@@ -189,7 +197,36 @@ Sat 2026-04-26 12:00:00 UTC ol-c-browser systemd[1]: still booting
 OUT
 EOF
 
-  chmod +x "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/fakebin/qemu-img" "${CASE_TMP}/fakebin/virtiofsd" "${CASE_TMP}/fakebin/node" "${CASE_TMP}/fakebin/build-vm" "${CASE_TMP}/fakebin/nix" "${CASE_TMP}/fakebin/journalctl"
+  cat >"${CASE_TMP}/fakebin/pactl" <<EOF
+#!${TEST_FAKE_BASH}
+printf '%s\n' "\$*" >> "${CASE_TMP}/pactl.args.all"
+printf '%s\n' "\${PULSE_SERVER:-}" > "${CASE_TMP}/pactl.pulse-server"
+case "\${1:-}" in
+  info)
+    exit 0
+    ;;
+  load-module)
+    printf '%s\n' "\$*" > "${CASE_TMP}/pactl.load-module.args"
+    printf '%s\n' 42
+    exit 0
+    ;;
+  unload-module)
+    printf '%s\n' "\$*" > "${CASE_TMP}/pactl.unload-module.args"
+    exit 0
+    ;;
+esac
+exit 0
+EOF
+
+  cat >"${CASE_TMP}/fakebin/parec" <<EOF
+#!${TEST_FAKE_BASH}
+printf '%s\n' "\$*" > "${CASE_TMP}/parec.args"
+while true; do
+  sleep 1
+done
+EOF
+
+  chmod +x "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/fakebin/qemu-img" "${CASE_TMP}/fakebin/virtiofsd" "${CASE_TMP}/fakebin/node" "${CASE_TMP}/fakebin/build-vm" "${CASE_TMP}/fakebin/nix" "${CASE_TMP}/fakebin/journalctl" "${CASE_TMP}/fakebin/pactl" "${CASE_TMP}/fakebin/parec"
   cp "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/qemu-store/bin/qemu-system-x86_64"
 }
 
@@ -322,7 +359,7 @@ test_requires_source_directory_create_permissions() {
 }
 
 test_invokes_qemu_with_expected_browser_args_by_default() {
-  local output qemu_args build_args qemu_img_args virtiofsd_args virtiofsd_shared_dir vm_images_virtiofsd_args vm_images_shared_dir virtiofs_socket vm_images_socket node_args node_novnc_dir node_vnc_ws_port nix_args qmp_socket
+  local output qemu_args build_args qemu_img_args virtiofsd_args virtiofsd_shared_dir vm_images_virtiofsd_args vm_images_shared_dir virtiofs_socket vm_images_socket node_args node_novnc_dir node_vnc_ws_port node_audio_enabled node_audio_bin node_audio_args_json node_audio_sample_rate node_audio_channels node_pulse_server nix_args qmp_socket qemu_pulse_server qemu_pulse_sink pactl_load_args pactl_unload_args pactl_pulse_server
   setup_case
 
   set +e
@@ -351,8 +388,19 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   node_args="$(safe_cat "${CASE_TMP}/node.args")"
   node_novnc_dir="$(safe_cat "${CASE_TMP}/node.novnc-dir")"
   node_vnc_ws_port="$(safe_cat "${CASE_TMP}/node.vnc-ws-port")"
+  node_audio_enabled="$(safe_cat "${CASE_TMP}/node.audio-enabled")"
+  node_audio_bin="$(safe_cat "${CASE_TMP}/node.audio-bin")"
+  node_audio_args_json="$(safe_cat "${CASE_TMP}/node.audio-args-json")"
+  node_audio_sample_rate="$(safe_cat "${CASE_TMP}/node.audio-sample-rate")"
+  node_audio_channels="$(safe_cat "${CASE_TMP}/node.audio-channels")"
+  node_pulse_server="$(safe_cat "${CASE_TMP}/node.pulse-server")"
   nix_args="$(safe_cat "${CASE_TMP}/nix.args.all")"
   qmp_socket="$(safe_cat "${CASE_TMP}/qmp.socket-path")"
+  qemu_pulse_server="$(safe_cat "${CASE_TMP}/qemu.pulse-server")"
+  qemu_pulse_sink="$(safe_cat "${CASE_TMP}/qemu.pulse-sink")"
+  pactl_load_args="$(safe_cat "${CASE_TMP}/pactl.load-module.args")"
+  pactl_unload_args="$(safe_cat "${CASE_TMP}/pactl.unload-module.args")"
+  pactl_pulse_server="$(safe_cat "${CASE_TMP}/pactl.pulse-server")"
   assert_contains "$output" "graphical proof: Firefox launches as the in-guest UI shell"
   assert_contains "$output" "serial output: terminal"
   assert_contains "$output" "qemu frontend: browser"
@@ -368,6 +416,7 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$output" "virtiofsd sandbox: none"
   assert_contains "$output" "virtiofsd id mapping: guest 1000:1000 -> host "
   assert_contains "$output" "viewer: browser tab"
+  assert_contains "$output" "audio: browser bridge via olc_vm_"
   assert_contains "$output" "novnc assets: ${CASE_TMP}/novnc"
   assert_contains "$output" "vnc display: 127.0.0.1:"
   assert_contains "$output" "vnc websocket: 127.0.0.1:"
@@ -394,7 +443,8 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$qemu_args" "-device qemu-xhci,id=ol-c-usb"
   assert_contains "$qemu_args" "-device usb-kbd,bus=ol-c-usb.0"
   assert_contains "$qemu_args" "-device usb-tablet,bus=ol-c-usb.0"
-  assert_contains "$qemu_args" "-audiodev none,id=olc-audio"
+  assert_contains "$qemu_args" "-audiodev pa,id=olc-audio,server=unix:/run/user/1000/pulse/native"
+  assert_contains "$qemu_args" "out.latency=20000"
   assert_contains "$qemu_args" "-device intel-hda"
   assert_contains "$qemu_args" "-device hda-duplex,audiodev=olc-audio"
   assert_contains "$qemu_args" "-qmp unix:"
@@ -424,6 +474,23 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$node_args" "vm-screen/server.mjs"
   [[ "$node_novnc_dir" == "${CASE_TMP}/novnc" ]] || fail "expected screen server to use fake noVNC assets, got [$node_novnc_dir]"
   [[ "$node_vnc_ws_port" =~ ^[0-9]+$ ]] || fail "expected screen server to receive a websocket port, got [$node_vnc_ws_port]"
+  [[ "$node_audio_enabled" == "1" ]] || fail "expected browser audio bridge to be enabled for the viewer, got [$node_audio_enabled]"
+  [[ "$node_audio_bin" == "${CASE_TMP}/fakebin/parec" ]] || fail "expected viewer audio capture bin to use fake parec, got [$node_audio_bin]"
+  assert_contains "$node_audio_args_json" "\"--device=olc_vm_"
+  assert_contains "$node_audio_args_json" "\"--rate=48000\""
+  assert_contains "$node_audio_args_json" "\"--channels=2\""
+  assert_contains "$node_audio_args_json" "\"--format=s16le\""
+  [[ "$node_audio_sample_rate" == "48000" ]] || fail "expected viewer audio sample rate 48000, got [$node_audio_sample_rate]"
+  [[ "$node_audio_channels" == "2" ]] || fail "expected viewer audio channels 2, got [$node_audio_channels]"
+  [[ "$node_pulse_server" == "unix:/run/user/1000/pulse/native" ]] || fail "expected viewer server pulse env, got [$node_pulse_server]"
+  [[ "$qemu_pulse_server" == "unix:/run/user/1000/pulse/native" ]] || fail "expected QEMU pulse server env, got [$qemu_pulse_server]"
+  [[ "$qemu_pulse_sink" == olc_vm_* ]] || fail "expected QEMU pulse sink env, got [$qemu_pulse_sink]"
+  assert_contains "$pactl_load_args" "load-module module-null-sink sink_name=olc_vm_"
+  assert_contains "$pactl_load_args" "rate=48000"
+  assert_contains "$pactl_load_args" "channels=2"
+  assert_contains "$pactl_load_args" "format=s16le"
+  [[ "$pactl_pulse_server" == "unix:/run/user/1000/pulse/native" ]] || fail "expected pactl to target the pulse server socket, got [$pactl_pulse_server]"
+  [[ "$pactl_unload_args" == "unload-module 42" ]] || fail "expected launcher cleanup to unload the temporary VM audio sink, got [$pactl_unload_args]"
   [[ -f "${CASE_TMP}/virtiofsd.terminated" ]] || fail "expected launcher cleanup to terminate virtiofsd"
   [[ "$qmp_socket" == /tmp/ol-c-qmp.*/* ]] || fail "expected QMP socket to use a disposable temp directory, got [$qmp_socket]"
   virtiofs_socket="$(safe_cat "${CASE_TMP}/virtiofsd.socket-path")"
@@ -431,6 +498,36 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   [[ ! -e "$(dirname "$virtiofs_socket")" ]] || fail "expected virtiofs temp directory to be removed"
   [[ ! -e "$(dirname "$vm_images_socket")" ]] || fail "expected VM images virtiofs temp directory to be removed"
   [[ ! -e "$(dirname "$qmp_socket")" ]] || fail "expected QMP temp directory to be removed"
+  cleanup_case
+}
+
+test_disables_browser_audio_bridge_when_requested() {
+  local output qemu_args node_audio_enabled
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_VM_AUDIO_MODE=none \
+      OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_FAKE_QEMU_EXIT_EARLY=1 \
+      OLC_FAKE_VM_SCREEN_WAIT=1 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}" \
+      --cpus 1 \
+      --memory 1024
+  )"
+  set -e
+
+  qemu_args="$(safe_cat "${CASE_TMP}/qemu.args")"
+  node_audio_enabled="$(safe_cat "${CASE_TMP}/node.audio-enabled")"
+  assert_contains "$output" "audio: disabled"
+  assert_contains "$qemu_args" "-audiodev none,id=olc-audio"
+  [[ -z "$node_audio_enabled" ]] || fail "expected viewer audio bridge env to stay unset when audio is disabled, got [$node_audio_enabled]"
+  [[ ! -f "${CASE_TMP}/pactl.load-module.args" ]] || fail "expected no Pulse sink setup when browser audio is disabled"
   cleanup_case
 }
 
@@ -924,6 +1021,7 @@ test_requires_virtiofsd
 test_requires_kvm_by_default
 test_requires_source_directory_create_permissions
 test_invokes_qemu_with_expected_browser_args_by_default
+test_disables_browser_audio_bridge_when_requested
 test_uses_build_friendly_default_resources
 test_resolves_nixpkgs_novnc_webapp_layout
 test_explicit_vm_image_skips_build

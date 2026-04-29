@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, normalize, resolve, sep } from 'node:path';
@@ -7,6 +8,19 @@ const listenPort = Number.parseInt(process.env.OLC_VM_SCREEN_PORT || '0', 10);
 const vncHost = process.env.OLC_VM_SCREEN_VNC_HOST || '127.0.0.1';
 const vncWebsocketPort = process.env.OLC_VM_SCREEN_VNC_WS_PORT || '';
 const noVncDir = process.env.OLC_NOVNC_DIR || '';
+const audioEnabled = process.env.OLC_VM_SCREEN_AUDIO_ENABLED === '1';
+const audioBin = process.env.OLC_VM_SCREEN_AUDIO_BIN || '';
+const audioArgsJson = process.env.OLC_VM_SCREEN_AUDIO_ARGS_JSON || '[]';
+const audioSampleRate = Number.parseInt(process.env.OLC_VM_SCREEN_AUDIO_SAMPLE_RATE || '48000', 10);
+const audioChannels = Number.parseInt(process.env.OLC_VM_SCREEN_AUDIO_CHANNELS || '2', 10);
+const audioFormat = process.env.OLC_VM_SCREEN_AUDIO_FORMAT || 's16le';
+const audioPathname = '/audio-stream';
+
+let audioArgs = [];
+let audioProcess = null;
+let audioRestartTimer = null;
+let audioShuttingDown = false;
+const audioClients = new Set();
 
 function fail(message) {
   console.error(`error: ${message}`);
@@ -63,11 +77,27 @@ function send(res, status, body, type = 'text/plain; charset=utf-8') {
   res.end(body);
 }
 
+function audioConfig() {
+  if (!audioEnabled) {
+    return { enabled: false };
+  }
+
+  return {
+    enabled: true,
+    path: audioPathname,
+    sampleRate: audioSampleRate,
+    channels: audioChannels,
+    format: audioFormat,
+  };
+}
+
 function indexHtml() {
   const config = JSON.stringify({
     host: vncHost,
     port: Number.parseInt(vncWebsocketPort, 10),
+    audio: audioConfig(),
   });
+  const audioHint = audioEnabled ? '\n  <div id="audio-hint">Click VM to enable audio</div>' : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -114,12 +144,25 @@ function indexHtml() {
       color: #f4f7f8;
       font-size: 13px;
     }
+
+    #audio-hint {
+      position: fixed;
+      right: 8px;
+      bottom: 8px;
+      z-index: 2;
+      padding: 5px 6px;
+      border-radius: 4px;
+      background: rgba(16, 20, 24, 0.78);
+      color: #f4f7f8;
+      font-size: 13px;
+    }
   </style>
 </head>
 <body>
   <div id="screen"></div>
   <div id="status">Connecting</div>
   <div id="clipboard-hint">Clipboard ready</div>
+  ${audioHint}
   <script>window.OLC_VM_SCREEN = ${config};</script>
   <script type="module" src="/screen.js"></script>
 </body>
@@ -132,14 +175,25 @@ function screenJs() {
 const screen = document.getElementById('screen');
 const status = document.getElementById('status');
 const clipboardHint = document.getElementById('clipboard-hint');
+const audioHint = document.getElementById('audio-hint');
 const config = window.OLC_VM_SCREEN;
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const url = protocol + '//' + config.host + ':' + config.port + '/';
 let latestVmClipboardText = '';
 let clipboardHintTimer = 0;
+let audioHintTimer = 0;
 const wheelState = { x: 0, y: 0 };
 const wheelStep = 50;
 const wheelLineHeight = 19;
+let audioContext = null;
+let audioProcessor = null;
+let audioStreaming = false;
+let audioBridgeReady = false;
+let audioPrimed = false;
+let queuedAudioFrames = 0;
+let pendingAudioBytes = new Uint8Array(0);
+const audioQueue = [];
+const audioProcessorFrameCount = 1024;
 
 function setStatus(message) {
   status.textContent = message;
@@ -151,6 +205,20 @@ function setClipboardHint(message) {
   clipboardHintTimer = window.setTimeout(() => {
     clipboardHint.textContent = 'Clipboard ready';
   }, 3500);
+}
+
+function setAudioHint(message, persist = true) {
+  if (!audioHint) {
+    return;
+  }
+
+  audioHint.textContent = message;
+  window.clearTimeout(audioHintTimer);
+  if (!persist) {
+    audioHintTimer = window.setTimeout(() => {
+      audioHint.textContent = 'Click VM to enable audio';
+    }, 3500);
+  }
 }
 
 function pointerPosition(event, element) {
@@ -222,6 +290,239 @@ async function copyLatestVmClipboardToHost() {
   }
 }
 
+function dropQueuedAudioFrames(frameCount) {
+  let remaining = frameCount;
+
+  while (remaining > 0 && audioQueue.length > 0) {
+    const chunk = audioQueue[0];
+    const available = chunk.frames - chunk.offset;
+    const consumed = Math.min(available, remaining);
+    chunk.offset += consumed;
+    queuedAudioFrames -= consumed;
+    remaining -= consumed;
+    if (chunk.offset >= chunk.frames) {
+      audioQueue.shift();
+    }
+  }
+}
+
+function trimQueuedAudio() {
+  if (!config.audio?.enabled) {
+    return;
+  }
+
+  const startupFrames = Math.max(audioProcessorFrameCount, Math.floor(config.audio.sampleRate * 0.05));
+  const targetFrames = Math.max(startupFrames * 2, Math.floor(config.audio.sampleRate * 0.1));
+  const maxFrames = Math.max(targetFrames + startupFrames, Math.floor(config.audio.sampleRate * 0.2));
+  if (queuedAudioFrames <= maxFrames) {
+    return;
+  }
+
+  dropQueuedAudioFrames(queuedAudioFrames - targetFrames);
+  setAudioHint('Audio latency trimmed', false);
+}
+
+function queueAudioChunk(value) {
+  if (!config.audio?.enabled || config.audio.format !== 's16le') {
+    return;
+  }
+
+  let chunk = value;
+  if (pendingAudioBytes.length > 0) {
+    const merged = new Uint8Array(pendingAudioBytes.length + value.length);
+    merged.set(pendingAudioBytes);
+    merged.set(value, pendingAudioBytes.length);
+    chunk = merged;
+    pendingAudioBytes = new Uint8Array(0);
+  }
+
+  const bytesPerFrame = config.audio.channels * 2;
+  const alignedLength = chunk.length - (chunk.length % bytesPerFrame);
+  if (alignedLength === 0) {
+    pendingAudioBytes = chunk;
+    return;
+  }
+
+  if (alignedLength !== chunk.length) {
+    pendingAudioBytes = chunk.slice(alignedLength);
+    chunk = chunk.slice(0, alignedLength);
+  }
+
+  const pcm = new Int16Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / 2);
+  const frameCount = pcm.length / config.audio.channels;
+  const channelData = Array.from({ length: config.audio.channels }, () => new Float32Array(frameCount));
+
+  let sampleIndex = 0;
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    for (let channel = 0; channel < config.audio.channels; channel += 1) {
+      channelData[channel][frame] = pcm[sampleIndex] / 32768;
+      sampleIndex += 1;
+    }
+  }
+
+  audioQueue.push({
+    channels: channelData,
+    frames: frameCount,
+    offset: 0,
+  });
+  queuedAudioFrames += frameCount;
+  trimQueuedAudio();
+}
+
+function drainAudioInto(outputChannels) {
+  const frameCount = outputChannels[0]?.length || 0;
+  for (const channel of outputChannels) {
+    channel.fill(0);
+  }
+
+  if (frameCount === 0 || audioQueue.length === 0) {
+    audioPrimed = false;
+    return;
+  }
+
+  const startupFrames = Math.max(audioProcessorFrameCount, Math.floor(config.audio.sampleRate * 0.05));
+  if (!audioPrimed) {
+    if (queuedAudioFrames < startupFrames) {
+      return;
+    }
+    audioPrimed = true;
+  }
+
+  let written = 0;
+  while (written < frameCount && audioQueue.length > 0) {
+    const chunk = audioQueue[0];
+    const available = chunk.frames - chunk.offset;
+    const consumed = Math.min(available, frameCount - written);
+
+    for (let channel = 0; channel < config.audio.channels; channel += 1) {
+      outputChannels[channel].set(
+        chunk.channels[channel].subarray(chunk.offset, chunk.offset + consumed),
+        written,
+      );
+    }
+
+    chunk.offset += consumed;
+    queuedAudioFrames -= consumed;
+    written += consumed;
+
+    if (chunk.offset >= chunk.frames) {
+      audioQueue.shift();
+    }
+  }
+
+  if (written < frameCount) {
+    audioPrimed = false;
+    setAudioHint('Audio buffering', false);
+  }
+}
+
+function ensureAudioBridge() {
+  if (!config.audio?.enabled) {
+    return false;
+  }
+
+  if (!audioStreaming) {
+    void streamAudioToBrowser();
+  }
+
+  if (audioBridgeReady) {
+    return true;
+  }
+
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) {
+    setAudioHint('Browser audio unsupported');
+    return false;
+  }
+
+  try {
+    audioContext = new AudioContextCtor({
+      latencyHint: 'interactive',
+      sampleRate: config.audio.sampleRate,
+    });
+  } catch {
+    setAudioHint('Click VM to enable audio');
+    return false;
+  }
+
+  if (typeof audioContext.createScriptProcessor !== 'function') {
+    setAudioHint('Browser audio unsupported');
+    return false;
+  }
+
+  audioProcessor = audioContext.createScriptProcessor(audioProcessorFrameCount, 0, config.audio.channels);
+  audioProcessor.onaudioprocess = event => {
+    const outputs = [];
+    for (let channel = 0; channel < config.audio.channels; channel += 1) {
+      outputs.push(event.outputBuffer.getChannelData(channel));
+    }
+    drainAudioInto(outputs);
+  };
+  audioProcessor.connect(audioContext.destination);
+  audioBridgeReady = true;
+
+  if (audioContext.state === 'running') {
+    setAudioHint('Audio connecting');
+  } else {
+    setAudioHint('Click VM to enable audio');
+  }
+
+  return true;
+}
+
+async function resumeAudioPlayback() {
+  if (!ensureAudioBridge() || !audioContext || audioContext.state === 'running') {
+    return;
+  }
+
+  try {
+    await audioContext.resume();
+    if (queuedAudioFrames > 0) {
+      setAudioHint('Audio on');
+    } else {
+      setAudioHint('Audio waiting for guest');
+    }
+  } catch {
+    setAudioHint('Click VM to enable audio');
+  }
+}
+
+async function streamAudioToBrowser() {
+  if (!config.audio?.enabled || audioStreaming) {
+    return;
+  }
+  audioStreaming = true;
+
+  while (true) {
+    try {
+      const response = await fetch(config.audio.path, { cache: 'no-store' });
+      if (!response.ok || !response.body) {
+        setAudioHint('Audio unavailable');
+        return;
+      }
+
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (value) {
+          queueAudioChunk(value);
+        }
+      }
+
+      setAudioHint('Audio reconnecting');
+    } catch {
+      setAudioHint('Audio reconnecting');
+    }
+
+    await new Promise(resolve => {
+      window.setTimeout(resolve, 250);
+    });
+  }
+}
+
 const rfb = new RFB(screen, url, { credentials: {} });
 rfb.scaleViewport = true;
 rfb.resizeSession = false;
@@ -275,16 +576,61 @@ window.addEventListener('paste', event => {
 });
 
 window.addEventListener('keydown', event => {
+  void resumeAudioPlayback();
   if (event.ctrlKey && event.shiftKey && event.code === 'KeyC') {
     event.preventDefault();
     void copyLatestVmClipboardToHost();
   }
 });
 
-window.addEventListener('load', () => {
-  screen.focus();
-});
+window.addEventListener('pointerdown', () => {
+  void resumeAudioPlayback();
+}, { capture: true });
+
+ensureAudioBridge();
+screen.focus();
 `;
+}
+
+function startAudioCapture() {
+  if (!audioEnabled || audioProcess) {
+    return;
+  }
+
+  audioProcess = spawn(audioBin, audioArgs, {
+    stdio: [ 'ignore', 'pipe', 'pipe' ],
+  });
+  audioProcess.stdout.on('data', chunk => {
+    for (const res of audioClients) {
+      if (res.destroyed || res.writableEnded) {
+        audioClients.delete(res);
+        continue;
+      }
+      res.write(chunk);
+    }
+  });
+  audioProcess.on('exit', () => {
+    audioProcess = null;
+    if (!audioShuttingDown && audioClients.size > 0) {
+      audioRestartTimer = setTimeout(() => {
+        audioRestartTimer = null;
+        startAudioCapture();
+      }, 250);
+      audioRestartTimer.unref();
+    }
+  });
+}
+
+function stopAudioCapture() {
+  if (audioRestartTimer) {
+    clearTimeout(audioRestartTimer);
+    audioRestartTimer = null;
+  }
+
+  if (audioProcess) {
+    audioProcess.kill('SIGTERM');
+    audioProcess = null;
+  }
 }
 
 if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) {
@@ -303,6 +649,34 @@ if (!noVncDir || !existsSync(noVncDir) || !statSync(noVncDir).isDirectory()) {
   fail('OLC_NOVNC_DIR must point to a noVNC asset directory');
 }
 
+if (audioEnabled) {
+  if (!audioBin) {
+    fail('OLC_VM_SCREEN_AUDIO_BIN must be set when OLC_VM_SCREEN_AUDIO_ENABLED=1');
+  }
+
+  try {
+    audioArgs = JSON.parse(audioArgsJson);
+  } catch {
+    fail('OLC_VM_SCREEN_AUDIO_ARGS_JSON must be valid JSON');
+  }
+
+  if (!Array.isArray(audioArgs) || audioArgs.some(arg => typeof arg !== 'string')) {
+    fail('OLC_VM_SCREEN_AUDIO_ARGS_JSON must be a JSON array of strings');
+  }
+
+  if (!Number.isInteger(audioSampleRate) || audioSampleRate <= 0) {
+    fail('OLC_VM_SCREEN_AUDIO_SAMPLE_RATE must be a positive integer');
+  }
+
+  if (!Number.isInteger(audioChannels) || audioChannels <= 0) {
+    fail('OLC_VM_SCREEN_AUDIO_CHANNELS must be a positive integer');
+  }
+
+  if (audioFormat !== 's16le') {
+    fail(`unsupported embedded VM audio format: ${audioFormat}`);
+  }
+}
+
 const server = createServer((req, res) => {
   const url = new URL(req.url || '/', `http://${listenHost}`);
 
@@ -313,6 +687,35 @@ const server = createServer((req, res) => {
 
   if (url.pathname === '/screen.js') {
     send(res, 200, screenJs(), 'text/javascript; charset=utf-8');
+    return;
+  }
+
+  if (url.pathname === audioPathname) {
+    if (!audioEnabled) {
+      send(res, 404, 'not found');
+      return;
+    }
+
+    res.writeHead(200, {
+      'content-type': 'application/octet-stream',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    res.socket?.setNoDelay(true);
+    res.flushHeaders();
+
+    audioClients.add(res);
+    startAudioCapture();
+
+    const cleanupClient = () => {
+      audioClients.delete(res);
+      if (audioClients.size === 0) {
+        stopAudioCapture();
+      }
+    };
+
+    req.on('close', cleanupClient);
+    res.on('close', cleanupClient);
     return;
   }
 
@@ -340,6 +743,13 @@ server.listen(listenPort, listenHost, () => {
 });
 
 function shutdown() {
+  audioShuttingDown = true;
+  stopAudioCapture();
+  for (const res of audioClients) {
+    if (!res.destroyed && !res.writableEnded) {
+      res.end();
+    }
+  }
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1000).unref();
 }

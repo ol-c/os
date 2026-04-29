@@ -278,6 +278,7 @@
         firefox-localhost = firefoxPkgs.firefox;
         firefox-localhost-source = firefoxSourcePkgs.firefox;
         novnc = basePkgs.novnc;
+        pulseaudio = basePkgs.pulseaudio;
         qemu-olc = qemuPkgs.qemu_kvm;
         "ol-c-image" = self.nixosConfigurations."ol-c".config.system.build.images.qemu;
       };

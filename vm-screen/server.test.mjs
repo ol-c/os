@@ -108,6 +108,331 @@ test('serves the VM screen without external assets', async () => {
   }
 });
 
+test('serves embedded VM audio bridge metadata and PCM stream when enabled', async () => {
+  const noVncDir = await fakeNoVncTree();
+  const { child, url } = await startServer({
+    OLC_NOVNC_DIR: noVncDir,
+    OLC_VM_SCREEN_AUDIO_ENABLED: '1',
+    OLC_VM_SCREEN_AUDIO_BIN: process.execPath,
+    OLC_VM_SCREEN_AUDIO_ARGS_JSON: JSON.stringify([
+      '-e',
+      'process.stdout.write(Buffer.from([0, 0, 255, 127])); setTimeout(() => {}, 1000);',
+    ]),
+    OLC_VM_SCREEN_AUDIO_SAMPLE_RATE: '48000',
+    OLC_VM_SCREEN_AUDIO_CHANNELS: '2',
+    OLC_VM_SCREEN_AUDIO_FORMAT: 's16le',
+  });
+
+  try {
+    const html = await fetch(url).then(response => response.text());
+    assert.match(html, /id="audio-hint"/);
+    assert.match(html, /Click VM to enable audio/);
+    assert.match(html, /"audio":\{"enabled":true,"path":"\/audio-stream","sampleRate":48000,"channels":2,"format":"s16le"\}/);
+
+    const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
+    assert.match(script, /window\.AudioContext \|\| window\.webkitAudioContext/);
+    assert.match(script, /fetch\(config\.audio\.path, \{ cache: 'no-store' \}\)/);
+    assert.match(script, /createScriptProcessor\(audioProcessorFrameCount, 0, config\.audio\.channels\)/);
+    assert.match(script, /ensureAudioBridge\(\);/);
+    assert.match(script, /window\.addEventListener\('pointerdown'/);
+
+    const response = await fetch(new URL('/audio-stream', url));
+    assert.equal(response.status, 200);
+    const reader = response.body.getReader();
+    const { value } = await reader.read();
+    assert.deepEqual(Array.from(value.slice(0, 4)), [ 0, 0, 255, 127 ]);
+    await reader.cancel();
+  } finally {
+    await stopServer(child);
+    await rm(noVncDir, { recursive: true, force: true });
+  }
+});
+
+test('viewer starts audio fetch before gesture and retries audio context creation on pointerdown', async () => {
+  const noVncDir = await fakeNoVncTree();
+  const { child, url } = await startServer({
+    OLC_NOVNC_DIR: noVncDir,
+    OLC_VM_SCREEN_AUDIO_ENABLED: '1',
+    OLC_VM_SCREEN_AUDIO_BIN: process.execPath,
+    OLC_VM_SCREEN_AUDIO_ARGS_JSON: JSON.stringify([ '-e', 'setTimeout(() => {}, 1000);' ]),
+  });
+
+  try {
+    const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
+    const fetchCalls = [];
+    const windowHandlers = new Map();
+    const screen = {
+      focusCalls: 0,
+      focus() {
+        this.focusCalls += 1;
+      },
+      addEventListener() {},
+    };
+    const status = { textContent: '' };
+    const clipboardHint = { textContent: '' };
+    const audioHint = { textContent: '' };
+    let audioContextInstances = 0;
+    let audioResumeCalls = 0;
+
+    class FakeRFB {
+      constructor() {
+        this._rfbConnectionState = 'connected';
+        this._viewOnly = false;
+      }
+
+      addEventListener() {}
+
+      clipboardPasteFrom() {}
+
+      focus() {}
+    }
+
+    const context = {
+      FakeRFB,
+      fetch(urlPath) {
+        fetchCalls.push(urlPath);
+        return new Promise(() => {});
+      },
+      document: {
+        getElementById(id) {
+          return {
+            screen,
+            status,
+            'clipboard-hint': clipboardHint,
+            'audio-hint': audioHint,
+          }[id];
+        },
+      },
+      navigator: {},
+      window: {
+        OLC_VM_SCREEN: {
+          host: '127.0.0.1',
+          port: 5720,
+          audio: {
+            enabled: true,
+            path: '/audio-stream',
+            sampleRate: 48000,
+            channels: 2,
+            format: 's16le',
+          },
+        },
+        location: { protocol: 'http:' },
+        AudioContext: class FailingAudioContext {
+          constructor() {
+            throw new Error('gesture required');
+          }
+        },
+        addEventListener(type, handler) {
+          windowHandlers.set(type, handler);
+        },
+        clearTimeout() {},
+        setTimeout() {
+          return 1;
+        },
+      },
+    };
+
+    vm.runInNewContext(
+      script.replace("import RFB from '/novnc/core/rfb.js';", 'const RFB = FakeRFB;'),
+      context,
+    );
+
+    assert.deepEqual(fetchCalls, [ '/audio-stream' ]);
+    assert.equal(audioHint.textContent, 'Click VM to enable audio');
+    assert.equal(screen.focusCalls, 1);
+
+    context.window.AudioContext = class WorkingAudioContext {
+      constructor() {
+        audioContextInstances += 1;
+        this.state = 'suspended';
+        this.destination = {};
+      }
+
+      createScriptProcessor() {
+        return {
+          connect() {},
+          onaudioprocess: null,
+        };
+      }
+
+      async resume() {
+        audioResumeCalls += 1;
+        this.state = 'running';
+      }
+    };
+
+    const pointerdown = windowHandlers.get('pointerdown');
+    assert.equal(typeof pointerdown, 'function');
+    pointerdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.equal(audioContextInstances, 1);
+    assert.equal(audioResumeCalls, 1);
+  } finally {
+    await stopServer(child);
+    await rm(noVncDir, { recursive: true, force: true });
+  }
+});
+
+test('viewer trims stale pre-gesture audio to keep playback near live', async () => {
+  const noVncDir = await fakeNoVncTree();
+  const { child, url } = await startServer({
+    OLC_NOVNC_DIR: noVncDir,
+    OLC_VM_SCREEN_AUDIO_ENABLED: '1',
+    OLC_VM_SCREEN_AUDIO_BIN: process.execPath,
+    OLC_VM_SCREEN_AUDIO_ARGS_JSON: JSON.stringify([ '-e', 'setTimeout(() => {}, 1000);' ]),
+  });
+
+  try {
+    const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
+    const windowHandlers = new Map();
+    const screen = {
+      focus() {},
+      addEventListener() {},
+    };
+    const status = { textContent: '' };
+    const clipboardHint = { textContent: '' };
+    const audioHint = { textContent: '' };
+    const oldSample = 1000;
+    const liveSample = 20000;
+    const sampleRate = 48000;
+    const channels = 2;
+    const preGestureAudio = Buffer.alloc(sampleRate * channels * 2);
+    let processor = null;
+
+    for (let frame = 0; frame < sampleRate; frame += 1) {
+      const sample = frame < sampleRate - 5000 ? oldSample : liveSample;
+      for (let channel = 0; channel < channels; channel += 1) {
+        preGestureAudio.writeInt16LE(sample, (frame * channels + channel) * 2);
+      }
+    }
+
+    class FakeRFB {
+      constructor() {
+        this._rfbConnectionState = 'connected';
+        this._viewOnly = false;
+      }
+
+      addEventListener() {}
+
+      clipboardPasteFrom() {}
+
+      focus() {}
+    }
+
+    const context = {
+      FakeRFB,
+      fetch() {
+        let sent = false;
+        return Promise.resolve({
+          ok: true,
+          body: {
+            getReader() {
+              return {
+                read() {
+                  if (sent) {
+                    return new Promise(() => {});
+                  }
+                  sent = true;
+                  return Promise.resolve({
+                    done: false,
+                    value: new Uint8Array(preGestureAudio),
+                  });
+                },
+              };
+            },
+          },
+        });
+      },
+      document: {
+        getElementById(id) {
+          return {
+            screen,
+            status,
+            'clipboard-hint': clipboardHint,
+            'audio-hint': audioHint,
+          }[id];
+        },
+      },
+      navigator: {},
+      window: {
+        OLC_VM_SCREEN: {
+          host: '127.0.0.1',
+          port: 5720,
+          audio: {
+            enabled: true,
+            path: '/audio-stream',
+            sampleRate,
+            channels,
+            format: 's16le',
+          },
+        },
+        location: { protocol: 'http:' },
+        AudioContext: class WorkingAudioContext {
+          constructor() {
+            this.state = 'suspended';
+            this.destination = {};
+          }
+
+          createScriptProcessor(frameCount) {
+            processor = {
+              frameCount,
+              connect() {},
+              onaudioprocess: null,
+            };
+            return processor;
+          }
+
+          async resume() {
+            this.state = 'running';
+          }
+        },
+        addEventListener(type, handler) {
+          windowHandlers.set(type, handler);
+        },
+        clearTimeout() {},
+        setTimeout() {
+          return 1;
+        },
+      },
+    };
+
+    vm.runInNewContext(
+      script.replace("import RFB from '/novnc/core/rfb.js';", 'const RFB = FakeRFB;'),
+      context,
+    );
+
+    for (let tick = 0; tick < 10; tick += 1) {
+      await Promise.resolve();
+    }
+
+    const pointerdown = windowHandlers.get('pointerdown');
+    pointerdown();
+    for (let tick = 0; tick < 3; tick += 1) {
+      await Promise.resolve();
+    }
+
+    assert.equal(processor.frameCount, 1024);
+    const left = new Float32Array(processor.frameCount);
+    const right = new Float32Array(processor.frameCount);
+    processor.onaudioprocess({
+      outputBuffer: {
+        getChannelData(channel) {
+          return channel === 0 ? left : right;
+        },
+      },
+    });
+
+    assert.ok(left[0] > 0.5, `expected live audio tail, got ${left[0]}`);
+    assert.ok(right[0] > 0.5, `expected live audio tail, got ${right[0]}`);
+    assert.notEqual(audioHint.textContent, 'Audio buffering');
+  } finally {
+    await stopServer(child);
+    await rm(noVncDir, { recursive: true, force: true });
+  }
+});
+
 test('viewer wheel capture drains repeated steps and preserves remainder', async () => {
   const noVncDir = await fakeNoVncTree();
   const { child, url } = await startServer({ OLC_NOVNC_DIR: noVncDir });
