@@ -300,6 +300,11 @@ export function loginGreeterHtml() {
           button.addEventListener('click', () => selectAccount(accountName, button));
           accountList.appendChild(button);
         }
+
+        const firstAccount = accountList.querySelector('button');
+        if (firstAccount) {
+          selectAccount(users[0], firstAccount);
+        }
       }
 
       async function loadAccounts() {
@@ -430,10 +435,7 @@ export function loginGreeterHtml() {
       manualAccount.addEventListener('click', showManualAccount);
 
       loadAccounts().then(() => {
-        if (hasAccountChoices) {
-          const firstAccount = accountList.querySelector('button');
-          firstAccount?.focus();
-        } else {
+        if (!hasAccountChoices) {
           username.focus();
         }
       });

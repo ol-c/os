@@ -185,9 +185,13 @@ test('login page renders account choices and keeps manual username fallback', as
   const username = document.getElementById('username');
   const usernameLabel = document.getElementById('username-label');
   const manualAccount = document.getElementById('manual-account');
+  const password = document.getElementById('password');
 
   assert.deepEqual(accountButtons.map(button => button.textContent), [ 'alice', 'bob' ]);
   assert.equal(usernameLabel.classList.contains('hidden'), true);
+  assert.equal(username.value, 'alice');
+  assert.equal(accountButtons[0].getAttribute('aria-pressed'), 'true');
+  assert.equal(dom.window.document.activeElement, password);
 
   accountButtons[1].click();
   assert.equal(username.value, 'bob');
