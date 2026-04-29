@@ -1,13 +1,24 @@
 { pkgs, ... }:
 
 let
+  greeterUser = "olc-greeter";
+  greeterGroup = "olc-greeter";
   setupUser = "olc-setup";
   setupGroup = "olc-setup";
 in {
   users.users.root.initialPassword = "root";
 
+  users.groups.${greeterGroup} = {};
   users.groups.${setupGroup}.gid = 995;
   users.groups.olc-admin = {};
+
+  users.users.${greeterUser} = {
+    isSystemUser = true;
+    group = greeterGroup;
+    createHome = true;
+    home = "/var/lib/ol-c/greeter";
+    shell = pkgs.bashInteractive;
+  };
 
   users.users.${setupUser} = {
     isNormalUser = true;
