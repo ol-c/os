@@ -75,7 +75,9 @@ test('setup page streams provisioning status while first-user creation is runnin
   assert.equal(fetchRequest.path, '/api/setup/first-user');
   assert.equal(JSON.parse(fetchRequest.options.body).username, 'alice');
   assert.equal(document.getElementById('submit').disabled, true);
-  assert.equal(document.getElementById('message').textContent, 'Starting secure account setup...');
+  assert.equal(document.getElementById('message').textContent, 'In progress');
+  assert.equal(document.getElementById('setup-progress').hidden, false);
+  assert.equal(document.querySelector('[role="progressbar"]').getAttribute('aria-valuetext'), 'In progress');
 
   eventSource.emit('status', {
     inProgress: true,
@@ -103,11 +105,8 @@ test('setup page streams provisioning status while first-user creation is runnin
     ],
   });
 
-  await waitFor(() => document.getElementById('message').textContent === 'Creating encrypted home for alice.');
-  assert.match(
-    document.getElementById('setup-progress').textContent,
-    /Starting secure account setup for alice\.\nCreating encrypted home for alice\./,
-  );
+  await waitFor(() => document.getElementById('message').textContent === 'In progress');
+  assert.equal(document.getElementById('setup-progress').textContent.replace(/\s+/g, ' ').trim(), 'In progress');
 
   resolveFetch(new Response(JSON.stringify({
     ok: true,
@@ -118,4 +117,5 @@ test('setup page streams provisioning status while first-user creation is runnin
   }));
 
   await waitFor(() => document.getElementById('message').textContent === 'Setup complete. Returning to the login screen.');
+  assert.equal(document.getElementById('setup-progress').hidden, true);
 });

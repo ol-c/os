@@ -109,21 +109,45 @@ export function setupHtml() {
       }
 
       .status-log {
-        margin: 0;
-        min-height: 5.5rem;
-        padding: 0.8rem 0.9rem;
-        border: 1px solid rgba(95, 103, 95, 0.25);
-        border-radius: 12px;
-        background: rgba(255, 255, 255, 0.58);
-        color: var(--muted);
-        font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace;
-        font-size: 0.85rem;
-        line-height: 1.45;
-        white-space: pre-wrap;
+        display: grid;
+        gap: 0.45rem;
       }
 
-      .status-log:empty {
+      .status-log[hidden] {
         display: none;
+      }
+
+      .status-log-label {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .status-bar {
+        position: relative;
+        overflow: hidden;
+        height: 0.7rem;
+        border-radius: 999px;
+        background: rgba(16, 93, 71, 0.12);
+      }
+
+      .status-bar::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        width: 42%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #0f5f47 0%, #2d8c6c 100%);
+        animation: setup-progress-slide 1.15s ease-in-out infinite;
+      }
+
+      @keyframes setup-progress-slide {
+        from {
+          transform: translateX(-115%);
+        }
+
+        to {
+          transform: translateX(255%);
+        }
       }
     </style>
   </head>
@@ -148,7 +172,10 @@ export function setupHtml() {
         </label>
         <button id="submit" type="submit">Create first admin</button>
         <p id="message" class="status" data-error="false" role="status" aria-live="polite"></p>
-        <pre id="setup-progress" class="status-log" aria-live="polite"></pre>
+        <div id="setup-progress" class="status-log" hidden aria-live="polite" aria-label="Setup progress">
+          <span class="status-log-label">In progress</span>
+          <div class="status-bar" role="progressbar" aria-valuetext="In progress"></div>
+        </div>
       </form>
     </main>
     <script>
@@ -169,16 +196,20 @@ export function setupHtml() {
           return;
         }
 
-        const events = Array.isArray(payload.events) ? payload.events : [];
-        const recentLines = events
-          .slice(-6)
-          .map(event => event && event.message)
-          .filter(Boolean);
+        progress.hidden = !payload.inProgress;
 
-        progress.textContent = recentLines.join('\\n');
+        if (payload.result === 'failed' && payload.latestMessage) {
+          setStatus(payload.latestMessage, payload.result === 'failed');
+          return;
+        }
+
+        if (payload.inProgress) {
+          setStatus('In progress');
+          return;
+        }
 
         if (payload.latestMessage) {
-          setStatus(payload.latestMessage, payload.result === 'failed');
+          setStatus(payload.latestMessage, false);
         }
       }
 
@@ -202,8 +233,8 @@ export function setupHtml() {
         event.preventDefault();
         submit.disabled = true;
         submit.textContent = 'Creating admin...';
-        setStatus('Starting secure account setup...');
-        progress.textContent = '';
+        progress.hidden = false;
+        setStatus('In progress');
         connectSetupEvents();
 
         const body = {
@@ -223,8 +254,10 @@ export function setupHtml() {
             throw new Error(payload.error || 'Setup failed.');
           }
 
+          progress.hidden = true;
           setStatus(payload.message || 'Setup complete. Returning to the login prompt.');
         } catch (error) {
+          progress.hidden = true;
           setStatus(error.message, true);
           submit.disabled = false;
           submit.textContent = defaultSubmitText;
