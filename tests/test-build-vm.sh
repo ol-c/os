@@ -8,6 +8,7 @@ FLAKE_NIX="${ROOT_DIR}/flake.nix"
 OLC_NIX="${ROOT_DIR}/nix/ol-c.nix"
 NIX_USERS="${ROOT_DIR}/nix/modules/users.nix"
 NIX_BASE="${ROOT_DIR}/nix/modules/base.nix"
+NIX_PACKAGES="${ROOT_DIR}/nix/modules/packages.nix"
 NIX_LOCALHOST_UI="${ROOT_DIR}/nix/modules/localhost-ui.nix"
 NIX_GRAPHICAL_SESSION="${ROOT_DIR}/nix/modules/graphical-session.nix"
 NIX_DEVELOPMENT="${ROOT_DIR}/nix/modules/development.nix"
@@ -118,10 +119,11 @@ test_rejects_unknown_argument() {
 }
 
 test_structural_contracts() {
-  local olc_nix users ui session development app server terminal_app terminal_server runtime_state setup_manager base editor_page
+  local olc_nix users ui session development app server terminal_app terminal_server runtime_state setup_manager base packages editor_page
   local agents_doc
   olc_nix="$(cat "${OLC_NIX}")"
   base="$(cat "${NIX_BASE}")"
+  packages="$(cat "${NIX_PACKAGES}")"
   agents_doc="$(cat "${AGENTS_DOC}")"
   users="$(cat "${NIX_USERS}")"
   ui="$(cat "${NIX_LOCALHOST_UI}")"
@@ -154,6 +156,10 @@ test_structural_contracts() {
   [[ "$agents_doc" == *'/source/.olc-debug/journal'* ]] || fail "expected AGENTS to document the shared journal mirror directory"
   [[ "$agents_doc" == *'journalctl --directory=/source/.olc-debug/journal'* ]] || fail "expected AGENTS to document standard journalctl usage for the shared mirror"
   [[ "$base" == *'sleep 0.2'* ]] || fail "expected the shared journal mirror to export new entries at subsecond cadence"
+  [[ "$packages" == *'fonts.enableDefaultPackages = false;'* ]] || fail "expected non-Noto default font packages to be disabled"
+  [[ "$packages" == *'noto-fonts'* && "$packages" == *'noto-fonts-cjk-sans'* && "$packages" == *'noto-fonts-cjk-serif'* && "$packages" == *'noto-fonts-color-emoji'* ]] || fail "expected the OS image to include the bundled Noto font set"
+  [[ "$packages" == *'fonts.fontconfig.defaultFonts'* ]] || fail "expected explicit fontconfig defaults"
+  [[ "$packages" == *'"Noto Sans"'* && "$packages" == *'"Noto Serif"'* && "$packages" == *'"Noto Sans Mono"'* && "$packages" == *'"Noto Color Emoji"'* ]] || fail "expected Noto fontconfig defaults for sans, serif, monospace, and emoji"
   [[ "$users" == *'greeterUser = "olc-greeter"'* ]] || fail "expected a dedicated browser greeter user"
   [[ "$users" == *'isSystemUser = true;'* && "$users" == *'home = "/var/lib/ol-c/greeter";'* ]] || fail "expected the browser greeter to use a writable dedicated home"
   [[ "$users" == *'setupUser = "olc-setup"'* ]] || fail "expected a dedicated setup user"

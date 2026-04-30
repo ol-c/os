@@ -1,13 +1,8 @@
 export const terminalFontChoices = Object.freeze([
   Object.freeze({
-    id: 'dejavu-sans-mono',
-    label: 'DejaVu Sans Mono',
-    cssFamily: '"DejaVu Sans Mono", "DejaVu Sans Mono Book", monospace',
-  }),
-  Object.freeze({
-    id: 'inconsolata',
-    label: 'Inconsolata',
-    cssFamily: 'Inconsolata, "DejaVu Sans Mono", monospace',
+    id: 'noto-sans-mono',
+    label: 'Noto Sans Mono',
+    cssFamily: '"Noto Sans Mono", "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK HK", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Color Emoji", monospace',
   }),
 ]);
 
@@ -25,7 +20,7 @@ export const terminalColorSchemeChoices = Object.freeze([
 ]);
 
 export const defaultTerminalPreferences = Object.freeze({
-  font: 'dejavu-sans-mono',
+  font: 'noto-sans-mono',
   colorScheme: 'solarized',
 });
 

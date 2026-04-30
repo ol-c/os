@@ -27,7 +27,7 @@ function proxyErrorHtml(message) {
     <style>
       :root {
         color-scheme: dark;
-        font-family: sans-serif;
+        font-family: "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK HK", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Color Emoji", sans-serif;
         background: #11130f;
         color: #f8fafc;
       }

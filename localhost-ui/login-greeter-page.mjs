@@ -18,7 +18,7 @@ export function loginGreeterHtml() {
         --accent-2: #0b4e40;
         --error: #9a2f24;
         --focus: rgba(15, 106, 87, 0.18);
-        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+        font-family: "Noto Serif", "Noto Serif CJK SC", "Noto Serif CJK TC", "Noto Serif CJK HK", "Noto Serif CJK JP", "Noto Serif CJK KR", "Noto Color Emoji", serif;
         background:
           radial-gradient(circle at 20% 15%, rgba(15, 106, 87, 0.18), transparent 28%),
           radial-gradient(circle at 80% 10%, rgba(207, 124, 54, 0.14), transparent 24%),

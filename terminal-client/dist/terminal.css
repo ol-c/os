@@ -267,7 +267,7 @@ body {
   border: 1px solid ButtonBorder;
   background: Canvas;
   color: CanvasText;
-  font: 13px/1.2 sans-serif;
+  font: 13px/1.2 "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK HK", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Color Emoji", sans-serif;
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease;

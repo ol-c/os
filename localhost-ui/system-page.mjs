@@ -17,7 +17,7 @@ export function rootHtml() {
         --accent: #0b6b57;
         --control-bg: #ffffff;
         --control-border: #9aa3af;
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family: "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK HK", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Color Emoji", sans-serif;
         letter-spacing: 0;
         background: var(--bg);
         color: var(--text);

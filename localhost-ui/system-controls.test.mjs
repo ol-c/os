@@ -69,9 +69,9 @@ test('fake adapter returns a complete initial status', async () => {
   assert.match(status.appearance.implementation, /Fake hardware test/);
   assert.equal(status.browser.firefoxVersion, 'test-firefox');
   assert.match(status.browser.implementation, /Firefox version/);
-  assert.equal(status.terminal.font, 'dejavu-sans-mono');
+  assert.equal(status.terminal.font, 'noto-sans-mono');
   assert.equal(status.terminal.colorScheme, 'solarized');
-  assert.deepEqual(status.terminal.fonts.map(choice => choice.id), [ 'dejavu-sans-mono', 'inconsolata' ]);
+  assert.deepEqual(status.terminal.fonts.map(choice => choice.id), [ 'noto-sans-mono' ]);
   assert.deepEqual(status.terminal.colorSchemes.map(choice => choice.id), [ 'solarized', 'tango' ]);
 });
 
@@ -129,7 +129,7 @@ test('fake adapter updates mutable controls', async () => {
   await adapter.volume({ muted: true });
   await adapter.brightness({ percent: 25 });
   await adapter.appearance({ mode: 'dark' });
-  await adapter.terminal({ font: 'inconsolata', colorScheme: 'tango' });
+  await adapter.terminal({ font: 'noto-sans-mono', colorScheme: 'tango' });
   await adapter.bluetooth({ enabled: true });
   await adapter.network({ selected: 'offline' });
 
@@ -138,7 +138,7 @@ test('fake adapter updates mutable controls', async () => {
   assert.equal(status.volume.muted, true);
   assert.equal(status.brightness.percent, 25);
   assert.equal(status.appearance.mode, 'dark');
-  assert.equal(status.terminal.font, 'inconsolata');
+  assert.equal(status.terminal.font, 'noto-sans-mono');
   assert.equal(status.terminal.colorScheme, 'tango');
   assert.equal(status.bluetooth.enabled, true);
   assert.equal(status.network.connected, false);

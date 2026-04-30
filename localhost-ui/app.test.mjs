@@ -339,7 +339,7 @@ test('SSE stream sends the initial status event on configured machines', async (
     await response.body.cancel();
     assert.equal(status.volume.percent, 40);
     assert.equal(status.appearance.mode, 'light');
-    assert.equal(status.terminal.font, 'dejavu-sans-mono');
+    assert.equal(status.terminal.font, 'noto-sans-mono');
   }, {
     runtimeState: {
       setupMode: false,

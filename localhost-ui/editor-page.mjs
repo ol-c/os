@@ -79,7 +79,7 @@ export function editorHtml() {
         --editor-panel: #fbfbf8;
         --editor-panel-fg: #181a1f;
         --editor-error: #dc322f;
-        --editor-font: "DejaVu Sans Mono", "DejaVu Sans Mono Book", monospace;
+        --editor-font: "Noto Sans Mono", "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK HK", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Color Emoji", monospace;
         background: var(--editor-bg);
         color: var(--editor-fg);
         font-family: var(--editor-font);
@@ -295,7 +295,7 @@ export function editorHtml() {
         border-radius: 6px;
         background: transparent;
         color: inherit;
-        font: 15px/1 system-ui, sans-serif;
+        font: 15px/1 "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK HK", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Color Emoji", sans-serif;
         padding: 0;
       }
 

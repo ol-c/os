@@ -112,7 +112,7 @@ function indexHtml() {
       overflow: hidden;
       background: #101418;
       color: #f4f7f8;
-      font-family: system-ui, sans-serif;
+      font-family: "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK HK", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Color Emoji", sans-serif;
     }
 
     #screen {

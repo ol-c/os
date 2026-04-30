@@ -71,6 +71,8 @@ test('serves the VM screen without external assets', async () => {
     assert.match(html, /"host":"127\.0\.0\.1"/);
     assert.match(html, /"port":5720/);
     assert.match(html, /src="\/screen\.js"/);
+    assert.match(html, /Noto Sans/);
+    assert.match(html, /Noto Color Emoji/);
     assert.doesNotMatch(html, /https?:\/\/(?!127\.0\.0\.1)/);
 
     const script = await fetch(new URL('/screen.js', url)).then(response => response.text());

@@ -15,7 +15,7 @@ export function setupHtml() {
         --muted: #5f675f;
         --accent: #105d47;
         --error: #9f2e1b;
-        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+        font-family: "Noto Serif", "Noto Serif CJK SC", "Noto Serif CJK TC", "Noto Serif CJK HK", "Noto Serif CJK JP", "Noto Serif CJK KR", "Noto Color Emoji", serif;
         background:
           radial-gradient(circle at top left, rgba(16, 93, 71, 0.1), transparent 30%),
           linear-gradient(180deg, #f7f4ec 0%, #efe8d8 100%);

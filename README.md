@@ -29,6 +29,18 @@ Build and launch it with:
 ./launch-vm --cpus 4 --memory 8192
 ```
 
+## Font Defaults
+
+ol-c uses the Noto font family as its default OS and browser-shell font set. The VM image bundles `noto-fonts`, Noto CJK Sans, Noto CJK Serif, and Noto Color Emoji, disables the generic NixOS default font set, and points fontconfig's sans, serif, monospace, and emoji defaults at Noto families.
+
+The terminal and editor currently expose a Noto-only font choice, `Noto Sans Mono`. Broader custom font installation is a future extension; automatic language-specific font downloads are intentionally deferred until the verified update and distribution path exists.
+
+Validate the font contract with:
+
+```sh
+bash tests/test-noto-fonts.sh
+```
+
 ## Firefox Build Paths
 
 ol-c uses pinned nixpkgs Firefox for both browser package paths. We do not carry a separate Firefox source or version.

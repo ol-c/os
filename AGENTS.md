@@ -170,6 +170,7 @@ Question this milestone answers:
 - Nested `olc-launch-test-vm` launches default to a cheap child-boot path and print a reconnect URL for browser viewing.
 - `olc-vmctl` provides low-level QMP control primitives including `key`, `type`, `move`, `click`, `screenshot`, and `raw`.
 - Firefox localhost shell behavior opens new tabs to `https://localhost/` and replaces last-tab closure with a localhost tab.
+- Noto is the default OS, browser-shell, terminal, editor, and generic browser font family set; the bundled baseline is Noto base, CJK Sans, CJK Serif, and Color Emoji.
 
 # Current Focus
 
@@ -218,6 +219,7 @@ Related design notes:
   - `cd terminal-client && npm test && npm run build`
   - `bash tests/test-build-vm.sh`
   - `bash tests/test-launch-vm.sh`
+  - `bash tests/test-noto-fonts.sh`
   - `bash tests/test-build-firefox-remote.sh`
   - `bash tests/test-firefox-localhost-patch.sh`
   - `bash tests/test-olc-firefox-source.sh`
