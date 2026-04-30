@@ -61,6 +61,12 @@ async function stopServer(child) {
   await new Promise(resolve => child.once('exit', resolve));
 }
 
+async function drainMicrotasks(ticks = 8) {
+  for (let tick = 0; tick < ticks; tick += 1) {
+    await Promise.resolve();
+  }
+}
+
 test('serves the VM screen without external assets', async () => {
   const noVncDir = await fakeNoVncTree();
   const { child, url } = await startServer({ OLC_NOVNC_DIR: noVncDir });
@@ -78,11 +84,17 @@ test('serves the VM screen without external assets', async () => {
     const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
     assert.match(script, /import RFB from '\/novnc\/core\/rfb\.js'/);
     assert.match(script, /rfb\.clipboardPasteFrom\(text\)/);
+    assert.match(script, /const guestPasteDelayMs = 100/);
+    assert.match(script, /rfb\.sendKey\(XK_Control_L, 'ControlLeft', true\)/);
+    assert.match(script, /rfb\.sendKey\(XK_Super_L, 'MetaLeft', false\)/);
+    assert.match(script, /rfb\.sendKey\(XK_v, 'KeyV', true\)/);
     assert.match(script, /rfb\.addEventListener\('clipboard'/);
     assert.match(script, /navigator\.clipboard\?\.writeText/);
+    assert.match(script, /navigator\.clipboard\?\.readText/);
     assert.match(script, /window\.addEventListener\('paste'/);
     assert.match(script, /event\.clipboardData\?\.getData\('text\/plain'\)/);
     assert.match(script, /window\.addEventListener\('keydown'/);
+    assert.match(script, /window\.addEventListener\('keydown', event => \{[\s\S]*\}, \{ capture: true \}\);/);
     assert.match(script, /event\.ctrlKey && event\.shiftKey && event\.code === 'KeyC'/);
     assert.match(script, /const wheelState = \{ x: 0, y: 0 \}/);
     assert.match(script, /const wheelStep = 50/);
@@ -179,6 +191,10 @@ test('viewer keeps routine connection and clipboard events out of the viewport c
     let hostClipboardText = '';
     let pastedText = '';
     let pastePrevented = false;
+    let pasteStopped = false;
+    let rfbFocusCalls = 0;
+    const timers = [];
+    const keyEvents = [];
 
     class FakeRFB {
       constructor() {
@@ -194,7 +210,13 @@ test('viewer keeps routine connection and clipboard events out of the viewport c
         pastedText = text;
       }
 
-      focus() {}
+      focus() {
+        rfbFocusCalls += 1;
+      }
+
+      sendKey(keysym, code, down) {
+        keyEvents.push({ keysym, code, down });
+      }
     }
 
     const context = {
@@ -214,8 +236,9 @@ test('viewer keeps routine connection and clipboard events out of the viewport c
           windowHandlers.set(type, handler);
         },
         clearTimeout() {},
-        setTimeout() {
-          return 1;
+        setTimeout(callback, delayMs) {
+          timers.push({ callback, delayMs });
+          return timers.length;
         },
       },
     };
@@ -243,12 +266,26 @@ test('viewer keeps routine connection and clipboard events out of the viewport c
           return 'from host';
         },
       },
+      stopPropagation() {
+        pasteStopped = true;
+      },
       preventDefault() {
         pastePrevented = true;
       },
     });
     assert.equal(pastedText, 'from host');
     assert.equal(pastePrevented, true);
+    assert.equal(pasteStopped, true);
+    assert.equal(rfbFocusCalls, 1);
+    assert.equal(timers[0].delayMs, 100);
+    timers.shift().callback();
+    await Promise.resolve();
+    assert.deepEqual(keyEvents, [
+      { keysym: 0xffe3, code: 'ControlLeft', down: true },
+      { keysym: 0x0076, code: 'KeyV', down: true },
+      { keysym: 0x0076, code: 'KeyV', down: false },
+      { keysym: 0xffe3, code: 'ControlLeft', down: false },
+    ]);
     assert.equal(viewerMessage.hidden, true);
     assert.equal(viewerMessage.textContent, '');
 
@@ -256,6 +293,264 @@ test('viewer keeps routine connection and clipboard events out of the viewport c
     assert.equal(document.title, 'ol-c VM - Disconnected unexpectedly');
     assert.equal(viewerMessage.hidden, false);
     assert.equal(viewerMessage.textContent, 'Disconnected unexpectedly');
+  } finally {
+    await stopServer(child);
+    await rm(noVncDir, { recursive: true, force: true });
+  }
+});
+
+test('viewer intercepts keyboard paste shortcuts and sends guest paste keys', async () => {
+  const noVncDir = await fakeNoVncTree();
+  const { child, url } = await startServer({ OLC_NOVNC_DIR: noVncDir });
+
+  try {
+    const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
+    const windowHandlers = new Map();
+    const timers = [];
+    const operations = [];
+    const keyEvents = [];
+    let hostClipboardText = 'from ctrl';
+    let readCalls = 0;
+    let prevented = 0;
+    let stopped = 0;
+    const screen = {
+      focus() {},
+      addEventListener() {},
+    };
+    const viewerMessage = { textContent: '', hidden: true };
+
+    class FakeRFB {
+      constructor() {
+        this._rfbConnectionState = 'connected';
+        this._viewOnly = false;
+      }
+
+      addEventListener() {}
+
+      clipboardPasteFrom(text) {
+        operations.push({ type: 'clipboard', text });
+      }
+
+      focus() {
+        operations.push({ type: 'focus' });
+      }
+
+      sendKey(keysym, code, down) {
+        keyEvents.push({ keysym, code, down });
+      }
+    }
+
+    const context = {
+      FakeRFB,
+      document: {
+        getElementById(id) {
+          return { screen, 'viewer-message': viewerMessage }[id];
+        },
+      },
+      navigator: {
+        clipboard: {
+          async readText() {
+            readCalls += 1;
+            return hostClipboardText;
+          },
+        },
+      },
+      window: {
+        OLC_VM_SCREEN: { host: '127.0.0.1', port: 5720, audio: { enabled: false } },
+        location: { protocol: 'http:' },
+        addEventListener(type, handler, options) {
+          windowHandlers.set(type, { handler, options });
+        },
+        clearTimeout() {},
+        setTimeout(callback, delayMs) {
+          timers.push({ callback, delayMs });
+          return timers.length;
+        },
+      },
+    };
+
+    vm.runInNewContext(
+      script.replace("import RFB from '/novnc/core/rfb.js';", 'const RFB = FakeRFB;'),
+      context,
+    );
+
+    const keydown = windowHandlers.get('keydown');
+    assert.equal(typeof keydown.handler, 'function');
+    assert.equal(keydown.options.capture, true);
+
+    function pasteKeyEvent(overrides = {}) {
+      return {
+        code: 'KeyV',
+        ctrlKey: true,
+        metaKey: false,
+        altKey: false,
+        repeat: false,
+        preventDefault() {
+          prevented += 1;
+        },
+        stopPropagation() {
+          stopped += 1;
+        },
+        ...overrides,
+      };
+    }
+
+    keydown.handler(pasteKeyEvent());
+    await drainMicrotasks();
+    assert.equal(readCalls, 1);
+    assert.deepEqual(operations, [
+      { type: 'clipboard', text: 'from ctrl' },
+      { type: 'focus' },
+    ]);
+    assert.equal(keyEvents.length, 0);
+    assert.equal(timers[0].delayMs, 100);
+    timers.shift().callback();
+    await drainMicrotasks();
+    assert.deepEqual(keyEvents, [
+      { keysym: 0xffe3, code: 'ControlLeft', down: true },
+      { keysym: 0x0076, code: 'KeyV', down: true },
+      { keysym: 0x0076, code: 'KeyV', down: false },
+      { keysym: 0xffe3, code: 'ControlLeft', down: false },
+    ]);
+
+    hostClipboardText = 'from meta';
+    operations.length = 0;
+    keyEvents.length = 0;
+    keydown.handler(pasteKeyEvent({ ctrlKey: false, metaKey: true }));
+    await drainMicrotasks();
+    assert.equal(readCalls, 2);
+    assert.deepEqual(operations, [
+      { type: 'clipboard', text: 'from meta' },
+      { type: 'focus' },
+    ]);
+    timers.shift().callback();
+    await drainMicrotasks();
+    assert.deepEqual(keyEvents, [
+      { keysym: 0xffeb, code: 'MetaLeft', down: false },
+      { keysym: 0xffec, code: 'MetaRight', down: false },
+      { keysym: 0xffe3, code: 'ControlLeft', down: true },
+      { keysym: 0x0076, code: 'KeyV', down: true },
+      { keysym: 0x0076, code: 'KeyV', down: false },
+      { keysym: 0xffe3, code: 'ControlLeft', down: false },
+    ]);
+
+    operations.length = 0;
+    keyEvents.length = 0;
+    keydown.handler(pasteKeyEvent({ repeat: true }));
+    await drainMicrotasks();
+    assert.equal(readCalls, 2);
+    assert.deepEqual(operations, []);
+    assert.deepEqual(keyEvents, []);
+    assert.equal(timers.length, 0);
+    assert.equal(prevented, 3);
+    assert.equal(stopped, 3);
+    assert.equal(viewerMessage.hidden, true);
+    assert.equal(viewerMessage.textContent, '');
+  } finally {
+    await stopServer(child);
+    await rm(noVncDir, { recursive: true, force: true });
+  }
+});
+
+test('viewer reports keyboard paste clipboard failures without touching VM', async () => {
+  const noVncDir = await fakeNoVncTree();
+  const { child, url } = await startServer({ OLC_NOVNC_DIR: noVncDir });
+
+  try {
+    const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
+    const windowHandlers = new Map();
+    const timers = [];
+    const operations = [];
+    const screen = {
+      focus() {},
+      addEventListener() {},
+    };
+    const viewerMessage = { textContent: '', hidden: true };
+
+    class FakeRFB {
+      constructor() {
+        this._rfbConnectionState = 'connected';
+        this._viewOnly = false;
+      }
+
+      addEventListener() {}
+
+      clipboardPasteFrom(text) {
+        operations.push({ type: 'clipboard', text });
+      }
+
+      focus() {
+        operations.push({ type: 'focus' });
+      }
+
+      sendKey(keysym, code, down) {
+        operations.push({ type: 'key', keysym, code, down });
+      }
+    }
+
+    const context = {
+      FakeRFB,
+      document: {
+        getElementById(id) {
+          return { screen, 'viewer-message': viewerMessage }[id];
+        },
+      },
+      navigator: {},
+      window: {
+        OLC_VM_SCREEN: { host: '127.0.0.1', port: 5720, audio: { enabled: false } },
+        location: { protocol: 'http:' },
+        addEventListener(type, handler, options) {
+          windowHandlers.set(type, { handler, options });
+        },
+        clearTimeout() {},
+        setTimeout(callback, delayMs) {
+          timers.push({ callback, delayMs });
+          return timers.length;
+        },
+      },
+    };
+
+    vm.runInNewContext(
+      script.replace("import RFB from '/novnc/core/rfb.js';", 'const RFB = FakeRFB;'),
+      context,
+    );
+
+    const keydown = windowHandlers.get('keydown').handler;
+    function pasteKeyEvent() {
+      return {
+        code: 'KeyV',
+        ctrlKey: true,
+        metaKey: false,
+        altKey: false,
+        repeat: false,
+        preventDefault() {},
+        stopPropagation() {},
+      };
+    }
+
+    async function assertPasteFailure(clipboard, expectedMessage) {
+      context.navigator.clipboard = clipboard;
+      viewerMessage.hidden = true;
+      viewerMessage.textContent = '';
+      keydown(pasteKeyEvent());
+      await drainMicrotasks();
+      assert.equal(viewerMessage.hidden, false);
+      assert.equal(viewerMessage.textContent, expectedMessage);
+      assert.deepEqual(operations, []);
+    }
+
+    await assertPasteFailure(undefined, 'Host clipboard unavailable');
+    await assertPasteFailure({
+      async readText() {
+        throw new Error('denied');
+      },
+    }, 'Host clipboard read denied');
+    await assertPasteFailure({
+      async readText() {
+        return '';
+      },
+    }, 'Host clipboard has no text');
+    assert.equal(timers.length, 3);
   } finally {
     await stopServer(child);
     await rm(noVncDir, { recursive: true, force: true });

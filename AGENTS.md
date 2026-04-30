@@ -164,6 +164,7 @@ Question this milestone answers:
 - `edit` from an in-browser terminal opens `/edit`, and `edit <path>` opens a specific file.
 - The normal `./launch-vm` path uses a browser tab as the VM display through local-only QEMU VNC WebSocket plus pinned noVNC assets.
 - `./launch-vm` now also bridges guest audio into that browser viewer through a local-only raw PCM stream captured from a per-VM Pulse/PipeWire sink.
+- The browser viewer supports text copy out of the VM and keyboard or browser-menu text paste into the VM through the QEMU vdagent clipboard path.
 - `launch-vm` also exposes a local-only QMP socket and prints it as `qmp socket:`.
 - `launch-vm` can wait for the guest `olc-vm-ready` journal marker and surface readiness failures.
 - In-VM development uses a host-shared repo mounted at `/source` via `virtiofs`.
@@ -283,7 +284,6 @@ These decisions should be made when a later milestone actually requires them.
 These are non-priority tasks we can pick up any time as an option for the next thing to do, but are not pressing
 - Current select boxes like mute and light/dark mode should be toggle buttons with appropriate unicode icons
 - Ctrl+S crashes firefox
-- Future paste-into-VM fix: copy out of the browser-launched VM already works well. Paste should keep using the existing noVNC plus QEMU `qemu-vdagent` clipboard path, but keyboard paste needs to intercept `Ctrl+V` and host `Cmd+V` in capture phase before noVNC handles them, read host clipboard text during that user gesture, call `rfb.clipboardPasteFrom(text)`, then synthesize guest `Ctrl+V` so the active guest app actually pastes. Browser clipboard reads may be permission or prompt gated, so failure should show a concise hint.
 - Ctrl+Shift+C should not open dev tools in vm, we should make that copy
 - make sure password save offer on initial account creation doesn't show
 - investigate browser terminal breakage after printing nested-child serial boot output with heavy raw OSC/ANSI control sequences; likely fix is to filter or redirect that boot stream before it hits the browser terminal session

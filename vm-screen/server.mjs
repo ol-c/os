@@ -162,6 +162,11 @@ let persistentViewerMessage = false;
 const wheelState = { x: 0, y: 0 };
 const wheelStep = 50;
 const wheelLineHeight = 19;
+const guestPasteDelayMs = 100;
+const XK_Control_L = 0xffe3;
+const XK_Super_L = 0xffeb;
+const XK_Super_R = 0xffec;
+const XK_v = 0x0076;
 let audioContext = null;
 let audioProcessor = null;
 let audioStreaming = false;
@@ -294,6 +299,63 @@ async function copyLatestVmClipboardToHost({ notify = false } = {}) {
     }
     return false;
   }
+}
+
+function delay(delayMs) {
+  return new Promise(resolve => {
+    window.setTimeout(resolve, delayMs);
+  });
+}
+
+function sendGuestPasteShortcut() {
+  rfb.sendKey(XK_Control_L, 'ControlLeft', true);
+  rfb.sendKey(XK_v, 'KeyV', true);
+  rfb.sendKey(XK_v, 'KeyV', false);
+  rfb.sendKey(XK_Control_L, 'ControlLeft', false);
+}
+
+function releaseGuestMetaKeys() {
+  rfb.sendKey(XK_Super_L, 'MetaLeft', false);
+  rfb.sendKey(XK_Super_R, 'MetaRight', false);
+}
+
+async function pasteTextIntoVm(text, { notifyEmpty = false, releaseMeta = false } = {}) {
+  if (text.length === 0) {
+    if (notifyEmpty) {
+      setViewerMessage('Host clipboard has no text');
+    }
+    return false;
+  }
+
+  rfb.clipboardPasteFrom(text);
+  rfb.focus();
+  await delay(guestPasteDelayMs);
+  if (releaseMeta) {
+    releaseGuestMetaKeys();
+  }
+  sendGuestPasteShortcut();
+  return true;
+}
+
+async function readHostClipboardAndPasteIntoVm({ releaseMeta = false } = {}) {
+  if (!navigator.clipboard?.readText) {
+    setViewerMessage('Host clipboard unavailable');
+    return false;
+  }
+
+  let text = '';
+  try {
+    text = await navigator.clipboard.readText();
+  } catch {
+    setViewerMessage('Host clipboard read denied');
+    return false;
+  }
+
+  return pasteTextIntoVm(text, { notifyEmpty: true, releaseMeta });
+}
+
+function isHostPasteShortcut(event) {
+  return (event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyV';
 }
 
 function dropQueuedAudioFrames(frameCount) {
@@ -559,18 +621,29 @@ window.addEventListener('paste', event => {
     return;
   }
 
+  event.stopPropagation();
   event.preventDefault();
-  rfb.clipboardPasteFrom(text);
-  rfb.focus();
+  void pasteTextIntoVm(text);
 });
 
 window.addEventListener('keydown', event => {
-  void resumeAudioPlayback();
+  if (isHostPasteShortcut(event)) {
+    event.stopPropagation();
+    event.preventDefault();
+    if (!event.repeat) {
+      void readHostClipboardAndPasteIntoVm({ releaseMeta: event.metaKey });
+    }
+    return;
+  }
+
   if (event.ctrlKey && event.shiftKey && event.code === 'KeyC') {
+    event.stopPropagation();
     event.preventDefault();
     void copyLatestVmClipboardToHost({ notify: true });
   }
-});
+
+  void resumeAudioPlayback();
+}, { capture: true });
 
 window.addEventListener('pointerdown', () => {
   void resumeAudioPlayback();
