@@ -90,7 +90,7 @@ OLC_QEMU_BIN=/path/to/qemu-system-x86_64 ./launch-vm
 OLC_VM_DISK_SIZE=96G ./launch-vm
 ```
 
-Before booting, `launch-vm` also verifies that the host source directory can create files and directories. If that check fails, the guest would mount `/source` in a state where existing files may be editable but new files cannot be created, which is not a valid synced-development setup. When the host `virtiofsd` supports it, the launcher maps guest UID/GID `1000:1000` to the host launcher UID/GID so in-guest edits create host-owned files instead of depending on matching numeric IDs. The first human admin created by setup prefers UID `1000` so the existing synced-development path stays intact after first boot.
+Before booting, `launch-vm` also verifies that the host source directory can create files and directories. If that check fails, the guest would mount `/source` in a state where existing files may be editable but new files cannot be created, which is not a valid synced-development setup. When the host `virtiofsd` supports it, the launcher maps guest UID/GID `1000:1000` to the host launcher UID/GID so in-guest edits create host-owned files instead of depending on matching numeric IDs. The default uses namespace UID/GID maps when `newuidmap` and `newgidmap` are installed; otherwise it falls back to legacy `OLC_VIRTIOFSD_SANDBOX=none` translation when available. The first human admin created by setup prefers UID `1000` so the existing synced-development path stays intact after first boot.
 
 The browser display path is local development only for now: the viewer server and QEMU VNC WebSocket listener bind to `127.0.0.1`. If the browser does not open automatically, use the printed `browser url:` line.
 
@@ -419,10 +419,10 @@ Ubuntu host prerequisites:
 
 ```sh
 sudo apt update
-sudo apt install -y qemu-system-x86 qemu-utils qemu-kvm virtiofsd
+sudo apt install -y qemu-system-x86 qemu-utils qemu-kvm virtiofsd uidmap
 ```
 
-`virtiofsd` provides the host daemon used to mount this repo at `/source` inside the guest and to expose the parent image directory at `/vm-images`. Without it, the launcher will stop before booting the guest.
+`virtiofsd` provides the host daemon used to mount this repo at `/source` inside the guest and to expose the parent image directory at `/vm-images`. `uidmap` provides `newuidmap` and `newgidmap`, which are needed for the default namespace ID-mapping path. Without `virtiofsd`, the launcher will stop before booting the guest.
 
 Install Nix using the standard installer for your environment, then confirm the required tools exist:
 
@@ -430,6 +430,8 @@ Install Nix using the standard installer for your environment, then confirm the 
 command -v nix
 command -v qemu-system-x86_64
 command -v virtiofsd
+command -v newuidmap
+command -v newgidmap
 test -e /dev/kvm && echo "/dev/kvm present"
 ```
 

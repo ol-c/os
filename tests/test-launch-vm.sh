@@ -68,7 +68,7 @@ EOF
   cat >"${CASE_TMP}/fakebin/virtiofsd" <<EOF
 #!${TEST_FAKE_BASH}
 if [[ "\${1:-}" == "--help" ]]; then
-  printf '%s\n' 'Usage: virtiofsd --translate-uid --translate-gid'
+  printf '%s\n' "\${OLC_FAKE_VIRTIOFSD_HELP:-Usage: virtiofsd --uid-map --gid-map --translate-uid --translate-gid}"
   exit 0
 fi
 printf '%s\n' "\$*" >> "${CASE_TMP}/virtiofsd.args.all"
@@ -226,14 +226,43 @@ while true; do
 done
 EOF
 
-  chmod +x "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/fakebin/qemu-img" "${CASE_TMP}/fakebin/virtiofsd" "${CASE_TMP}/fakebin/node" "${CASE_TMP}/fakebin/build-vm" "${CASE_TMP}/fakebin/nix" "${CASE_TMP}/fakebin/journalctl" "${CASE_TMP}/fakebin/pactl" "${CASE_TMP}/fakebin/parec"
+  cat >"${CASE_TMP}/fakebin/newuidmap" <<EOF
+#!${TEST_FAKE_BASH}
+exit 0
+EOF
+
+  cat >"${CASE_TMP}/fakebin/newgidmap" <<EOF
+#!${TEST_FAKE_BASH}
+exit 0
+EOF
+
+  chmod +x "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/fakebin/qemu-img" "${CASE_TMP}/fakebin/virtiofsd" "${CASE_TMP}/fakebin/node" "${CASE_TMP}/fakebin/build-vm" "${CASE_TMP}/fakebin/nix" "${CASE_TMP}/fakebin/journalctl" "${CASE_TMP}/fakebin/pactl" "${CASE_TMP}/fakebin/parec" "${CASE_TMP}/fakebin/newuidmap" "${CASE_TMP}/fakebin/newgidmap"
   cp "${CASE_TMP}/fakebin/qemu-system-x86_64" "${CASE_TMP}/qemu-store/bin/qemu-system-x86_64"
+}
+
+controlled_path_without_namespace_helpers() {
+  local bin_dir cmd cmd_path
+
+  bin_dir="${CASE_TMP}/controlled-bin"
+  mkdir -p "$bin_dir"
+  for cmd in bash basename cat date dirname env grep head id mkdir mktemp pwd rm rmdir sed seq sleep tail timeout tr; do
+    cmd_path="$(command -v "$cmd" 2>/dev/null || true)"
+    [[ -n "$cmd_path" ]] || fail "test host command not found: $cmd"
+    ln -sf "$cmd_path" "${bin_dir}/$cmd"
+  done
+  printf '%s:%s\n' "${CASE_TMP}/fakebin" "$bin_dir"
 }
 
 assert_contains() {
   local haystack="$1"
   local needle="$2"
   [[ "$haystack" == *"$needle"* ]] || fail "expected [$needle] in [$haystack]"
+}
+
+assert_not_contains() {
+  local haystack="$1"
+  local needle="$2"
+  [[ "$haystack" != *"$needle"* ]] || fail "did not expect [$needle] in [$haystack]"
 }
 
 safe_cat() {
@@ -370,6 +399,8 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
       OLC_VM_SCREEN_OPEN_BROWSER=0 \
       OLC_FAKE_QEMU_EXIT_EARLY=1 \
       OLC_FAKE_VM_SCREEN_WAIT=1 \
+      OLC_VIRTIOFSD_HOST_UID=4242 \
+      OLC_VIRTIOFSD_HOST_GID=4343 \
       OLC_SKIP_SOURCE_WRITE_CHECK=1 \
       OLC_SKIP_KVM_CHECK=1 \
       "${LAUNCH_VM}" \
@@ -413,8 +444,8 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$output" "source mount: ${ROOT_DIR} -> /source"
   assert_contains "$output" "image mount: ${CASE_TMP}/artifacts -> /vm-images"
   assert_contains "$output" "in-guest image: /vm-images/guest.qcow2"
-  assert_contains "$output" "virtiofsd sandbox: none"
-  assert_contains "$output" "virtiofsd id mapping: guest 1000:1000 -> host "
+  assert_contains "$output" "virtiofsd sandbox: namespace"
+  assert_contains "$output" "virtiofsd id mapping: namespace guest 1000:1000 -> host 4242:4343"
   assert_contains "$output" "viewer: browser tab"
   assert_contains "$output" "audio: browser bridge via olc_vm_"
   assert_contains "$output" "novnc assets: ${CASE_TMP}/novnc"
@@ -458,14 +489,18 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$nix_args" "build .#qemu-olc --print-out-paths --no-link"
   assert_contains "$virtiofsd_args" "--socket-path="
   assert_contains "$virtiofsd_args" "--shared-dir=${ROOT_DIR}"
-  assert_contains "$virtiofsd_args" "--sandbox=none"
-  assert_contains "$virtiofsd_args" "--translate-uid=map:1000:"
-  assert_contains "$virtiofsd_args" "--translate-gid=map:1000:"
+  assert_contains "$virtiofsd_args" "--sandbox=namespace"
+  assert_contains "$virtiofsd_args" "--uid-map=:1000:4242:1:"
+  assert_contains "$virtiofsd_args" "--gid-map=:1000:4343:1:"
+  assert_not_contains "$virtiofsd_args" "--translate-uid="
+  assert_not_contains "$virtiofsd_args" "--translate-gid="
   assert_contains "$virtiofsd_args" "--cache=auto"
   assert_contains "$vm_images_virtiofsd_args" "--shared-dir=${CASE_TMP}/artifacts"
-  assert_contains "$vm_images_virtiofsd_args" "--sandbox=none"
-  assert_contains "$vm_images_virtiofsd_args" "--translate-uid=map:1000:"
-  assert_contains "$vm_images_virtiofsd_args" "--translate-gid=map:1000:"
+  assert_contains "$vm_images_virtiofsd_args" "--sandbox=namespace"
+  assert_contains "$vm_images_virtiofsd_args" "--uid-map=:1000:4242:1:"
+  assert_contains "$vm_images_virtiofsd_args" "--gid-map=:1000:4343:1:"
+  assert_not_contains "$vm_images_virtiofsd_args" "--translate-uid="
+  assert_not_contains "$vm_images_virtiofsd_args" "--translate-gid="
   assert_contains "$vm_images_virtiofsd_args" "--cache=auto"
   [[ "$virtiofsd_shared_dir" == "$ROOT_DIR" ]] || fail "expected virtiofsd to share repo root, got [$virtiofsd_shared_dir]"
   [[ "$vm_images_shared_dir" == "${CASE_TMP}/artifacts" ]] || fail "expected VM image virtiofsd to share image directory, got [$vm_images_shared_dir]"
@@ -554,6 +589,154 @@ test_uses_build_friendly_default_resources() {
   assert_contains "$qemu_args" "-m 16384"
   assert_contains "$qemu_args" "-object memory-backend-memfd,id=olc-mem,size=16384M,share=on"
   assert_contains "$output" "runtime disk size: 64G"
+  cleanup_case
+}
+
+test_uses_legacy_translate_mapping_when_sandbox_none_is_requested() {
+  local output virtiofsd_args vm_images_virtiofsd_args
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_FAKE_QEMU_EXIT_EARLY=1 \
+      OLC_FAKE_VM_SCREEN_WAIT=1 \
+      OLC_VIRTIOFSD_SANDBOX=none \
+      OLC_VIRTIOFSD_HOST_UID=4242 \
+      OLC_VIRTIOFSD_HOST_GID=4343 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}" \
+  )"
+  set -e
+
+  virtiofsd_args="$(safe_cat "${CASE_TMP}/virtiofsd.args")"
+  vm_images_virtiofsd_args="$(safe_cat "${CASE_TMP}/vm-images-virtiofsd.args")"
+  assert_contains "$output" "virtiofsd sandbox: none"
+  assert_contains "$output" "virtiofsd id mapping: translate guest 1000:1000 -> host 4242:4343"
+  assert_contains "$virtiofsd_args" "--sandbox=none"
+  assert_contains "$virtiofsd_args" "--translate-uid=map:1000:4242:1"
+  assert_contains "$virtiofsd_args" "--translate-gid=map:1000:4343:1"
+  assert_not_contains "$virtiofsd_args" "--uid-map="
+  assert_not_contains "$virtiofsd_args" "--gid-map="
+  assert_contains "$vm_images_virtiofsd_args" "--sandbox=none"
+  assert_contains "$vm_images_virtiofsd_args" "--translate-uid=map:1000:4242:1"
+  assert_contains "$vm_images_virtiofsd_args" "--translate-gid=map:1000:4343:1"
+  assert_not_contains "$vm_images_virtiofsd_args" "--uid-map="
+  assert_not_contains "$vm_images_virtiofsd_args" "--gid-map="
+  cleanup_case
+}
+
+test_falls_back_to_legacy_translate_mapping_when_default_namespace_helpers_are_missing() {
+  local output test_path virtiofsd_args vm_images_virtiofsd_args
+  setup_case
+  rm -f "${CASE_TMP}/fakebin/newuidmap" "${CASE_TMP}/fakebin/newgidmap"
+  test_path="$(controlled_path_without_namespace_helpers)"
+
+  set +e
+  output="$(
+    PATH="$test_path" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_FAKE_QEMU_EXIT_EARLY=1 \
+      OLC_FAKE_VM_SCREEN_WAIT=1 \
+      OLC_VIRTIOFSD_HOST_UID=4242 \
+      OLC_VIRTIOFSD_HOST_GID=4343 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}" \
+      2>&1
+  )"
+  set -e
+
+  virtiofsd_args="$(safe_cat "${CASE_TMP}/virtiofsd.args")"
+  vm_images_virtiofsd_args="$(safe_cat "${CASE_TMP}/vm-images-virtiofsd.args")"
+  assert_contains "$output" "warning: virtiofsd namespace UID/GID mapping requires newuidmap and newgidmap; falling back to OLC_VIRTIOFSD_SANDBOX=none legacy translation"
+  assert_contains "$output" "virtiofsd sandbox: none"
+  assert_contains "$output" "virtiofsd id mapping: translate guest 1000:1000 -> host 4242:4343"
+  assert_contains "$virtiofsd_args" "--sandbox=none"
+  assert_contains "$virtiofsd_args" "--translate-uid=map:1000:4242:1"
+  assert_contains "$virtiofsd_args" "--translate-gid=map:1000:4343:1"
+  assert_not_contains "$virtiofsd_args" "--uid-map="
+  assert_not_contains "$virtiofsd_args" "--gid-map="
+  assert_contains "$vm_images_virtiofsd_args" "--sandbox=none"
+  assert_contains "$vm_images_virtiofsd_args" "--translate-uid=map:1000:4242:1"
+  assert_contains "$vm_images_virtiofsd_args" "--translate-gid=map:1000:4343:1"
+  assert_not_contains "$vm_images_virtiofsd_args" "--uid-map="
+  assert_not_contains "$vm_images_virtiofsd_args" "--gid-map="
+  cleanup_case
+}
+
+test_falls_back_to_unsandboxed_virtiofsd_when_translate_is_unavailable_and_ids_match() {
+  local output test_path virtiofsd_args vm_images_virtiofsd_args
+  setup_case
+  rm -f "${CASE_TMP}/fakebin/newuidmap" "${CASE_TMP}/fakebin/newgidmap"
+  test_path="$(controlled_path_without_namespace_helpers)"
+
+  set +e
+  output="$(
+    PATH="$test_path" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_FAKE_QEMU_EXIT_EARLY=1 \
+      OLC_FAKE_VM_SCREEN_WAIT=1 \
+      OLC_FAKE_VIRTIOFSD_HELP='Usage: virtiofsd --uid-map --gid-map' \
+      OLC_VIRTIOFSD_HOST_UID=1000 \
+      OLC_VIRTIOFSD_HOST_GID=1000 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}" \
+      2>&1
+  )"
+  set -e
+
+  virtiofsd_args="$(safe_cat "${CASE_TMP}/virtiofsd.args")"
+  vm_images_virtiofsd_args="$(safe_cat "${CASE_TMP}/vm-images-virtiofsd.args")"
+  assert_contains "$output" "virtiofsd sandbox: none"
+  assert_not_contains "$output" "virtiofsd id mapping:"
+  assert_not_contains "$output" "virtiofsd cannot map guest UID/GID"
+  assert_not_contains "$output" "falling back to OLC_VIRTIOFSD_SANDBOX=none legacy translation"
+  assert_contains "$virtiofsd_args" "--sandbox=none"
+  assert_not_contains "$virtiofsd_args" "--translate-uid="
+  assert_not_contains "$virtiofsd_args" "--translate-gid="
+  assert_not_contains "$virtiofsd_args" "--uid-map="
+  assert_not_contains "$virtiofsd_args" "--gid-map="
+  assert_contains "$vm_images_virtiofsd_args" "--sandbox=none"
+  assert_not_contains "$vm_images_virtiofsd_args" "--translate-uid="
+  assert_not_contains "$vm_images_virtiofsd_args" "--translate-gid="
+  assert_not_contains "$vm_images_virtiofsd_args" "--uid-map="
+  assert_not_contains "$vm_images_virtiofsd_args" "--gid-map="
+  cleanup_case
+}
+
+test_explicit_namespace_mapping_fails_when_helpers_are_missing() {
+  local output status test_path
+  setup_case
+  rm -f "${CASE_TMP}/fakebin/newuidmap" "${CASE_TMP}/fakebin/newgidmap"
+  test_path="$(controlled_path_without_namespace_helpers)"
+
+  set +e
+  output="$(
+    PATH="$test_path" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_VIRTIOFSD_SANDBOX=namespace \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}" \
+      2>&1
+  )"
+  status=$?
+  set -e
+
+  [[ $status -ne 0 ]] || fail "expected explicit namespace mapping to fail without uidmap helpers"
+  assert_contains "$output" "virtiofsd namespace UID/GID mapping requires newuidmap and newgidmap"
+  assert_contains "$output" "Install the uidmap package or set OLC_VIRTIOFSD_SANDBOX=none"
+  [[ ! -f "${CASE_TMP}/virtiofsd.args" ]] || fail "expected namespace helper validation to fail before starting virtiofsd"
   cleanup_case
 }
 
@@ -1029,6 +1212,10 @@ test_missing_explicit_vm_image_fails
 test_passes_parent_vm_lineage_to_guest_firmware
 test_supports_fast_boot_without_guest_network
 test_does_not_write_runtime_metadata
+test_uses_legacy_translate_mapping_when_sandbox_none_is_requested
+test_falls_back_to_legacy_translate_mapping_when_default_namespace_helpers_are_missing
+test_falls_back_to_unsandboxed_virtiofsd_when_translate_is_unavailable_and_ids_match
+test_explicit_namespace_mapping_fails_when_helpers_are_missing
 test_waits_for_ready_marker_when_requested
 test_ready_marker_timeout_surfaces_journal_tail
 test_exits_when_qemu_exits_first

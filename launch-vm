@@ -46,10 +46,13 @@ Environment:
   OLC_VM_SCREEN_PORT      Local browser viewer HTTP port. Default: automatic.
   OLC_SOURCE_DIR          Host source tree to mount at /source. Default: this repo.
   OLC_VIRTIOFSD           virtiofsd executable path. Default: first virtiofsd in PATH.
-  OLC_VIRTIOFSD_SANDBOX   virtiofsd sandbox mode. Default: none.
+  OLC_VIRTIOFSD_SANDBOX   virtiofsd sandbox mode. Default: namespace when
+                          host uidmap helpers are available, otherwise none.
   OLC_VIRTIOFSD_TRANSLATE_IDS
-                          Map guest demo UID/GID to launcher UID/GID when
-                          supported by virtiofsd. Default: 1.
+                          Map guest demo UID/GID to launcher UID/GID. Uses
+                          namespace uid/gid maps by default and legacy
+                          translate maps with OLC_VIRTIOFSD_SANDBOX=none.
+                          Default: 1.
   OLC_VIRTIOFSD_HOST_UID  Host UID for guest demo writes. Default: id -u.
   OLC_VIRTIOFSD_HOST_GID  Host GID for guest demo writes. Default: id -g.
   OLC_KVM_DEVICE          KVM device path. Default: /dev/kvm.
@@ -284,7 +287,105 @@ setup_vm_audio() {
 }
 
 virtiofsd_supports_translate_ids() {
-  "$VIRTIOFSD" --help 2>&1 | grep -q -- '--translate-uid'
+  "$VIRTIOFSD" --help 2>&1 | grep -q -- '--translate-uid' &&
+    "$VIRTIOFSD" --help 2>&1 | grep -q -- '--translate-gid'
+}
+
+virtiofsd_supports_namespace_id_maps() {
+  "$VIRTIOFSD" --help 2>&1 | grep -q -- '--uid-map' &&
+    "$VIRTIOFSD" --help 2>&1 | grep -q -- '--gid-map'
+}
+
+virtiofsd_namespace_id_map_helpers_available() {
+  command -v newuidmap >/dev/null 2>&1 &&
+    command -v newgidmap >/dev/null 2>&1
+}
+
+use_virtiofsd_translate_mapping() {
+  virtiofsd_id_args=(
+    "--translate-uid=map:1000:${VIRTIOFSD_HOST_UID}:1"
+    "--translate-gid=map:1000:${VIRTIOFSD_HOST_GID}:1"
+  )
+  VIRTIOFSD_ID_MAPPING_MODE="translate"
+}
+
+use_virtiofsd_namespace_mapping() {
+  virtiofsd_id_args=(
+    "--uid-map=:1000:${VIRTIOFSD_HOST_UID}:1:"
+    "--gid-map=:1000:${VIRTIOFSD_HOST_GID}:1:"
+  )
+  VIRTIOFSD_ID_MAPPING_MODE="namespace"
+}
+
+virtiofsd_host_ids_match_guest() {
+  [[ "$VIRTIOFSD_HOST_UID" == "1000" && "$VIRTIOFSD_HOST_GID" == "1000" ]]
+}
+
+warn_virtiofsd_unmapped_source() {
+  if virtiofsd_host_ids_match_guest; then
+    return
+  fi
+  echo "warning: virtiofsd cannot map guest UID/GID 1000:1000 to host ${VIRTIOFSD_HOST_UID}:${VIRTIOFSD_HOST_GID}; /source writes may require matching host UID/GID" >&2
+}
+
+fallback_to_virtiofsd_sandbox_none() {
+  local reason="$1"
+
+  VIRTIOFSD_SANDBOX="none"
+  if virtiofsd_supports_translate_ids; then
+    echo "warning: ${reason}; falling back to OLC_VIRTIOFSD_SANDBOX=none legacy translation" >&2
+    use_virtiofsd_translate_mapping
+  else
+    if virtiofsd_host_ids_match_guest; then
+      return
+    fi
+    echo "warning: ${reason}; falling back to OLC_VIRTIOFSD_SANDBOX=none without UID/GID translation; /source writes may require matching host UID/GID" >&2
+  fi
+}
+
+start_virtiofsd() {
+  local socket_path="$1"
+  local shared_dir="$2"
+
+  "$VIRTIOFSD" \
+    --socket-path="$socket_path" \
+    --shared-dir="$shared_dir" \
+    --sandbox="$VIRTIOFSD_SANDBOX" \
+    "${virtiofsd_id_args[@]}" \
+    --cache=auto &
+  STARTED_VIRTIOFSD_PID="$!"
+}
+
+wait_for_virtiofsd_socket() {
+  local pid="$1"
+  local socket_path="$2"
+  local socket_label="$3"
+  local timeout_message
+
+  for _ in $(seq 1 100); do
+    if [[ -S "$socket_path" || -e "$socket_path" ]]; then
+      sleep 0.1
+      if ! kill -0 "$pid" >/dev/null 2>&1; then
+        wait "$pid" 2>/dev/null || true
+        fail "virtiofsd exited after creating the ${socket_label} socket"
+      fi
+      return 0
+    fi
+
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      wait "$pid" 2>/dev/null || true
+      fail "virtiofsd exited before creating the ${socket_label} socket"
+    fi
+
+    sleep 0.1
+  done
+
+  if [[ "$socket_label" == "source" ]]; then
+    timeout_message="timed out waiting for virtiofsd socket: $socket_path"
+  else
+    timeout_message="timed out waiting for ${socket_label} virtiofsd socket: $socket_path"
+  fi
+  fail "$timeout_message"
 }
 
 port_is_open() {
@@ -421,7 +522,11 @@ VM_WAIT_READY="${OLC_VM_WAIT_READY:-0}"
 VM_READY_TIMEOUT_SECONDS="${OLC_VM_READY_TIMEOUT_SECONDS:-30}"
 VM_READY_WARN_SECONDS="${OLC_VM_READY_WARN_SECONDS:-15}"
 VM_READY_JOURNAL="${OLC_VM_READY_JOURNAL:-${SOURCE_DIR}/.olc-debug/journal}"
-VIRTIOFSD_SANDBOX="${OLC_VIRTIOFSD_SANDBOX:-none}"
+VIRTIOFSD_SANDBOX_EXPLICIT=0
+if [[ -n "${OLC_VIRTIOFSD_SANDBOX:-}" ]]; then
+  VIRTIOFSD_SANDBOX_EXPLICIT=1
+fi
+VIRTIOFSD_SANDBOX="${OLC_VIRTIOFSD_SANDBOX:-namespace}"
 VIRTIOFSD_TRANSLATE_IDS="${OLC_VIRTIOFSD_TRANSLATE_IDS:-1}"
 VIRTIOFSD_HOST_UID="${OLC_VIRTIOFSD_HOST_UID:-$(id -u)}"
 VIRTIOFSD_HOST_GID="${OLC_VIRTIOFSD_HOST_GID:-$(id -g)}"
@@ -452,6 +557,8 @@ VM_SCREEN_RECONNECT_URL=""
 RESOLVED_QEMU_BIN=""
 PACTL_BIN=""
 PAREC_BIN=""
+STARTED_VIRTIOFSD_PID=""
+VIRTIOFSD_ID_MAPPING_MODE=""
 AUDIO_SINK_NAME=""
 AUDIO_SINK_MODULE_ID=""
 declare -a AUDIO_QEMU_ARGS=()
@@ -491,14 +598,34 @@ check_source_dir_writable
 
 virtiofsd_id_args=()
 if [[ "$VIRTIOFSD_TRANSLATE_IDS" == "1" ]]; then
-  if virtiofsd_supports_translate_ids; then
-    virtiofsd_id_args=(
-      "--translate-uid=map:1000:${VIRTIOFSD_HOST_UID}:1"
-      "--translate-gid=map:1000:${VIRTIOFSD_HOST_GID}:1"
-    )
-  else
-    echo "warning: virtiofsd does not support --translate-uid; /source writes may require matching host UID/GID" >&2
-  fi
+  case "$VIRTIOFSD_SANDBOX" in
+    namespace)
+      if virtiofsd_supports_namespace_id_maps && virtiofsd_namespace_id_map_helpers_available; then
+        use_virtiofsd_namespace_mapping
+      elif [[ "$VIRTIOFSD_SANDBOX_EXPLICIT" == "1" ]]; then
+        if ! virtiofsd_supports_namespace_id_maps; then
+          fail "virtiofsd does not support --uid-map/--gid-map; upgrade virtiofsd or set OLC_VIRTIOFSD_SANDBOX=none for legacy --translate-* mapping"
+        fi
+        fail "virtiofsd namespace UID/GID mapping requires newuidmap and newgidmap. Install the uidmap package or set OLC_VIRTIOFSD_SANDBOX=none for legacy --translate-* mapping."
+      else
+        if virtiofsd_supports_namespace_id_maps; then
+          fallback_to_virtiofsd_sandbox_none "virtiofsd namespace UID/GID mapping requires newuidmap and newgidmap"
+        else
+          fallback_to_virtiofsd_sandbox_none "virtiofsd does not support --uid-map/--gid-map"
+        fi
+      fi
+      ;;
+    none)
+      if virtiofsd_supports_translate_ids; then
+        use_virtiofsd_translate_mapping
+      else
+        warn_virtiofsd_unmapped_source
+      fi
+      ;;
+    *)
+      fail "unsupported OLC_VIRTIOFSD_SANDBOX for UID/GID mapping: ${VIRTIOFSD_SANDBOX}. Use namespace or none."
+      ;;
+  esac
 fi
 
 case "$VM_NETWORK_MODE" in
@@ -570,9 +697,14 @@ if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
   echo "in-guest image: /vm-images/$IMAGE_BASENAME"
 fi
 echo "virtiofsd sandbox: $VIRTIOFSD_SANDBOX"
-if [[ "${#virtiofsd_id_args[@]}" -gt 0 ]]; then
-  echo "virtiofsd id mapping: guest 1000:1000 -> host ${VIRTIOFSD_HOST_UID}:${VIRTIOFSD_HOST_GID}"
-fi
+case "$VIRTIOFSD_ID_MAPPING_MODE" in
+  namespace)
+    echo "virtiofsd id mapping: namespace guest 1000:1000 -> host ${VIRTIOFSD_HOST_UID}:${VIRTIOFSD_HOST_GID}"
+    ;;
+  translate)
+    echo "virtiofsd id mapping: translate guest 1000:1000 -> host ${VIRTIOFSD_HOST_UID}:${VIRTIOFSD_HOST_GID}"
+    ;;
+esac
 echo "viewer: browser tab"
 if [[ "$VM_AUDIO_MODE" == "browser" ]]; then
   echo "audio: browser bridge via ${AUDIO_SINK_NAME}.monitor"
@@ -631,56 +763,18 @@ trap cleanup EXIT INT TERM
 VIRTIOFS_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-virtiofs.XXXXXX")"
 VIRTIOFS_SOCKET="${VIRTIOFS_SOCKET_DIR}/source.sock"
 
-"$VIRTIOFSD" \
-  --socket-path="$VIRTIOFS_SOCKET" \
-  --shared-dir="$SOURCE_DIR" \
-  --sandbox="$VIRTIOFSD_SANDBOX" \
-  "${virtiofsd_id_args[@]}" \
-  --cache=auto &
-VIRTIOFSD_PID="$!"
-
-for _ in $(seq 1 100); do
-  if [[ -S "$VIRTIOFS_SOCKET" || -e "$VIRTIOFS_SOCKET" ]]; then
-    break
-  fi
-
-  if ! kill -0 "$VIRTIOFSD_PID" >/dev/null 2>&1; then
-    wait "$VIRTIOFSD_PID" 2>/dev/null || true
-    fail "virtiofsd exited before creating the source socket"
-  fi
-
-  sleep 0.1
-done
-
-[[ -S "$VIRTIOFS_SOCKET" || -e "$VIRTIOFS_SOCKET" ]] || fail "timed out waiting for virtiofsd socket: $VIRTIOFS_SOCKET"
+start_virtiofsd "$VIRTIOFS_SOCKET" "$SOURCE_DIR"
+VIRTIOFSD_PID="$STARTED_VIRTIOFSD_PID"
+wait_for_virtiofsd_socket "$VIRTIOFSD_PID" "$VIRTIOFS_SOCKET" "source"
 
 vm_images_qemu_args=()
 if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
   VM_IMAGES_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-vm-images.XXXXXX")"
   VM_IMAGES_SOCKET="${VM_IMAGES_SOCKET_DIR}/vm-images.sock"
 
-  "$VIRTIOFSD" \
-    --socket-path="$VM_IMAGES_SOCKET" \
-    --shared-dir="$IMAGE_DIR" \
-    --sandbox="$VIRTIOFSD_SANDBOX" \
-    "${virtiofsd_id_args[@]}" \
-    --cache=auto &
-  VM_IMAGES_VIRTIOFSD_PID="$!"
-
-  for _ in $(seq 1 100); do
-    if [[ -S "$VM_IMAGES_SOCKET" || -e "$VM_IMAGES_SOCKET" ]]; then
-      break
-    fi
-
-    if ! kill -0 "$VM_IMAGES_VIRTIOFSD_PID" >/dev/null 2>&1; then
-      wait "$VM_IMAGES_VIRTIOFSD_PID" 2>/dev/null || true
-      fail "virtiofsd exited before creating the VM images socket"
-    fi
-
-    sleep 0.1
-  done
-
-  [[ -S "$VM_IMAGES_SOCKET" || -e "$VM_IMAGES_SOCKET" ]] || fail "timed out waiting for VM images virtiofsd socket: $VM_IMAGES_SOCKET"
+  start_virtiofsd "$VM_IMAGES_SOCKET" "$IMAGE_DIR"
+  VM_IMAGES_VIRTIOFSD_PID="$STARTED_VIRTIOFSD_PID"
+  wait_for_virtiofsd_socket "$VM_IMAGES_VIRTIOFSD_PID" "$VM_IMAGES_SOCKET" "VM images"
   vm_images_qemu_args=(
     -chardev "socket,id=ol-c-vm-images,path=${VM_IMAGES_SOCKET}"
     -device "vhost-user-fs-pci,chardev=ol-c-vm-images,tag=ol-c-vm-images"
