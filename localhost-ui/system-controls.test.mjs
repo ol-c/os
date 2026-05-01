@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -63,6 +63,9 @@ test('fake adapter returns a complete initial status', async () => {
   ]);
   assert.equal(status.network.connected, true);
   assert.match(status.network.implementation, /Fake hardware test/);
+  assert.deepEqual(status.power.actions, [ 'shutdown', 'restart' ]);
+  assert.equal(status.power.controlAvailable, true);
+  assert.equal(status.power.lifecycleState, 'running');
   assert.equal(status.volume.percent, 40);
   assert.match(status.volume.implementation, /Fake hardware test/);
   assert.equal(status.appearance.mode, 'light');
@@ -122,6 +125,40 @@ test('real adapter falls back to installed Firefox binary version', async () => 
   }
 });
 
+test('real adapter records lifecycle request and invokes systemctl for power commands', async () => {
+  const base = join(process.cwd(), '.tmp-tests');
+  await mkdir(base, { recursive: true });
+  const dir = await mkdtemp(join(base, 'ol-c-power-command-test-'));
+  const systemctl = join(dir, 'systemctl');
+  const lifecycleRequestPath = join(dir, 'guest-request.json');
+  const staleTmpPath = `${lifecycleRequestPath}.tmp`;
+  const systemctlArgsPath = join(dir, 'systemctl.args');
+  await writeFile(systemctl, `#!/bin/sh\nprintf '%s\\n' "$*" > ${JSON.stringify(systemctlArgsPath)}\n`);
+  await chmod(systemctl, 0o755);
+  await writeFile(staleTmpPath, 'stale request temp\n');
+  await chmod(staleTmpPath, 0o444);
+  const adapter = createRealSystemAdapter({
+    firefoxVersion: '149.0.2',
+    lifecycleRequestPath,
+    pactl: '/does/not/exist',
+    systemctl,
+  });
+
+  try {
+    const status = await adapter.power({ action: 'shutdown' });
+    const request = JSON.parse(await readFile(lifecycleRequestPath, 'utf8'));
+
+    assert.equal(status.power.lastAction, 'shutdown');
+    assert.equal(status.power.lifecycleState, 'shutting-down');
+    assert.equal(request.action, 'shutdown');
+    assert.match(request.requestId, /^\d+-\d+$/);
+    assert.equal(await readFile(staleTmpPath, 'utf8'), 'stale request temp\n');
+    assert.equal((await readFile(systemctlArgsPath, 'utf8')).trim(), 'poweroff --no-block');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('fake adapter updates mutable controls', async () => {
   const adapter = createFakeSystemAdapter(createDefaultSystemStatus('all'));
 
@@ -129,6 +166,7 @@ test('fake adapter updates mutable controls', async () => {
   await adapter.volume({ muted: true });
   await adapter.brightness({ percent: 25 });
   await adapter.appearance({ mode: 'dark' });
+  await adapter.power({ action: 'restart' });
   await adapter.terminal({ font: 'noto-sans-mono', colorScheme: 'tango' });
   await adapter.bluetooth({ enabled: true });
   await adapter.network({ selected: 'offline' });
@@ -138,6 +176,8 @@ test('fake adapter updates mutable controls', async () => {
   assert.equal(status.volume.muted, true);
   assert.equal(status.brightness.percent, 25);
   assert.equal(status.appearance.mode, 'dark');
+  assert.equal(status.power.lastAction, 'restart');
+  assert.equal(status.power.lifecycleState, 'restarting');
   assert.equal(status.terminal.font, 'noto-sans-mono');
   assert.equal(status.terminal.colorScheme, 'tango');
   assert.equal(status.bluetooth.enabled, true);
@@ -171,6 +211,7 @@ test('fake adapter rejects invalid commands', async () => {
   await assert.rejects(() => adapter.volume({ muted: 'yes' }), /muted must be true or false/);
   await assert.rejects(() => adapter.brightness({ percent: -1 }), /integer from 0 to 100/);
   await assert.rejects(() => adapter.appearance({ mode: 'auto' }), /mode must be light or dark/);
+  await assert.rejects(() => adapter.power({ action: 'sleep' }), /action must be shutdown or restart/);
   await assert.rejects(() => adapter.terminal({ font: 'comic-sans' }), /available terminal fonts/);
   await assert.rejects(() => adapter.terminal({ colorScheme: 'monochrome' }), /light and dark terminal color schemes/);
   await assert.rejects(() => adapter.bluetooth({ enabled: 'true' }), /enabled must be true or false/);

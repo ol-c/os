@@ -20,6 +20,7 @@ const commandPaths = new Map([
   [ '/api/system/volume', 'volume' ],
   [ '/api/system/brightness', 'brightness' ],
   [ '/api/system/appearance', 'appearance' ],
+  [ '/api/system/power', 'power' ],
   [ '/api/system/terminal', 'terminal' ],
   [ '/api/system/bluetooth', 'bluetooth' ],
 ]);

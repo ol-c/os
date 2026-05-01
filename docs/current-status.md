@@ -9,7 +9,9 @@
 - The normal `./launch-vm` path uses a browser tab as the VM display through local-only QEMU VNC WebSocket plus pinned noVNC assets.
 - `./launch-vm` also bridges guest audio into that browser viewer through a local-only raw PCM stream captured from a per-VM Pulse/PipeWire sink.
 - The browser viewer supports text copy out of the VM and keyboard or browser-menu text paste into the VM through the QEMU vdagent clipboard path.
+- Firefox's hamburger menu includes ol-c restart and shutdown actions that call the localhost power API; guest shutdown leaves the browser viewer open with a local power-on button.
 - `launch-vm` also exposes a local-only QMP socket and prints it as `qmp socket:`.
+- `launch-vm` coordinates expected guest shutdown/restart through a per-VM lifecycle directory under `/source/.olc-debug/vm-lifecycle`.
 - `launch-vm` can wait for the guest `olc-vm-ready` journal marker and surface readiness failures.
 - In-VM development uses a host-shared repo mounted at `/source` via `virtiofs`.
 - Nested `olc-launch-test-vm` launches default to a cheap child-boot path and print a reconnect URL for browser viewing.
@@ -47,6 +49,7 @@ Parallel Milestone 6 track:
 Related design notes:
 - `docs/firefox-source-workflow-plan.md` holds the current shared source-tree workflow plan.
 - `docs/host-driven-vm-operator-plan.md` holds the current operator-proof plan.
+- Firefox tab/session preservation across Firefox-menu restart and shutdown is not guaranteed yet; a future task should configure session restore and validate restored tabs in child VMs after restart and after shutdown plus viewer power-on.
 
 ## Validation Status
 
@@ -75,6 +78,7 @@ Related design notes:
 - The current pending proof patch dry-runs cleanly against a packaged-only source baseline before it is refreshed in the repo.
 - `./build-vm` succeeds.
 - `./launch-vm` boots to the graphical browser surface and loads the localhost UI.
+- A nested child built from `./build-vm` has been manually validated through Firefox-menu restart, re-login, Firefox-menu shutdown, viewer power-on, and re-login using the shared journal mirror plus browser BiDi checks.
 - The packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`.
-- The fast packaged Firefox output records both `OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1` and `OLC_FIREFOX_FXA_SYNC_UI_PATCH_APPLIED=1`.
+- The fast packaged Firefox output records `OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1`, `OLC_FIREFOX_FXA_SYNC_UI_PATCH_APPLIED=1`, and `OLC_FIREFOX_POWER_MENU_PATCH_APPLIED=1`.
 - `./build-firefox-source-remote`, fetch, and `nix build .#firefox-localhost-source --print-build-logs` succeed, with later local builds reusing the imported result.

@@ -1,0 +1,214 @@
+diff --git a/browser/base/content/appmenu-viewcache.inc.xhtml b/browser/base/content/appmenu-viewcache.inc.xhtml
+index 4081e88..af13da7 100644
+--- a/browser/base/content/appmenu-viewcache.inc.xhtml
++++ b/browser/base/content/appmenu-viewcache.inc.xhtml
+@@ -168,6 +168,17 @@
+                      closemenu="none"
+                      />
+ #ifndef XP_MACOSX
++      <toolbarseparator id="appMenu-olc-power-separator"/>
++      <toolbarbutton id="appMenu-olc-restart-button"
++                     class="subviewbutton"
++                     label="Restart"
++                     data-olc-power-action="restart"
++                     closemenu="none"/>
++      <toolbarbutton id="appMenu-olc-shutdown-button"
++                     class="subviewbutton"
++                     label="Shut down"
++                     data-olc-power-action="shutdown"
++                     closemenu="none"/>
+       <toolbarseparator/>
+       <toolbarbutton id="appMenu-quit-button2"
+                      class="subviewbutton"
+diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
+index c3f4df0..a21c9d4 100644
+--- a/browser/base/content/browser.js
++++ b/browser/base/content/browser.js
+@@ -473,6 +473,98 @@ var gSecureOSFxaSyncUi = {
+ 
+ gSecureOSFxaSyncUi.init();
+ 
++var gSecureOSPowerMenu = {
++  _pending: false,
++  powerEndpoint: "https://localhost/api/system/power",
++
++  init() {
++    document.addEventListener("command", this, true);
++    this.setDisabled(false);
++  },
++
++  handleEvent(event) {
++    if (event.type == "command") {
++      this.onCommand(event);
++    }
++  },
++
++  onCommand(event) {
++    let button = event.target.closest?.("[data-olc-power-action]");
++    let action = button?.getAttribute("data-olc-power-action") || null;
++
++    if (!action) {
++      return;
++    }
++
++    event.preventDefault();
++    event.stopPropagation();
++    void this.request(action).catch(() => {});
++  },
++
++  _fetch(url, options) {
++    return fetch(url, options);
++  },
++
++  setDisabled(disabled) {
++    for (let id of [
++      "appMenu-olc-restart-button",
++      "appMenu-olc-shutdown-button",
++    ]) {
++      let button = document.getElementById(id);
++      if (button) {
++        button.disabled = disabled;
++      }
++    }
++  },
++
++  async request(action) {
++    if (action != "shutdown" && action != "restart") {
++      throw new Error("action must be shutdown or restart");
++    }
++    if (this._pending) {
++      return;
++    }
++
++    this._pending = true;
++    this.setDisabled(true);
++    try {
++      let response = await this._fetch(this.powerEndpoint, {
++        method: "POST",
++        headers: {
++          "content-type": "application/json",
++        },
++        body: JSON.stringify({ action }),
++      });
++      let payload = {};
++      try {
++        payload = await response.json();
++      } catch {
++        // The status code remains the source of truth when the body is absent.
++      }
++      if (!response.ok) {
++        throw new Error(payload.error || `failed to ${action}`);
++      }
++      PanelUI.hide();
++    } catch (error) {
++      Cu.reportError(error);
++      this.setDisabled(false);
++      throw error;
++    } finally {
++      this._pending = false;
++    }
++  },
++
++  restart() {
++    return this.request("restart");
++  },
++
++  shutdown() {
++    return this.request("shutdown");
++  },
++};
++
++gSecureOSPowerMenu.init();
++
+ ChromeUtils.defineLazyGetter(this, "RTL_UI", () => {
+   return Services.locale.isAppLocaleRTL;
+ });
+diff --git a/browser/base/content/test/general/browser_localhost_shell.js b/browser/base/content/test/general/browser_localhost_shell.js
+index e973356..92d67cc 100644
+--- a/browser/base/content/test/general/browser_localhost_shell.js
++++ b/browser/base/content/test/general/browser_localhost_shell.js
+@@ -29,6 +29,84 @@ add_task(async function test_appearance_bridge_contract() {
+   }
+ });
+ 
++add_task(async function test_power_menu_contract() {
++  let win = await BrowserTestUtils.openNewBrowserWindow();
++
++  try {
++    ok(
++      win.gSecureOSPowerMenu,
++      "The SecureOS power menu controller should be available in browser chrome"
++    );
++    ok(
++      win.document.getElementById("appMenu-olc-restart-button"),
++      "The SecureOS restart menu item should exist"
++    );
++    ok(
++      win.document.getElementById("appMenu-olc-shutdown-button"),
++      "The SecureOS shutdown menu item should exist"
++    );
++
++    let calls = [];
++    let originalFetch = win.gSecureOSPowerMenu._fetch;
++    win.gSecureOSPowerMenu._fetch = async (url, options) => {
++      calls.push({ url, options });
++      return {
++        ok: true,
++        async json() {
++          return {};
++        },
++      };
++    };
++
++    await win.gSecureOSPowerMenu.request("restart");
++
++    is(calls.length, 1, "Expected one localhost power API request");
++    is(
++      calls[0].url,
++      "https://localhost/api/system/power",
++      "Power menu should call the localhost system power endpoint"
++    );
++    is(calls[0].options.method, "POST", "Power menu should use POST");
++    is(
++      calls[0].options.headers["content-type"],
++      "application/json",
++      "Power menu should send JSON"
++    );
++    is(
++      JSON.parse(calls[0].options.body).action,
++      "restart",
++      "Power menu should send the requested action"
++    );
++    await Assert.rejects(
++      win.gSecureOSPowerMenu.request("sleep"),
++      /action must be shutdown or restart/,
++      "Power menu should reject unsupported actions"
++    );
++
++    calls.length = 0;
++    win.document
++      .getElementById("appMenu-olc-shutdown-button")
++      .dispatchEvent(
++        new win.CustomEvent("command", {
++          bubbles: true,
++          cancelable: true,
++        })
++      );
++    await TestUtils.waitForCondition(
++      () => calls.length == 1,
++      "Expected one localhost power API request from the app menu command"
++    );
++    is(
++      JSON.parse(calls[0].options.body).action,
++      "shutdown",
++      "Power menu command should send the requested action"
++    );
++    win.gSecureOSPowerMenu._fetch = originalFetch;
++  } finally {
++    await BrowserTestUtils.closeWindow(win);
++  }
++});
++
+ add_task(async function test_new_tab_uses_localhost_url() {
+   let win = await BrowserTestUtils.openNewBrowserWindow();
+   let originalOpenTrustedLinkIn = win.openTrustedLinkIn;

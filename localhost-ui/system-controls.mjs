@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
+import { dirname } from 'node:path';
 import { promisify } from 'node:util';
 import {
   defaultTerminalPreferences,
@@ -110,14 +111,18 @@ export function createDefaultSystemStatus(capabilityInput = defaultFakeHardwareT
       selected: selectedNetwork,
     },
     power: {
+      actions: [ 'shutdown', 'restart' ],
       available: capabilities.has('battery'),
       charging: capabilities.has('battery') ? false : null,
+      controlAvailable: true,
       implementation: fakeImplementation(
         capabilities,
         'battery',
         'battery state is fake-readable.',
         'enable with OLC_HARDWARE_TEST=battery.',
       ),
+      lastAction: null,
+      lifecycleState: 'running',
       percent: capabilities.has('battery') ? 82 : null,
       timeRemainingSeconds: null,
     },
@@ -214,6 +219,12 @@ function validateMode(value) {
   }
 }
 
+function validatePowerAction(value) {
+  if (value !== 'shutdown' && value !== 'restart') {
+    throw validationError('action must be shutdown or restart');
+  }
+}
+
 function validateTerminalFont(value) {
   if (!findTerminalFont(value)) {
     throw validationError('font must be one of the available terminal fonts');
@@ -235,6 +246,65 @@ function createTerminalStatus(preferences, implementation) {
     fonts: terminalFontChoices.map(({ id, label }) => ({ id, label })),
     colorSchemes: terminalColorSchemeChoices.map(({ id, label }) => ({ id, label })),
   };
+}
+
+function withPowerControls(power, lifecycleState, lastAction) {
+  return {
+    actions: [ 'shutdown', 'restart' ],
+    controlAvailable: true,
+    lastAction,
+    lifecycleState,
+    ...power,
+  };
+}
+
+function parseOlcDmiSerial(serial) {
+  const result = new Map();
+  for (const part of String(serial || '').split(';')) {
+    const separator = part.indexOf('=');
+    if (separator === -1) {
+      continue;
+    }
+    result.set(part.slice(0, separator), part.slice(separator + 1));
+  }
+  return result;
+}
+
+async function readOlcLifecycleId() {
+  if (process.env.OLC_VM_LIFECYCLE_ID) {
+    return process.env.OLC_VM_LIFECYCLE_ID;
+  }
+
+  const serial = await readFile('/sys/class/dmi/id/product_serial', 'utf8').catch(() => '');
+  return parseOlcDmiSerial(serial.trim()).get('olc-lifecycle-id') || 'current';
+}
+
+async function defaultLifecycleRequestPath() {
+  if (process.env.OLC_VM_LIFECYCLE_REQUEST_PATH) {
+    return process.env.OLC_VM_LIFECYCLE_REQUEST_PATH;
+  }
+
+  const lifecycleRoot = process.env.OLC_VM_LIFECYCLE_ROOT || '/source/.olc-debug/vm-lifecycle';
+  const lifecycleId = await readOlcLifecycleId();
+  return `${lifecycleRoot}/${lifecycleId}/guest-request.json`;
+}
+
+async function writeLifecycleRequest(path, action) {
+  const payload = {
+    action,
+    requestedAt: new Date().toISOString(),
+    requestId: `${Date.now()}-${process.pid}`,
+  };
+  const body = `${JSON.stringify(payload, null, 2)}\n`;
+  const tmpPath = `${path}.${payload.requestId}.tmp`;
+  await mkdir(dirname(path), { recursive: true });
+  try {
+    await writeFile(tmpPath, body);
+    await rename(tmpPath, path);
+  } catch (error) {
+    await unlink(tmpPath).catch(() => {});
+    throw error;
+  }
 }
 
 function applyTerminalCommand(preferences, command) {
@@ -340,6 +410,14 @@ export function createFakeSystemAdapter(initialStatus = createDefaultSystemStatu
       return clone(state);
     },
 
+    async power(command) {
+      requireObject(command);
+      validatePowerAction(command.action);
+      state.power.lastAction = command.action;
+      state.power.lifecycleState = command.action === 'restart' ? 'restarting' : 'shutting-down';
+      return clone(state);
+    },
+
     async terminal(command) {
       applyTerminalCommand(state.terminal, command);
       return clone(state);
@@ -360,6 +438,7 @@ export function createFakeSystemAdapter(initialStatus = createDefaultSystemStatu
 
 export function createRealSystemAdapter(options = {}) {
   const pactl = options.pactl ?? process.env.OLC_PACTL ?? 'pactl';
+  const systemctl = options.systemctl ?? process.env.OLC_SYSTEMCTL ?? 'systemctl';
   const firefoxVersion = options.firefoxVersion ?? process.env.OLC_FIREFOX_VERSION;
   const firefox = options.firefox ?? process.env.OLC_FIREFOX ?? '/run/current-system/sw/bin/firefox';
   const commandEnv = { ...process.env };
@@ -368,6 +447,8 @@ export function createRealSystemAdapter(options = {}) {
     commandEnv.PULSE_SERVER = pulseServer;
   }
   let appearanceMode = 'light';
+  let powerLifecycleState = 'running';
+  let lastPowerAction = null;
   const terminalPreferences = { ...defaultTerminalPreferences };
 
   async function readNetwork() {
@@ -400,13 +481,13 @@ export function createRealSystemAdapter(options = {}) {
       const supplies = await readdir('/sys/class/power_supply');
       const battery = supplies.find(name => name.startsWith('BAT'));
       if (!battery) {
-        return {
+        return withPowerControls({
           available: false,
           charging: null,
           implementation: 'Real guest adapter: checks /sys/class/power_supply; no battery is exposed in this VM.',
           percent: null,
           timeRemainingSeconds: null,
-        };
+        }, powerLifecycleState, lastPowerAction);
       }
 
       const [capacity, status] = await Promise.all([
@@ -414,21 +495,21 @@ export function createRealSystemAdapter(options = {}) {
         readFile(`/sys/class/power_supply/${battery}/status`, 'utf8').catch(() => null),
       ]);
 
-      return {
+      return withPowerControls({
         available: true,
         charging: status ? status.trim().toLowerCase() === 'charging' : null,
         implementation: 'Real guest adapter: reads battery state from /sys/class/power_supply; read-only.',
         percent: capacity ? Number.parseInt(capacity.trim(), 10) : null,
         timeRemainingSeconds: null,
-      };
+      }, powerLifecycleState, lastPowerAction);
     } catch {
-      return {
+      return withPowerControls({
         available: false,
         charging: null,
         implementation: 'Real guest adapter: power status path is unavailable.',
         percent: null,
         timeRemainingSeconds: null,
-      };
+      }, powerLifecycleState, lastPowerAction);
     }
   }
 
@@ -552,6 +633,19 @@ export function createRealSystemAdapter(options = {}) {
       validateMode(command.mode);
       appearanceMode = command.mode;
       return getStatus();
+    },
+
+    async power(command) {
+      requireObject(command);
+      validatePowerAction(command.action);
+      const action = command.action;
+      const requestPath = options.lifecycleRequestPath ?? await defaultLifecycleRequestPath();
+      await writeLifecycleRequest(requestPath, action);
+      powerLifecycleState = action === 'restart' ? 'restarting' : 'shutting-down';
+      lastPowerAction = action;
+      const status = await getStatus();
+      await execFileAsync(systemctl, [ action === 'restart' ? 'reboot' : 'poweroff', '--no-block' ], { env: commandEnv, timeout: 2000 });
+      return status;
     },
 
     async terminal(command) {

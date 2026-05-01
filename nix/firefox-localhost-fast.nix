@@ -26,12 +26,13 @@ in {
     work_dir="$(mktemp -d)"
     firefox_patches=(${firefoxPatchArgs})
 
-    if [ "''${#firefox_patches[@]}" -ne 2 ]; then
-      echo "error: expected exactly two ol-c Firefox patches" >&2
+    if [ "''${#firefox_patches[@]}" -ne 3 ]; then
+      echo "error: expected exactly three ol-c Firefox patches" >&2
       exit 1
     fi
     localhost_patch="''${firefox_patches[0]}"
     fxa_sync_ui_patch="''${firefox_patches[1]}"
+    power_menu_patch="''${firefox_patches[2]}"
 
     firefox_omnis=(
       "$out/lib/firefox/browser/omni.ja"
@@ -403,6 +404,103 @@ PERL
       exit 1
     fi
 
+    apply_source_patch_to_runtime_asset \
+      "$power_menu_patch" \
+      browser/base/content/browser.js \
+      browser.js \
+      'gSecureOSPowerMenu.init()'
+
+    if ! grep -Fq 'https://localhost/api/system/power' "$browser_js_extract_dir/$browser_js_path"; then
+      echo "error: patched Firefox browser.js runtime asset is missing the ol-c power API endpoint: $browser_js_omni:$browser_js_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'document.addEventListener("command", this, true);' "$browser_js_extract_dir/$browser_js_path"; then
+      echo "error: patched Firefox browser.js runtime asset is missing the ol-c app-menu command listener: $browser_js_omni:$browser_js_path" >&2
+      exit 1
+    fi
+
+    power_menu_xhtml_path=""
+    power_menu_xhtml_omni=""
+    power_menu_xhtml_extract_dir=""
+    for entry in "''${extracted_omnis[@]}"; do
+      omni="''${entry%%:*}"
+      extract_dir="''${entry#*:}"
+      while IFS= read -r candidate_path; do
+        if ! grep -Fq 'id="appMenu-quit-button2"' "$extract_dir/$candidate_path"; then
+          continue
+        fi
+        if [ -n "$power_menu_xhtml_path" ]; then
+          echo "error: found multiple app-menu browser.xhtml runtime assets:" >&2
+          echo "  $power_menu_xhtml_omni:$power_menu_xhtml_path" >&2
+          echo "  $omni:$candidate_path" >&2
+          exit 1
+        fi
+        power_menu_xhtml_omni="$omni"
+        power_menu_xhtml_path="$candidate_path"
+        power_menu_xhtml_extract_dir="$extract_dir"
+      done < <(
+        find "$extract_dir" -type f -name browser.xhtml \
+          | sed "s#^$extract_dir/##" \
+          | LC_ALL=C sort
+      )
+    done
+    if [ -z "$power_menu_xhtml_path" ] || [ -z "$power_menu_xhtml_extract_dir" ]; then
+      echo "error: failed to locate the browser.xhtml runtime asset containing the app menu" >&2
+      exit 1
+    fi
+
+    power_menu_xhtml_runtime="$power_menu_xhtml_extract_dir/$power_menu_xhtml_path"
+    cat > "$work_dir/patch-power-menu-xhtml-runtime.pl" <<'PERL'
+use strict;
+use warnings;
+
+my $path = shift @ARGV or die "missing runtime path\n";
+local $/ = undef;
+open my $in, '<', $path or die "failed to read $path: $!\n";
+my $text = <$in>;
+close $in;
+
+my $old = <<'OLD';
+      <toolbarseparator/>
+      <toolbarbutton id="appMenu-quit-button2"
+                     class="subviewbutton"
+OLD
+
+my $new = <<'NEW';
+      <toolbarseparator id="appMenu-olc-power-separator"/>
+      <toolbarbutton id="appMenu-olc-restart-button"
+                     class="subviewbutton"
+                     label="Restart"
+                     data-olc-power-action="restart"
+                     closemenu="none"/>
+      <toolbarbutton id="appMenu-olc-shutdown-button"
+                     class="subviewbutton"
+                     label="Shut down"
+                     data-olc-power-action="shutdown"
+                     closemenu="none"/>
+      <toolbarseparator/>
+      <toolbarbutton id="appMenu-quit-button2"
+                     class="subviewbutton"
+NEW
+
+my $count = ($text =~ s/\Q$old\E/$new/);
+die "failed to insert SecureOS power menu items into $path\n" unless $count == 1;
+
+open my $out, '>', $path or die "failed to write $path: $!\n";
+print {$out} $text;
+close $out;
+PERL
+    perl "$work_dir/patch-power-menu-xhtml-runtime.pl" "$power_menu_xhtml_runtime"
+
+    if ! grep -Fq 'appMenu-olc-shutdown-button' "$power_menu_xhtml_runtime"; then
+      echo "error: patched Firefox browser.xhtml runtime asset is missing the ol-c shutdown menu item: $power_menu_xhtml_omni:$power_menu_xhtml_path" >&2
+      exit 1
+    fi
+    if ! grep -Fq 'data-olc-power-action="shutdown"' "$power_menu_xhtml_runtime"; then
+      echo "error: patched Firefox browser.xhtml runtime asset is missing the ol-c shutdown action marker: $power_menu_xhtml_omni:$power_menu_xhtml_path" >&2
+      exit 1
+    fi
+
     for entry in "''${extracted_omnis[@]}"; do
       omni="''${entry%%:*}"
       extract_dir="''${entry#*:}"
@@ -413,6 +511,7 @@ PERL
     {
       echo "OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1"
       echo "OLC_FIREFOX_FXA_SYNC_UI_PATCH_APPLIED=1"
+      echo "OLC_FIREFOX_POWER_MENU_PATCH_APPLIED=1"
       printf 'patch_stack=%s\n' "''${firefox_patches[*]}"
       printf 'redirector_omni=%s\n' "$redirector_omni"
       printf 'redirector_path=%s\n' "$redirector_omni_path"

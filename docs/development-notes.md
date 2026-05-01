@@ -32,7 +32,7 @@
 - Each VM mirrors its current boot into its own native journal file in that directory.
 - When working from the shared repo view, prefer `journalctl --directory=/source/.olc-debug/journal`.
 - The `olc-vm-ready` marker means the active local Firefox session has published its BiDi endpoint.
-- When investigating one VM, filter by `_MACHINE_ID` first, then `_BOOT_ID`, and use `OLC_VM_MACHINE_ID`, `OLC_VM_BOOT_ID`, `OLC_VM_PARENT_MACHINE_ID`, and `OLC_VM_DEPTH` to reconstruct nested lineage.
+- When investigating one VM, filter by `_MACHINE_ID` first, then `_BOOT_ID`, and use `OLC_VM_MACHINE_ID`, `OLC_VM_BOOT_ID`, `OLC_VM_LIFECYCLE_ID`, `OLC_VM_PARENT_MACHINE_ID`, and `OLC_VM_DEPTH` to reconstruct nested lineage.
 
 ## Quality of Life Backlog
 
@@ -40,6 +40,7 @@
 - `Ctrl+S` crashes Firefox.
 - `Ctrl+Shift+C` should not open dev tools in the VM; it should map to copy.
 - Make sure the password-save offer on initial account creation does not show.
+- Preserve and validate Firefox tabs/session state across Firefox-menu restart, guest shutdown, and viewer power-on by opening multiple tabs in a child VM and asserting they restore after the lifecycle completes.
 - Investigate browser terminal breakage after printing nested-child serial boot output with heavy raw OSC/ANSI control sequences; likely fix is to filter or redirect that boot stream before it hits the browser terminal session.
 - Investigate Codex CLI exits back to a raw shell prompt during nested-child launch work; the likely trigger is the same unfiltered serial boot/control-sequence stream reaching the interactive Codex terminal, so prefer redirecting child serial logs to files and only tailing filtered output on demand.
 - Investigate Codex CLI exits during long `Working` periods with multiple background terminal sessions open; the likely mitigation is to avoid stacked long-lived waits or pollers and prefer short explicit polling commands with no lingering background terminals.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -88,7 +88,7 @@ test('serves the VM screen without external assets', async () => {
     assert.match(script, /rfb\.sendKey\(XK_Control_L, 'ControlLeft', true\)/);
     assert.match(script, /rfb\.sendKey\(XK_Super_L, 'MetaLeft', false\)/);
     assert.match(script, /rfb\.sendKey\(XK_v, 'KeyV', true\)/);
-    assert.match(script, /rfb\.addEventListener\('clipboard'/);
+    assert.match(script, /addEventListener\('clipboard'/);
     assert.match(script, /navigator\.clipboard\?\.writeText/);
     assert.match(script, /navigator\.clipboard\?\.readText/);
     assert.match(script, /window\.addEventListener\('paste'/);
@@ -124,6 +124,51 @@ test('serves the VM screen without external assets', async () => {
   } finally {
     await stopServer(child);
     await rm(noVncDir, { recursive: true, force: true });
+  }
+});
+
+test('serves lifecycle state and accepts local power-on requests', async () => {
+  const noVncDir = await fakeNoVncTree();
+  const lifecycleDir = await mkdtemp(join(tmpdir(), 'ol-c-lifecycle-test.'));
+  const stateFile = join(lifecycleDir, 'state.json');
+  const commandDir = join(lifecycleDir, 'commands');
+  await mkdir(commandDir, { recursive: true });
+  await writeFile(stateFile, JSON.stringify({
+    state: 'powered-off',
+    lastAction: 'shutdown',
+    message: 'The guest is powered off.',
+  }));
+  const { child, url } = await startServer({
+    OLC_NOVNC_DIR: noVncDir,
+    OLC_VM_SCREEN_STATE_FILE: stateFile,
+    OLC_VM_SCREEN_COMMAND_DIR: commandDir,
+  });
+
+  try {
+    const html = await fetch(url).then(response => response.text());
+    assert.match(html, /id="power-panel"[^>]*hidden/);
+    assert.match(html, /id="power-on-button"/);
+    assert.match(html, /"lifecycle":\{"enabled":true\}/);
+
+    const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
+    assert.match(script, /fetch\('\/api\/vm\/state'/);
+    assert.match(script, /fetch\('\/api\/vm\/power-on', \{ method: 'POST' \}\)/);
+    assert.match(script, /VM powered off/);
+
+    const state = await fetch(new URL('/api/vm/state', url)).then(response => response.json());
+    assert.equal(state.state, 'powered-off');
+    assert.equal(state.lastAction, 'shutdown');
+
+    const response = await fetch(new URL('/api/vm/power-on', url), { method: 'POST' });
+    assert.equal(response.status, 202);
+    const commands = await readdir(commandDir);
+    assert.equal(commands.length, 1);
+    const command = JSON.parse(await readFile(join(commandDir, commands[0]), 'utf8'));
+    assert.equal(command.command, 'power-on');
+  } finally {
+    await stopServer(child);
+    await rm(noVncDir, { recursive: true, force: true });
+    await rm(lifecycleDir, { recursive: true, force: true });
   }
 });
 

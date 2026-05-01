@@ -352,3 +352,35 @@ test('SSE stream sends the initial status event on configured machines', async (
     },
   });
 });
+
+test('system power command is routed through the system API', async () => {
+  await withServer(async ({ baseUrl }) => {
+    const result = await requestJson(baseUrl, '/api/system/power', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'shutdown' }),
+    });
+
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.power.lastAction, 'shutdown');
+    assert.equal(result.body.power.lifecycleState, 'shutting-down');
+
+    const invalid = await requestJson(baseUrl, '/api/system/power', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'sleep' }),
+    });
+    assert.equal(invalid.response.status, 400);
+    assert.match(invalid.body.error, /shutdown or restart/);
+  }, {
+    runtimeState: {
+      setupMode: false,
+      activeUser: {
+        name: process.env.USER || 'node',
+        uid: String(process.getuid?.() ?? 1000),
+        gid: String(process.getgid?.() ?? 1000),
+        home: process.env.HOME || tmpdir(),
+      },
+    },
+  });
+});

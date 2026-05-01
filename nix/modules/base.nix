@@ -46,8 +46,6 @@
     }
 
     if printf '%s\n' "$serial" | ${pkgs.gnugrep}/bin/grep -Fq 'olc-fast-boot=1'; then
-      mask_unit growpart.service
-      mask_unit systemd-growfs-root.service
       mask_unit systemd-journal-flush.service
       mask_unit systemd-random-seed.service
     fi
@@ -70,6 +68,7 @@
 
       machine_id="$(cat /etc/machine-id)"
       boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+      lifecycle_id=""
       parent_machine_id=""
       parent_depth=""
       depth="0"
@@ -77,15 +76,12 @@
 
       if [ -r "$dmi_serial_path" ]; then
         serial="$(${pkgs.coreutils}/bin/tr -d '\n' < "$dmi_serial_path")"
-        case "$serial" in
-          olc-parent-machine-id=*)
-            parent_machine_id="$(printf '%s\n' "$serial" | ${pkgs.gnused}/bin/sed -n 's/^.*olc-parent-machine-id=\([^;]*\).*$/\1/p')"
-            parent_depth="$(printf '%s\n' "$serial" | ${pkgs.gnused}/bin/sed -n 's/^.*olc-parent-depth=\([0-9][0-9]*\).*$/\1/p')"
-            if [ -n "$parent_depth" ]; then
-              depth="$((parent_depth + 1))"
-            fi
-            ;;
-        esac
+        lifecycle_id="$(printf '%s\n' "$serial" | ${pkgs.gnused}/bin/sed -n 's/^.*olc-lifecycle-id=\([^;]*\).*$/\1/p')"
+        parent_machine_id="$(printf '%s\n' "$serial" | ${pkgs.gnused}/bin/sed -n 's/^.*olc-parent-machine-id=\([^;]*\).*$/\1/p')"
+        parent_depth="$(printf '%s\n' "$serial" | ${pkgs.gnused}/bin/sed -n 's/^.*olc-parent-depth=\([0-9][0-9]*\).*$/\1/p')"
+        if [ -n "$parent_depth" ]; then
+          depth="$((parent_depth + 1))"
+        fi
       fi
 
       {
@@ -95,6 +91,9 @@
         printf 'OLC_VM_MACHINE_ID=%s\n' "$machine_id"
         printf 'OLC_VM_BOOT_ID=%s\n' "$boot_id"
         printf 'OLC_VM_DEPTH=%s\n' "$depth"
+        if [ -n "$lifecycle_id" ]; then
+          printf 'OLC_VM_LIFECYCLE_ID=%s\n' "$lifecycle_id"
+        fi
         if [ -n "$parent_machine_id" ]; then
           printf 'OLC_VM_PARENT_MACHINE_ID=%s\n' "$parent_machine_id"
         fi
@@ -104,6 +103,9 @@
         printf 'OLC_VM_MACHINE_ID=%s\n' "$machine_id"
         printf 'OLC_VM_BOOT_ID=%s\n' "$boot_id"
         printf 'OLC_VM_DEPTH=%s\n' "$depth"
+        if [ -n "$lifecycle_id" ]; then
+          printf 'OLC_VM_LIFECYCLE_ID=%s\n' "$lifecycle_id"
+        fi
         if [ -n "$parent_machine_id" ]; then
           printf 'OLC_VM_PARENT_MACHINE_ID=%s\n' "$parent_machine_id"
         fi

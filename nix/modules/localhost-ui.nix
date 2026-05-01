@@ -169,6 +169,7 @@ in {
         OLC_PULSE_SERVER = "unix:/run/user/1000/pulse/native";
         OLC_SCRIPT = "${pkgs.util-linux}/bin/script";
         OLC_SETUP_USER = "olc-setup";
+        OLC_SYSTEMCTL = "${pkgs.systemd}/bin/systemctl";
         OLC_SYSTEMD_RUN = "${pkgs.systemd}/bin/systemd-run";
         OLC_TERMINAL_UPSTREAM = "https://127.0.0.1:9443";
         OLC_TLS_CERT = "${localhostTls}/server.crt";

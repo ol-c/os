@@ -111,7 +111,7 @@ test_launches_with_default_image_and_workspace() {
   assert_eq "${CASE_TMP}/qemu-store/bin/qemu-system-x86_64" "$(cat "${CASE_TMP}/launch.qemu-bin")"
   assert_eq "${CASE_TMP}/novnc" "$(cat "${CASE_TMP}/launch.novnc-dir")"
   assert_eq "0" "$(cat "${CASE_TMP}/launch.open-browser")"
-  assert_eq "10G" "$(cat "${CASE_TMP}/launch.disk-size")"
+  assert_eq "24G" "$(cat "${CASE_TMP}/launch.disk-size")"
   assert_eq "1" "$(cat "${CASE_TMP}/launch.fast-boot")"
   assert_eq "none" "$(cat "${CASE_TMP}/launch.network-mode")"
   assert_eq "1" "$(cat "${CASE_TMP}/launch.wait-ready")"

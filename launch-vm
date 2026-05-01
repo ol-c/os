@@ -388,6 +388,37 @@ wait_for_virtiofsd_socket() {
   fail "$timeout_message"
 }
 
+stop_virtiofsd_process() {
+  local pid="$1"
+
+  if [[ -z "$pid" ]]; then
+    return
+  fi
+
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    kill "$pid" >/dev/null 2>&1 || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
+restart_virtiofsd_backends() {
+  stop_virtiofsd_process "$VIRTIOFSD_PID"
+  VIRTIOFSD_PID=""
+  rm -f "$VIRTIOFS_SOCKET"
+  start_virtiofsd "$VIRTIOFS_SOCKET" "$SOURCE_DIR"
+  VIRTIOFSD_PID="$STARTED_VIRTIOFSD_PID"
+  wait_for_virtiofsd_socket "$VIRTIOFSD_PID" "$VIRTIOFS_SOCKET" "source"
+
+  if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
+    stop_virtiofsd_process "$VM_IMAGES_VIRTIOFSD_PID"
+    VM_IMAGES_VIRTIOFSD_PID=""
+    rm -f "$VM_IMAGES_SOCKET"
+    start_virtiofsd "$VM_IMAGES_SOCKET" "$IMAGE_DIR"
+    VM_IMAGES_VIRTIOFSD_PID="$STARTED_VIRTIOFSD_PID"
+    wait_for_virtiofsd_socket "$VM_IMAGES_VIRTIOFSD_PID" "$VM_IMAGES_SOCKET" "VM images"
+  fi
+}
+
 port_is_open() {
   local port="$1"
 
@@ -552,6 +583,12 @@ VM_NETWORK_MODE="${OLC_VM_NETWORK_MODE:-user}"
 VM_DISK_OVERLAY=""
 QMP_SOCKET_DIR=""
 QMP_SOCKET=""
+VM_LIFECYCLE_ID=""
+VM_LIFECYCLE_DIR=""
+VM_LIFECYCLE_STATE_FILE=""
+VM_LIFECYCLE_COMMAND_DIR=""
+VM_LIFECYCLE_REQUEST_FILE=""
+VM_REQUEST_MONITOR_PID=""
 VM_SCREEN_URL=""
 VM_SCREEN_RECONNECT_URL=""
 RESOLVED_QEMU_BIN=""
@@ -690,7 +727,16 @@ echo "qemu frontend: $QEMU_FRONTEND"
 echo "qemu binary: $QEMU_BIN"
 QMP_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-qmp.XXXXXX")"
 QMP_SOCKET="${QMP_SOCKET_DIR}/qmp.sock"
+VM_LIFECYCLE_ID="${OLC_VM_LIFECYCLE_ID:-$(date +%s)-$$-${RANDOM}}"
+VM_LIFECYCLE_DIR="${SOURCE_DIR}/.olc-debug/vm-lifecycle/${VM_LIFECYCLE_ID}"
+VM_LIFECYCLE_STATE_FILE="${VM_LIFECYCLE_DIR}/state.json"
+VM_LIFECYCLE_COMMAND_DIR="${VM_LIFECYCLE_DIR}/commands"
+VM_LIFECYCLE_REQUEST_FILE="${VM_LIFECYCLE_DIR}/guest-request.json"
+rm -rf "$VM_LIFECYCLE_DIR"
+mkdir -p "$VM_LIFECYCLE_COMMAND_DIR"
+chmod 0777 "$VM_LIFECYCLE_DIR" "$VM_LIFECYCLE_COMMAND_DIR"
 echo "qmp socket: $QMP_SOCKET"
+echo "vm lifecycle id: $VM_LIFECYCLE_ID"
 echo "source mount: $SOURCE_DIR -> /source"
 if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
   echo "image mount: $IMAGE_DIR -> /vm-images"
@@ -713,16 +759,126 @@ else
 fi
 echo "novnc assets: $NOVNC_DIR"
 
+write_vm_state() {
+  local state="$1"
+  local action="${2:-}"
+  local message="${3:-}"
+  local tmp_path="${VM_LIFECYCLE_STATE_FILE}.tmp"
+
+  mkdir -p "$(dirname -- "$VM_LIFECYCLE_STATE_FILE")"
+  cat > "$tmp_path" <<EOF
+{"state":"${state}","lastAction":"${action}","message":"${message}","updatedAt":"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"}
+EOF
+  mv "$tmp_path" "$VM_LIFECYCLE_STATE_FILE"
+}
+
+read_vm_state_name() {
+  if [[ ! -r "$VM_LIFECYCLE_STATE_FILE" ]]; then
+    printf '%s\n' unknown
+    return
+  fi
+
+  sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$VM_LIFECYCLE_STATE_FILE" | sed -n '1p'
+}
+
+read_vm_request_action() {
+  if [[ ! -r "$VM_LIFECYCLE_REQUEST_FILE" ]]; then
+    return
+  fi
+
+  sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$VM_LIFECYCLE_REQUEST_FILE" | sed -n '1p'
+}
+
+start_guest_request_monitor() {
+  (
+    last_request_id=""
+    while true; do
+      if [[ -r "$VM_LIFECYCLE_REQUEST_FILE" ]]; then
+        request_id="$(sed -n 's/.*"requestId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$VM_LIFECYCLE_REQUEST_FILE" | sed -n '1p')"
+        action="$(read_vm_request_action)"
+        if [[ -n "$action" && "$request_id" != "$last_request_id" ]]; then
+          last_request_id="$request_id"
+          case "$action" in
+            shutdown)
+              write_vm_state "shutting-down" "shutdown" "Guest requested shutdown."
+              ;;
+            restart)
+              write_vm_state "restarting" "restart" "Guest requested restart."
+              (
+                restart_request_id="$request_id"
+                sleep 20
+                current_request_id=""
+                if [[ -r "$VM_LIFECYCLE_REQUEST_FILE" ]]; then
+                  current_request_id="$(sed -n 's/.*"requestId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$VM_LIFECYCLE_REQUEST_FILE" | sed -n '1p')"
+                fi
+                if [[ -n "$restart_request_id" && "$current_request_id" == "$restart_request_id" ]]; then
+                  rm -f "$VM_LIFECYCLE_REQUEST_FILE"
+                  write_vm_state "running" "" "VM process is running."
+                fi
+              ) &
+              ;;
+          esac
+        fi
+      fi
+      sleep 0.2
+    done
+  ) &
+  VM_REQUEST_MONITOR_PID="$!"
+}
+
+start_qemu() {
+  rm -f "$QMP_SOCKET"
+  restart_virtiofsd_backends
+  write_vm_state "starting" "" "Starting VM."
+  env "${AUDIO_QEMU_ENV[@]}" "$QEMU_BIN" \
+    "${qemu_base_args[@]}" \
+    -qmp "unix:${QMP_SOCKET},server=on,wait=off" \
+    -display none \
+    -chardev qemu-vdagent,id=ol-c-vdagent,name=vdagent,clipboard=on,mouse=off \
+    -device virtio-serial-pci \
+    -device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0 \
+    -vnc "127.0.0.1:${VNC_DISPLAY},websocket=127.0.0.1:${VNC_WEBSOCKET_PORT}" &
+  QEMU_PID="$!"
+  write_vm_state "running" "" "VM process is running."
+}
+
+wait_for_power_on_command() {
+  local command_path
+
+  while true; do
+    if [[ -n "$VM_SCREEN_PID" ]] && ! kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
+      wait "$VM_SCREEN_PID" 2>/dev/null || true
+      VM_SCREEN_PID=""
+      exit 0
+    fi
+
+    command_path="$(find "$VM_LIFECYCLE_COMMAND_DIR" -maxdepth 1 -type f -name 'power-on.*' 2>/dev/null | LC_ALL=C sort | sed -n '1p')"
+    if [[ -n "$command_path" ]]; then
+      rm -f "$command_path"
+      return
+    fi
+
+    sleep 0.2
+  done
+}
+
 cleanup() {
   local exit_status="$?"
   trap - EXIT INT TERM
 
   if [[ -n "$QEMU_PID" ]] && kill -0 "$QEMU_PID" >/dev/null 2>&1; then
     kill "$QEMU_PID" >/dev/null 2>&1 || true
+    wait "$QEMU_PID" 2>/dev/null || true
   fi
 
   if [[ -n "$VM_SCREEN_PID" ]] && kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
     kill "$VM_SCREEN_PID" >/dev/null 2>&1 || true
+    wait "$VM_SCREEN_PID" 2>/dev/null || true
+  fi
+
+  if [[ -n "$VM_REQUEST_MONITOR_PID" ]] && kill -0 "$VM_REQUEST_MONITOR_PID" >/dev/null 2>&1; then
+    kill "$VM_REQUEST_MONITOR_PID" >/dev/null 2>&1 || true
+    wait "$VM_REQUEST_MONITOR_PID" 2>/dev/null || true
   fi
 
   if [[ -n "$AUDIO_SINK_MODULE_ID" && -n "$PACTL_BIN" ]]; then
@@ -741,6 +897,7 @@ cleanup() {
 
   if [[ -n "$VIRTIOFSD_PID" ]] && kill -0 "$VIRTIOFSD_PID" >/dev/null 2>&1; then
     kill "$VIRTIOFSD_PID" >/dev/null 2>&1 || true
+    wait "$VIRTIOFSD_PID" 2>/dev/null || true
   fi
 
   if [[ -n "$VIRTIOFS_SOCKET_DIR" ]]; then
@@ -749,6 +906,7 @@ cleanup() {
 
   if [[ -n "$VM_IMAGES_VIRTIOFSD_PID" ]] && kill -0 "$VM_IMAGES_VIRTIOFSD_PID" >/dev/null 2>&1; then
     kill "$VM_IMAGES_VIRTIOFSD_PID" >/dev/null 2>&1 || true
+    wait "$VM_IMAGES_VIRTIOFSD_PID" 2>/dev/null || true
   fi
 
   if [[ -n "$VM_IMAGES_SOCKET_DIR" ]]; then
@@ -763,18 +921,11 @@ trap cleanup EXIT INT TERM
 VIRTIOFS_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-virtiofs.XXXXXX")"
 VIRTIOFS_SOCKET="${VIRTIOFS_SOCKET_DIR}/source.sock"
 
-start_virtiofsd "$VIRTIOFS_SOCKET" "$SOURCE_DIR"
-VIRTIOFSD_PID="$STARTED_VIRTIOFSD_PID"
-wait_for_virtiofsd_socket "$VIRTIOFSD_PID" "$VIRTIOFS_SOCKET" "source"
-
 vm_images_qemu_args=()
 if [[ "$SHARE_VM_IMAGES" == "1" ]]; then
   VM_IMAGES_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ol-c-vm-images.XXXXXX")"
   VM_IMAGES_SOCKET="${VM_IMAGES_SOCKET_DIR}/vm-images.sock"
 
-  start_virtiofsd "$VM_IMAGES_SOCKET" "$IMAGE_DIR"
-  VM_IMAGES_VIRTIOFSD_PID="$STARTED_VIRTIOFSD_PID"
-  wait_for_virtiofsd_socket "$VM_IMAGES_VIRTIOFSD_PID" "$VM_IMAGES_SOCKET" "VM images"
   vm_images_qemu_args=(
     -chardev "socket,id=ol-c-vm-images,path=${VM_IMAGES_SOCKET}"
     -device "vhost-user-fs-pci,chardev=ol-c-vm-images,tag=ol-c-vm-images"
@@ -812,6 +963,7 @@ if [[ "$VM_NETWORK_MODE" == "user" ]]; then
 fi
 
 smbios_serial_fields=()
+smbios_serial_fields+=("olc-lifecycle-id=${VM_LIFECYCLE_ID}")
 if [[ -n "$VM_PARENT_MACHINE_ID" ]]; then
   smbios_serial_fields+=(
     "olc-parent-machine-id=${VM_PARENT_MACHINE_ID}"
@@ -839,15 +991,8 @@ VM_SCREEN_LOG="$(mktemp "${TMPDIR:-/tmp}/ol-c-vm-screen.XXXXXX.log")"
 
 echo "vnc display: 127.0.0.1:${VNC_DISPLAY}"
 echo "vnc websocket: 127.0.0.1:${VNC_WEBSOCKET_PORT}"
-env "${AUDIO_QEMU_ENV[@]}" "$QEMU_BIN" \
-  "${qemu_base_args[@]}" \
-  -qmp "unix:${QMP_SOCKET},server=on,wait=off" \
-  -display none \
-  -chardev qemu-vdagent,id=ol-c-vdagent,name=vdagent,clipboard=on,mouse=off \
-  -device virtio-serial-pci \
-  -device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0 \
-  -vnc "127.0.0.1:${VNC_DISPLAY},websocket=127.0.0.1:${VNC_WEBSOCKET_PORT}" &
-QEMU_PID="$!"
+start_guest_request_monitor
+start_qemu
 
 env \
   OLC_NOVNC_DIR="$NOVNC_DIR" \
@@ -855,6 +1000,8 @@ env \
   OLC_VM_SCREEN_PORT="$VM_SCREEN_PORT" \
   OLC_VM_SCREEN_VNC_HOST="127.0.0.1" \
   OLC_VM_SCREEN_VNC_WS_PORT="$VNC_WEBSOCKET_PORT" \
+  OLC_VM_SCREEN_STATE_FILE="$VM_LIFECYCLE_STATE_FILE" \
+  OLC_VM_SCREEN_COMMAND_DIR="$VM_LIFECYCLE_COMMAND_DIR" \
   PULSE_SERVER="$VM_AUDIO_PULSE_SERVER" \
   "${VM_SCREEN_AUDIO_ENV[@]}" \
   node "$(dirname -- "$0")/vm-screen/server.mjs" >"$VM_SCREEN_LOG" 2>&1 &
@@ -900,9 +1047,28 @@ while true; do
   set -e
 
   if [[ "$EXITED_PID" == "$QEMU_PID" ]]; then
+    qemu_state="$(read_vm_state_name)"
+    qemu_action="$(read_vm_request_action)"
     QEMU_PID=""
+
+    if [[ "$qemu_state" == "shutting-down" || "$qemu_action" == "shutdown" ]]; then
+      rm -f "$VM_LIFECYCLE_REQUEST_FILE"
+      write_vm_state "powered-off" "shutdown" "The guest is powered off."
+      wait_for_power_on_command
+      start_qemu
+      continue
+    fi
+
+    if [[ "$qemu_state" == "restarting" || "$qemu_action" == "restart" ]]; then
+      rm -f "$VM_LIFECYCLE_REQUEST_FILE"
+      write_vm_state "restarting" "restart" "Restarting VM process."
+      start_qemu
+      continue
+    fi
+
     if kill -0 "$VM_SCREEN_PID" >/dev/null 2>&1; then
       kill "$VM_SCREEN_PID" >/dev/null 2>&1 || true
+      wait "$VM_SCREEN_PID" 2>/dev/null || true
       VM_SCREEN_PID=""
     fi
     exit "$EXITED_STATUS"

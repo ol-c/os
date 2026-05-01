@@ -173,8 +173,8 @@ The wrapper:
 - uses `/source` as the editable repo when it is the expected `ol-c-source` virtiofs mount
 - uses the first bootable image in `/vm-images` unless `OLC_VM_IMAGE=/path/to/image.qcow2` is set
 - uses `/var/lib/ol-c/vms` for child VM runtime temp files
-- defaults child overlays to `10G` so nested boots do not spend time expanding a large disposable root disk
-- defaults child launches to `OLC_VM_FAST_BOOT=1`, which skips nested-only boot work such as `growpart`, root growfs, journal flush, and random-seed restore
+- defaults child overlays to `24G` so first setup has room for the homed admin disk while still using a cheap disposable overlay
+- defaults child launches to `OLC_VM_FAST_BOOT=1`, which skips nested-only boot work such as journal flush and random-seed restore while keeping root growth enabled
 - defaults child launches to `OLC_VM_NETWORK_MODE=none`, which avoids waiting on guest DHCP when localhost-only validation is enough
 - defaults child launches to `OLC_SHARE_VM_IMAGES=0`, because the child usually does not need to expose `/vm-images` again unless it will launch grandchildren
 - starts the child VM through the same browser-tab display path as host `./launch-vm`
@@ -216,6 +216,8 @@ This proof prefers image reuse over building a full image inside the parent VM. 
 ## Nix Layout
 
 `vm-screen/server.mjs` is the browser viewer used by the default launcher. It serves a local page and pinned noVNC assets; QEMU provides the VNC WebSocket endpoint directly, so this path does not require `remote-viewer` or `websockify`.
+
+The viewer is lifecycle-aware for guest-requested power actions. Firefox's hamburger menu can call the localhost power API to restart or shut down the guest. A restart should show the display reconnecting; a shutdown leaves the viewer open on a powered-off screen with a local `Power on` button that asks `launch-vm` to start QEMU again with the same runtime overlay.
 
 `nix/ol-c.nix` is the current guest entry point. It imports focused modules from `nix/modules/`:
 - `base.nix` owns boot, qemu guest support, serial console, hostname, and NixOS state version

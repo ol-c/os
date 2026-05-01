@@ -31,15 +31,35 @@ setup_case() {
   cat >"${CASE_TMP}/fakebin/qemu-system-x86_64" <<EOF
 #!${TEST_FAKE_BASH}
 printf '%s\n' "\$*" > "${CASE_TMP}/qemu.args"
+printf '%s\n' "\$*" >> "${CASE_TMP}/qemu.args.all"
 printf '%s\n' "\${PULSE_SERVER:-}" > "${CASE_TMP}/qemu.pulse-server"
 printf '%s\n' "\${PULSE_SINK:-}" > "${CASE_TMP}/qemu.pulse-sink"
 qmp_socket=""
+lifecycle_id=""
 vnc_enabled=0
+count_file="${CASE_TMP}/qemu.invocations"
+count=0
+if [[ -f "\$count_file" ]]; then
+  count="\$(cat "\$count_file")"
+fi
+count="\$((count + 1))"
+printf '%s\n' "\$count" > "\$count_file"
 for arg in "\$@"; do
   case "\$arg" in
     unix:*,server=on,wait=off)
       qmp_socket="\${arg#unix:}"
       qmp_socket="\${qmp_socket%%,*}"
+      ;;
+    type=1,serial=*)
+      serial="\${arg#type=1,serial=}"
+      IFS=';' read -ra serial_fields <<< "\$serial"
+      for field in "\${serial_fields[@]}"; do
+        case "\$field" in
+          olc-lifecycle-id=*)
+            lifecycle_id="\${field#olc-lifecycle-id=}"
+            ;;
+        esac
+      done
       ;;
     127.0.0.1:*,websocket=127.0.0.1:*)
       vnc_enabled=1
@@ -52,6 +72,13 @@ if [[ -n "\$qmp_socket" ]]; then
   printf '%s\n' "\$qmp_socket" > "${CASE_TMP}/qmp.socket-path"
 fi
 if [[ "\$vnc_enabled" = "1" ]]; then
+  if [[ "\${OLC_FAKE_QEMU_POWER_SEQUENCE:-}" == "shutdown-then-exit" && "\$count" == "1" ]]; then
+    request_dir="${ROOT_DIR}/.olc-debug/vm-lifecycle/\${lifecycle_id}"
+    mkdir -p "\$request_dir"
+    printf '{"action":"shutdown","requestId":"fake-shutdown","requestedAt":"2026-05-01T00:00:00Z"}\n' > "\$request_dir/guest-request.json"
+    sleep 0.4
+    exit 0
+  fi
   qemu_exit_status="\${OLC_FAKE_QEMU_EXIT_STATUS:-0}"
   if [[ "\${OLC_FAKE_QEMU_EXIT_EARLY:-0}" = "1" ]]; then
     sleep 0.2
@@ -113,10 +140,25 @@ printf '%s\n' "\${OLC_VM_SCREEN_AUDIO_BIN:-}" > "${CASE_TMP}/node.audio-bin"
 printf '%s\n' "\${OLC_VM_SCREEN_AUDIO_ARGS_JSON:-}" > "${CASE_TMP}/node.audio-args-json"
 printf '%s\n' "\${OLC_VM_SCREEN_AUDIO_SAMPLE_RATE:-}" > "${CASE_TMP}/node.audio-sample-rate"
 printf '%s\n' "\${OLC_VM_SCREEN_AUDIO_CHANNELS:-}" > "${CASE_TMP}/node.audio-channels"
+printf '%s\n' "\${OLC_VM_SCREEN_STATE_FILE:-}" > "${CASE_TMP}/node.state-file"
+printf '%s\n' "\${OLC_VM_SCREEN_COMMAND_DIR:-}" > "${CASE_TMP}/node.command-dir"
 printf '%s\n' "\${PULSE_SERVER:-}" > "${CASE_TMP}/node.pulse-server"
 printf '%s\n' 'OLC_VM_SCREEN_URL http://127.0.0.1:6080/'
 if [[ "\${OLC_FAKE_VM_SCREEN_WAIT:-0}" != "1" ]]; then
   exit "\${OLC_FAKE_VM_SCREEN_EXIT_STATUS:-0}"
+fi
+if [[ "\${OLC_FAKE_VM_SCREEN_POWER_ON:-0}" = "1" ]]; then
+  (
+    for _ in \$(seq 1 100); do
+      if [[ -r "\${OLC_VM_SCREEN_STATE_FILE:-}" ]] && grep -Fq '"state":"powered-off"' "\${OLC_VM_SCREEN_STATE_FILE:-}"; then
+        mkdir -p "\${OLC_VM_SCREEN_COMMAND_DIR:-}"
+        printf '{"command":"power-on"}\n' > "\${OLC_VM_SCREEN_COMMAND_DIR}/power-on.fake.json"
+        exit 0
+      fi
+      sleep 0.1
+    done
+    exit 1
+  ) &
 fi
 trap 'printf "%s\n" terminated > "${CASE_TMP}/node.terminated"; exit 0' TERM INT
 while true; do
@@ -245,7 +287,7 @@ controlled_path_without_namespace_helpers() {
 
   bin_dir="${CASE_TMP}/controlled-bin"
   mkdir -p "$bin_dir"
-  for cmd in bash basename cat date dirname env grep head id mkdir mktemp pwd rm rmdir sed seq sleep tail timeout tr; do
+  for cmd in bash basename cat chmod date dirname env find grep head id mkdir mktemp pwd rm rmdir sed seq sleep tail timeout tr; do
     cmd_path="$(command -v "$cmd" 2>/dev/null || true)"
     [[ -n "$cmd_path" ]] || fail "test host command not found: $cmd"
     ln -sf "$cmd_path" "${bin_dir}/$cmd"
@@ -388,7 +430,7 @@ test_requires_source_directory_create_permissions() {
 }
 
 test_invokes_qemu_with_expected_browser_args_by_default() {
-  local output qemu_args build_args qemu_img_args virtiofsd_args virtiofsd_shared_dir vm_images_virtiofsd_args vm_images_shared_dir virtiofs_socket vm_images_socket node_args node_novnc_dir node_vnc_ws_port node_audio_enabled node_audio_bin node_audio_args_json node_audio_sample_rate node_audio_channels node_pulse_server nix_args qmp_socket qemu_pulse_server qemu_pulse_sink pactl_load_args pactl_unload_args pactl_pulse_server
+  local output qemu_args build_args qemu_img_args virtiofsd_args virtiofsd_shared_dir vm_images_virtiofsd_args vm_images_shared_dir virtiofs_socket vm_images_socket node_args node_novnc_dir node_vnc_ws_port node_audio_enabled node_audio_bin node_audio_args_json node_audio_sample_rate node_audio_channels node_state_file node_command_dir node_pulse_server node_lifecycle_mode node_command_mode nix_args qmp_socket qemu_pulse_server qemu_pulse_sink pactl_load_args pactl_unload_args pactl_pulse_server
   setup_case
 
   set +e
@@ -424,6 +466,10 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   node_audio_args_json="$(safe_cat "${CASE_TMP}/node.audio-args-json")"
   node_audio_sample_rate="$(safe_cat "${CASE_TMP}/node.audio-sample-rate")"
   node_audio_channels="$(safe_cat "${CASE_TMP}/node.audio-channels")"
+  node_state_file="$(safe_cat "${CASE_TMP}/node.state-file")"
+  node_command_dir="$(safe_cat "${CASE_TMP}/node.command-dir")"
+  node_lifecycle_mode="$(stat -c '%a' "$(dirname -- "$node_state_file")")"
+  node_command_mode="$(stat -c '%a' "$node_command_dir")"
   node_pulse_server="$(safe_cat "${CASE_TMP}/node.pulse-server")"
   nix_args="$(safe_cat "${CASE_TMP}/nix.args.all")"
   qmp_socket="$(safe_cat "${CASE_TMP}/qmp.socket-path")"
@@ -437,6 +483,7 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$output" "qemu frontend: browser"
   assert_contains "$output" "qemu binary: ${CASE_TMP}/qemu-store/bin/qemu-system-x86_64"
   assert_contains "$output" "qmp socket: "
+  assert_contains "$output" "vm lifecycle id: "
   assert_contains "$output" "runtime disk overlay: "
   assert_contains "$output" "runtime disk size: 64G"
   assert_contains "$output" "fast boot: 0"
@@ -486,6 +533,7 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$qemu_args" "-device virtio-serial-pci"
   assert_contains "$qemu_args" "-device virtserialport,chardev=ol-c-vdagent,name=com.redhat.spice.0"
   assert_contains "$qemu_args" "-serial mon:stdio"
+  assert_contains "$qemu_args" "olc-lifecycle-id="
   assert_contains "$nix_args" "build .#qemu-olc --print-out-paths --no-link"
   assert_contains "$virtiofsd_args" "--socket-path="
   assert_contains "$virtiofsd_args" "--shared-dir=${ROOT_DIR}"
@@ -517,6 +565,10 @@ test_invokes_qemu_with_expected_browser_args_by_default() {
   assert_contains "$node_audio_args_json" "\"--format=s16le\""
   [[ "$node_audio_sample_rate" == "48000" ]] || fail "expected viewer audio sample rate 48000, got [$node_audio_sample_rate]"
   [[ "$node_audio_channels" == "2" ]] || fail "expected viewer audio channels 2, got [$node_audio_channels]"
+  [[ "$node_state_file" == "${ROOT_DIR}/.olc-debug/vm-lifecycle/"*"/state.json" ]] || fail "expected viewer lifecycle state file under .olc-debug, got [$node_state_file]"
+  [[ "$node_command_dir" == "${ROOT_DIR}/.olc-debug/vm-lifecycle/"*"/commands" ]] || fail "expected viewer lifecycle command dir under .olc-debug, got [$node_command_dir]"
+  [[ "$node_lifecycle_mode" == "777" ]] || fail "expected lifecycle directory to be guest-writable, got mode [$node_lifecycle_mode]"
+  [[ "$node_command_mode" == "777" ]] || fail "expected lifecycle command directory to be guest-writable, got mode [$node_command_mode]"
   [[ "$node_pulse_server" == "unix:/run/user/1000/pulse/native" ]] || fail "expected viewer server pulse env, got [$node_pulse_server]"
   [[ "$qemu_pulse_server" == "unix:/run/user/1000/pulse/native" ]] || fail "expected QEMU pulse server env, got [$qemu_pulse_server]"
   [[ "$qemu_pulse_sink" == olc_vm_* ]] || fail "expected QEMU pulse sink env, got [$qemu_pulse_sink]"
@@ -563,6 +615,43 @@ test_disables_browser_audio_bridge_when_requested() {
   assert_contains "$qemu_args" "-audiodev none,id=olc-audio"
   [[ -z "$node_audio_enabled" ]] || fail "expected viewer audio bridge env to stay unset when audio is disabled, got [$node_audio_enabled]"
   [[ ! -f "${CASE_TMP}/pactl.load-module.args" ]] || fail "expected no Pulse sink setup when browser audio is disabled"
+  cleanup_case
+}
+
+test_guest_shutdown_keeps_viewer_alive_and_power_button_restarts_qemu() {
+  local output qemu_invocations source_virtiofsd_invocations state_file command_dir
+  setup_case
+
+  set +e
+  output="$(
+    PATH="${CASE_TMP}/fakebin:${TEST_SYSTEM_PATH}" \
+      BUILD_VM_BIN="${CASE_TMP}/fakebin/build-vm" \
+      OLC_NOVNC_DIR="${CASE_TMP}/novnc" \
+      OLC_VM_AUDIO_MODE=none \
+      OLC_VM_SCREEN_OPEN_BROWSER=0 \
+      OLC_FAKE_QEMU_POWER_SEQUENCE=shutdown-then-exit \
+      OLC_FAKE_QEMU_EXIT_EARLY=1 \
+      OLC_FAKE_VM_SCREEN_WAIT=1 \
+      OLC_FAKE_VM_SCREEN_POWER_ON=1 \
+      OLC_SKIP_SOURCE_WRITE_CHECK=1 \
+      OLC_SKIP_KVM_CHECK=1 \
+      "${LAUNCH_VM}" \
+      --cpus 1 \
+      --memory 1024
+  )"
+  set -e
+
+  qemu_invocations="$(safe_cat "${CASE_TMP}/qemu.invocations")"
+  source_virtiofsd_invocations="$(grep -c -- "--shared-dir=${ROOT_DIR} " "${CASE_TMP}/virtiofsd.args.all")"
+  state_file="$(safe_cat "${CASE_TMP}/node.state-file")"
+  command_dir="$(safe_cat "${CASE_TMP}/node.command-dir")"
+
+  assert_contains "$output" "vm lifecycle id: "
+  [[ "$qemu_invocations" == "2" ]] || fail "expected power-on command to start QEMU a second time, got [$qemu_invocations]"
+  [[ "$source_virtiofsd_invocations" == "2" ]] || fail "expected power-on command to restart source virtiofsd for the second QEMU start, got [$source_virtiofsd_invocations]"
+  [[ "$state_file" == "${ROOT_DIR}/.olc-debug/vm-lifecycle/"*"/state.json" ]] || fail "expected lifecycle state file under .olc-debug, got [$state_file]"
+  [[ "$command_dir" == "${ROOT_DIR}/.olc-debug/vm-lifecycle/"*"/commands" ]] || fail "expected lifecycle command dir under .olc-debug, got [$command_dir]"
+  [[ -f "${CASE_TMP}/node.terminated" ]] || fail "expected viewer to remain alive until the second QEMU exit triggers cleanup"
   cleanup_case
 }
 
@@ -893,7 +982,8 @@ test_passes_parent_vm_lineage_to_guest_firmware() {
   qemu_args="$(safe_cat "${CASE_TMP}/qemu.args")"
   assert_contains "$output" "parent machine id: parent-machine"
   assert_contains "$output" "parent vm depth: 3"
-  assert_contains "$qemu_args" "-smbios type=1,serial=olc-parent-machine-id=parent-machine;olc-parent-depth=3"
+  assert_contains "$qemu_args" "-smbios type=1,serial=olc-lifecycle-id="
+  assert_contains "$qemu_args" "olc-parent-machine-id=parent-machine;olc-parent-depth=3"
   cleanup_case
 }
 
@@ -925,7 +1015,8 @@ test_supports_fast_boot_without_guest_network() {
   [[ "$qemu_args" != *"-netdev user,id=olc-net"* ]] || fail "expected network mode none to omit the QEMU user netdev"
   [[ "$qemu_args" != *"-device virtio-net-pci,netdev=olc-net"* ]] || fail "expected network mode none to omit the virtio NIC"
   [[ "$qemu_args" != *"ol-c-vm-images"* ]] || fail "expected vm image sharing to be disabled"
-  assert_contains "$qemu_args" "-smbios type=1,serial=olc-fast-boot=1;olc-net=none"
+  assert_contains "$qemu_args" "-smbios type=1,serial=olc-lifecycle-id="
+  assert_contains "$qemu_args" "olc-fast-boot=1;olc-net=none"
   cleanup_case
 }
 
@@ -1205,6 +1296,7 @@ test_requires_kvm_by_default
 test_requires_source_directory_create_permissions
 test_invokes_qemu_with_expected_browser_args_by_default
 test_disables_browser_audio_bridge_when_requested
+test_guest_shutdown_keeps_viewer_alive_and_power_button_restarts_qemu
 test_uses_build_friendly_default_resources
 test_resolves_nixpkgs_novnc_webapp_layout
 test_explicit_vm_image_skips_build

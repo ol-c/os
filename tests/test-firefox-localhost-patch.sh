@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 PATCH_FILE="${ROOT_DIR}/patches/firefox/packaged/0001-close-last-tab-to-localhost.patch"
 FXA_PATCH_FILE="${ROOT_DIR}/patches/firefox/packaged/0002-hide-sync-fxa-ui.patch"
+POWER_PATCH_FILE="${ROOT_DIR}/patches/firefox/packaged/0003-add-power-menu-actions.patch"
 CURRENT_STATUS="${ROOT_DIR}/docs/current-status.md"
 FLAKE="${ROOT_DIR}/flake.nix"
 
@@ -66,6 +67,8 @@ test_fast_runtime_overlay_covers_localhost_new_tab_assets() {
 
   [[ "$contents" == *'browser/base/content/utilityOverlay.js'* ]] || fail "expected fast Firefox overlay to apply the utilityOverlay runtime asset"
   [[ "$contents" == *'return SECUREOS_LOCALHOST_URL;'* ]] || fail "expected fast Firefox overlay to validate the browser new-tab localhost override"
+  [[ "$contents" == *'browser.xhtml runtime asset containing the app menu'* ]] || fail "expected fast Firefox overlay to patch the app menu runtime asset"
+  [[ "$contents" == *'appMenu-olc-shutdown-button'* ]] || fail "expected fast Firefox overlay to validate the power menu runtime item"
   [[ "$contents" == *'browser/components/tabbrowser/NewTabPagePreloading.sys.mjs'* ]] || fail "expected fast Firefox overlay to apply the new-tab preloading runtime asset"
   [[ "$contents" == *'window.BROWSER_NEW_TAB_URL.startsWith("about:")'* ]] || fail "expected fast Firefox overlay to validate the non-about preload guard"
   [[ "$contents" == *'browser/components/customizableui/CustomizeMode.sys.mjs'* ]] || fail "expected fast Firefox overlay to apply customize-mode new-window runtime hooks"
@@ -74,14 +77,20 @@ test_fast_runtime_overlay_covers_localhost_new_tab_assets() {
 }
 
 test_packaged_patch_ownership_split() {
-  local localhost_contents fxa_contents
+  local localhost_contents fxa_contents power_contents
   localhost_contents="$(cat "${PATCH_FILE}")"
   fxa_contents="$(cat "${FXA_PATCH_FILE}")"
+  power_contents="$(cat "${POWER_PATCH_FILE}")"
 
   [[ "$localhost_contents" != *'gSecureOSFxaSyncUi.init();'* ]] || fail "expected localhost packaged patch not to duplicate the FxA/Sync browser.js runtime hunk"
   [[ "$localhost_contents" != *'olc-fxa-sync-ui-hidden'* ]] || fail "expected localhost packaged patch not to own the FxA/Sync browser.js marker"
   [[ "$fxa_contents" == *'gSecureOSFxaSyncUi.init();'* ]] || fail "expected FxA/Sync packaged patch to own the FxA/Sync browser.js runtime hunk"
   [[ "$fxa_contents" == *'olc-fxa-sync-ui-hidden'* ]] || fail "expected FxA/Sync packaged patch to own the FxA/Sync browser.js marker"
+  [[ "$power_contents" == *'gSecureOSPowerMenu.init();'* ]] || fail "expected power menu packaged patch to own the browser.js power controller"
+  [[ "$power_contents" == *'document.addEventListener("command", this, true);'* ]] || fail "expected power menu packaged patch to dispatch app menu commands from browser chrome"
+  [[ "$power_contents" == *'data-olc-power-action="shutdown"'* ]] || fail "expected power menu packaged patch to mark shutdown with an explicit action"
+  [[ "$power_contents" == *'appMenu-olc-shutdown-button'* ]] || fail "expected power menu packaged patch to add the shutdown menu item"
+  [[ "$power_contents" == *'https://localhost/api/system/power'* ]] || fail "expected power menu packaged patch to call the localhost power API"
 }
 
 test_localhost_redirector_contract

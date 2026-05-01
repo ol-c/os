@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { extname, normalize, resolve, sep } from 'node:path';
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { extname, join, normalize, resolve, sep } from 'node:path';
 
 const listenHost = process.env.OLC_VM_SCREEN_HOST || '127.0.0.1';
 const listenPort = Number.parseInt(process.env.OLC_VM_SCREEN_PORT || '0', 10);
@@ -15,6 +15,8 @@ const audioSampleRate = Number.parseInt(process.env.OLC_VM_SCREEN_AUDIO_SAMPLE_R
 const audioChannels = Number.parseInt(process.env.OLC_VM_SCREEN_AUDIO_CHANNELS || '2', 10);
 const audioFormat = process.env.OLC_VM_SCREEN_AUDIO_FORMAT || 's16le';
 const audioPathname = '/audio-stream';
+const lifecycleStateFile = process.env.OLC_VM_SCREEN_STATE_FILE || '';
+const lifecycleCommandDir = process.env.OLC_VM_SCREEN_COMMAND_DIR || '';
 
 let audioArgs = [];
 let audioProcess = null;
@@ -77,6 +79,53 @@ function send(res, status, body, type = 'text/plain; charset=utf-8') {
   res.end(body);
 }
 
+function sendJson(res, status, payload) {
+  send(res, status, `${JSON.stringify(payload)}\n`, 'application/json; charset=utf-8');
+}
+
+function lifecycleEnabled() {
+  return Boolean(lifecycleStateFile && lifecycleCommandDir);
+}
+
+function readVmState() {
+  if (!lifecycleStateFile) {
+    return {
+      state: 'running',
+      lastAction: null,
+      message: 'VM lifecycle state is not managed by this viewer.',
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(lifecycleStateFile, 'utf8'));
+    if (parsed && typeof parsed === 'object' && typeof parsed.state === 'string') {
+      return parsed;
+    }
+  } catch {
+    // fall through to a safe default while the launcher is starting.
+  }
+
+  return {
+    state: 'starting',
+    lastAction: null,
+    message: 'Waiting for VM lifecycle state.',
+  };
+}
+
+function writePowerOnCommand() {
+  if (!lifecycleCommandDir) {
+    throw new Error('VM lifecycle commands are unavailable');
+  }
+
+  mkdirSync(lifecycleCommandDir, { recursive: true });
+  const commandPath = join(lifecycleCommandDir, `power-on.${Date.now()}.${process.pid}.json`);
+  writeFileSync(commandPath, `${JSON.stringify({
+    command: 'power-on',
+    requestedAt: new Date().toISOString(),
+  }, null, 2)}\n`);
+  return commandPath;
+}
+
 function audioConfig() {
   if (!audioEnabled) {
     return { enabled: false };
@@ -96,6 +145,9 @@ function indexHtml() {
     host: vncHost,
     port: Number.parseInt(vncWebsocketPort, 10),
     audio: audioConfig(),
+    lifecycle: {
+      enabled: lifecycleEnabled(),
+    },
   });
 
   return `<!doctype html>
@@ -120,6 +172,63 @@ function indexHtml() {
       height: 100vh;
     }
 
+    #power-panel[hidden] {
+      display: none;
+    }
+
+    #power-panel {
+      position: fixed;
+      inset: 0;
+      z-index: 3;
+      display: grid;
+      place-items: center;
+      padding: 2rem;
+      background:
+        radial-gradient(circle at 50% 35%, rgba(73, 102, 116, 0.32), transparent 34rem),
+        #101418;
+      color: #f4f7f8;
+      text-align: center;
+    }
+
+    #power-panel-card {
+      width: min(26rem, 100%);
+      padding: 1.4rem;
+      border: 1px solid rgba(244, 247, 248, 0.18);
+      border-radius: 18px;
+      background: rgba(13, 18, 23, 0.72);
+      box-shadow: 0 22px 80px rgba(0, 0, 0, 0.42);
+    }
+
+    #power-title {
+      margin: 0;
+      font-size: 1.35rem;
+      line-height: 1.2;
+    }
+
+    #power-detail {
+      margin: 0.65rem 0 0;
+      color: #cbd5df;
+      line-height: 1.45;
+    }
+
+    #power-on-button {
+      min-height: 2.4rem;
+      margin-top: 1.1rem;
+      padding: 0 1rem;
+      border: 1px solid #8fd0e8;
+      border-radius: 999px;
+      background: #d8f3ff;
+      color: #101418;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    #power-on-button:disabled {
+      cursor: wait;
+      opacity: 0.7;
+    }
+
     #viewer-message[hidden] {
       display: none;
     }
@@ -141,6 +250,13 @@ function indexHtml() {
 </head>
 <body>
   <div id="screen"></div>
+  <div id="power-panel" role="status" aria-live="polite" hidden>
+    <div id="power-panel-card">
+      <h1 id="power-title">VM powered off</h1>
+      <p id="power-detail">The guest has shut down.</p>
+      <button id="power-on-button" type="button">Power on</button>
+    </div>
+  </div>
   <div id="viewer-message" role="status" aria-live="polite" hidden></div>
   <script>window.OLC_VM_SCREEN = ${config};</script>
   <script type="module" src="/screen.js"></script>
@@ -153,9 +269,16 @@ function screenJs() {
 
 const screen = document.getElementById('screen');
 const viewerMessage = document.getElementById('viewer-message');
+const powerPanel = document.getElementById('power-panel');
+const powerTitle = document.getElementById('power-title');
+const powerDetail = document.getElementById('power-detail');
+const powerOnButton = document.getElementById('power-on-button');
 const config = window.OLC_VM_SCREEN;
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const url = protocol + '//' + config.host + ':' + config.port + '/';
+let rfb = null;
+let reconnectTimer = 0;
+let lifecyclePollTimer = 0;
 let latestVmClipboardText = '';
 let viewerMessageTimer = 0;
 let persistentViewerMessage = false;
@@ -217,6 +340,118 @@ function setStatus(message, { visible = false } = {}) {
   }
 }
 
+function setPowerPanel({ hidden, title = '', detail = '', buttonEnabled = true } = {}) {
+  if (!powerPanel) {
+    return;
+  }
+
+  powerPanel.hidden = Boolean(hidden);
+  if (powerTitle && title) {
+    powerTitle.textContent = title;
+  }
+  if (powerDetail && detail) {
+    powerDetail.textContent = detail;
+  }
+  if (powerOnButton) {
+    powerOnButton.hidden = title !== 'VM powered off';
+    powerOnButton.disabled = !buttonEnabled;
+  }
+}
+
+async function fetchVmState() {
+  if (!config.lifecycle?.enabled) {
+    return { state: 'running' };
+  }
+
+  try {
+    const response = await fetch('/api/vm/state', { cache: 'no-store' });
+    if (!response.ok) {
+      throw new Error('state unavailable');
+    }
+    return await response.json();
+  } catch {
+    return { state: 'unknown', message: 'VM lifecycle state is unavailable.' };
+  }
+}
+
+function disconnectRfb() {
+  if (!rfb) {
+    return;
+  }
+
+  const current = rfb;
+  rfb = null;
+  try {
+    current.disconnect();
+  } catch {
+    // noVNC may already be disconnected.
+  }
+}
+
+function scheduleReconnect(delayMs = 1000) {
+  if (reconnectTimer || rfb) {
+    return;
+  }
+
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = 0;
+    connectRfb();
+  }, delayMs);
+}
+
+async function renderLifecycleState(state = null) {
+  const vmState = state || await fetchVmState();
+
+  switch (vmState.state) {
+    case 'powered-off':
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = 0;
+      disconnectRfb();
+      setStatus('Powered off', { visible: false });
+      setPowerPanel({
+        hidden: false,
+        title: 'VM powered off',
+        detail: vmState.message || 'The guest has shut down.',
+        buttonEnabled: true,
+      });
+      return;
+    case 'shutting-down':
+      setPowerPanel({
+        hidden: false,
+        title: 'Shutting down',
+        detail: vmState.message || 'Waiting for the guest to power off.',
+        buttonEnabled: false,
+      });
+      return;
+    case 'restarting':
+    case 'starting':
+      setPowerPanel({
+        hidden: false,
+        title: vmState.state === 'restarting' ? 'Restarting' : 'Starting',
+        detail: vmState.message || 'Waiting for the VM display to reconnect.',
+        buttonEnabled: false,
+      });
+      scheduleReconnect();
+      return;
+    case 'running':
+      setPowerPanel({ hidden: true });
+      if (!rfb) {
+        scheduleReconnect(100);
+      }
+      return;
+    default:
+      if (!rfb) {
+        setPowerPanel({
+          hidden: false,
+          title: 'Waiting for VM',
+          detail: vmState.message || 'Waiting for the VM display.',
+          buttonEnabled: false,
+        });
+        scheduleReconnect();
+      }
+  }
+}
+
 function setAudioProblem(message) {
   setViewerMessage(message);
 }
@@ -258,6 +493,9 @@ function normalizeWheelDelta(event) {
 }
 
 function emitWheelButton(pos, baseMask, wheelMask) {
+  if (!rfb) {
+    return;
+  }
   rfb._handleMouseButton(pos.x, pos.y, baseMask | wheelMask);
   rfb._handleMouseButton(pos.x, pos.y, baseMask);
 }
@@ -308,6 +546,9 @@ function delay(delayMs) {
 }
 
 function sendGuestPasteShortcut() {
+  if (!rfb) {
+    return;
+  }
   rfb.sendKey(XK_Control_L, 'ControlLeft', true);
   rfb.sendKey(XK_v, 'KeyV', true);
   rfb.sendKey(XK_v, 'KeyV', false);
@@ -315,11 +556,19 @@ function sendGuestPasteShortcut() {
 }
 
 function releaseGuestMetaKeys() {
+  if (!rfb) {
+    return;
+  }
   rfb.sendKey(XK_Super_L, 'MetaLeft', false);
   rfb.sendKey(XK_Super_R, 'MetaRight', false);
 }
 
 async function pasteTextIntoVm(text, { notifyEmpty = false, releaseMeta = false } = {}) {
+  if (!rfb) {
+    setViewerMessage('VM display is disconnected');
+    return false;
+  }
+
   if (text.length === 0) {
     if (notifyEmpty) {
       setViewerMessage('Host clipboard has no text');
@@ -576,13 +825,54 @@ async function streamAudioToBrowser() {
   }
 }
 
-const rfb = new RFB(screen, url, { credentials: {} });
-rfb.scaleViewport = true;
-rfb.resizeSession = false;
-rfb.focusOnClick = true;
+function connectRfb() {
+  if (rfb) {
+    return;
+  }
+
+  const nextRfb = new RFB(screen, url, { credentials: {} });
+  rfb = nextRfb;
+  nextRfb.scaleViewport = true;
+  nextRfb.resizeSession = false;
+  nextRfb.focusOnClick = true;
+
+  nextRfb.addEventListener('connect', () => {
+    if (rfb !== nextRfb) {
+      return;
+    }
+    setPowerPanel({ hidden: true });
+    setStatus('Connected');
+  });
+  nextRfb.addEventListener('disconnect', event => {
+    if (rfb === nextRfb) {
+      rfb = null;
+    }
+    if (!config.lifecycle?.enabled) {
+      setStatus(event.detail.clean ? 'Disconnected' : 'Disconnected unexpectedly', { visible: true });
+      return;
+    }
+    void fetchVmState().then(state => {
+      if (state.state === 'powered-off' || state.state === 'shutting-down' || state.state === 'restarting' || state.state === 'starting') {
+        return renderLifecycleState(state);
+      }
+      setStatus(event.detail.clean ? 'Disconnected' : 'Disconnected unexpectedly', { visible: true });
+      scheduleReconnect();
+    });
+  });
+  nextRfb.addEventListener('credentialsrequired', () => setStatus('Credentials required', { visible: true }));
+  nextRfb.addEventListener('securityfailure', () => setStatus('Security failure', { visible: true }));
+  nextRfb.addEventListener('clipboard', event => {
+    latestVmClipboardText = event.detail?.text || '';
+    if (latestVmClipboardText.length === 0) {
+      return;
+    }
+
+    void copyLatestVmClipboardToHost();
+  });
+}
 
 screen.addEventListener('wheel', event => {
-  if (rfb._rfbConnectionState !== 'connected' || rfb._viewOnly) {
+  if (!rfb || rfb._rfbConnectionState !== 'connected' || rfb._viewOnly) {
     return;
   }
 
@@ -599,21 +889,6 @@ screen.addEventListener('wheel', event => {
   drainWheelAxis(pos, baseMask, 'x', 1 << 5, 1 << 6);
   drainWheelAxis(pos, baseMask, 'y', 1 << 3, 1 << 4);
 }, { capture: true, passive: false });
-
-rfb.addEventListener('connect', () => setStatus('Connected'));
-rfb.addEventListener('disconnect', event => {
-  setStatus(event.detail.clean ? 'Disconnected' : 'Disconnected unexpectedly', { visible: true });
-});
-rfb.addEventListener('credentialsrequired', () => setStatus('Credentials required', { visible: true }));
-rfb.addEventListener('securityfailure', () => setStatus('Security failure', { visible: true }));
-rfb.addEventListener('clipboard', event => {
-  latestVmClipboardText = event.detail?.text || '';
-  if (latestVmClipboardText.length === 0) {
-    return;
-  }
-
-  void copyLatestVmClipboardToHost();
-});
 
 window.addEventListener('paste', event => {
   const text = event.clipboardData?.getData('text/plain') || '';
@@ -649,7 +924,37 @@ window.addEventListener('pointerdown', () => {
   void resumeAudioPlayback();
 }, { capture: true });
 
+if (powerOnButton) {
+  powerOnButton.addEventListener('click', async () => {
+    powerOnButton.disabled = true;
+    try {
+      const response = await fetch('/api/vm/power-on', { method: 'POST' });
+      if (!response.ok) {
+        throw new Error('power-on request failed');
+      }
+      setPowerPanel({
+        hidden: false,
+        title: 'Starting',
+        detail: 'Power-on requested. Waiting for the VM display.',
+        buttonEnabled: false,
+      });
+      scheduleReconnect(500);
+    } catch {
+      setViewerMessage('Power on failed');
+      powerOnButton.disabled = false;
+    }
+  });
+}
+
+if (config.lifecycle?.enabled) {
+  lifecyclePollTimer = window.setInterval(() => {
+    void renderLifecycleState();
+  }, 1000);
+}
+
 ensureAudioBridge();
+connectRfb();
+void renderLifecycleState();
 screen.focus();
 `;
 }
@@ -749,6 +1054,35 @@ const server = createServer((req, res) => {
 
   if (url.pathname === '/screen.js') {
     send(res, 200, screenJs(), 'text/javascript; charset=utf-8');
+    return;
+  }
+
+  if (url.pathname === '/api/vm/state') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { ok: false, error: 'method not allowed' });
+      return;
+    }
+    sendJson(res, 200, readVmState());
+    return;
+  }
+
+  if (url.pathname === '/api/vm/power-on') {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'method not allowed' });
+      return;
+    }
+
+    try {
+      const state = readVmState();
+      if (state.state !== 'powered-off') {
+        sendJson(res, 409, { ok: false, error: `VM is not powered off: ${state.state}` });
+        return;
+      }
+      writePowerOnCommand();
+      sendJson(res, 202, { ok: true, state: 'starting' });
+    } catch (error) {
+      sendJson(res, 500, { ok: false, error: error.message });
+    }
     return;
   }
 
