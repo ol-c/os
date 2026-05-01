@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 PATCH_FILE="${ROOT_DIR}/patches/firefox/packaged/0001-close-last-tab-to-localhost.patch"
 FXA_PATCH_FILE="${ROOT_DIR}/patches/firefox/packaged/0002-hide-sync-fxa-ui.patch"
-AGENTS="${ROOT_DIR}/AGENTS.md"
+CURRENT_STATUS="${ROOT_DIR}/docs/current-status.md"
 FLAKE="${ROOT_DIR}/flake.nix"
 
 fail() {
@@ -45,11 +45,11 @@ test_localhost_redirector_contract() {
   [[ "$contents" == *'closeWindowWithLastTab: false,'* ]] || fail "expected DOMWindowClose last-tab handling to re-enter Firefox removeTab logic"
 }
 
-test_agents_records_localhost_patch_gate() {
+test_current_status_records_localhost_patch_gate() {
   local contents
-  contents="$(cat "${AGENTS}")"
+  contents="$(cat "${CURRENT_STATUS}")"
 
-  [[ "$contents" == *"bash tests/test-firefox-localhost-patch.sh"* ]] || fail "expected AGENTS.md to record the localhost patch contract test"
+  [[ "$contents" == *"bash tests/test-firefox-localhost-patch.sh"* ]] || fail "expected docs/current-status.md to record the localhost patch contract test"
 }
 
 test_packaged_build_stays_blind_to_pending_patches() {
@@ -85,7 +85,7 @@ test_packaged_patch_ownership_split() {
 }
 
 test_localhost_redirector_contract
-test_agents_records_localhost_patch_gate
+test_current_status_records_localhost_patch_gate
 test_packaged_build_stays_blind_to_pending_patches
 test_fast_runtime_overlay_covers_localhost_new_tab_assets
 test_packaged_patch_ownership_split

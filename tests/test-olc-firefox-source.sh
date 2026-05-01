@@ -7,7 +7,7 @@ INIT_SCRIPT_PATH="${ROOT_DIR}/olc-init"
 FLAKE="${ROOT_DIR}/flake.nix"
 GITIGNORE="${ROOT_DIR}/.gitignore"
 NIX_DEVELOPMENT="${ROOT_DIR}/nix/modules/development.nix"
-AGENTS="${ROOT_DIR}/AGENTS.md"
+CURRENT_STATUS="${ROOT_DIR}/docs/current-status.md"
 README="${ROOT_DIR}/README.md"
 WORKFLOW_DOC="${ROOT_DIR}/docs/firefox-source-workflow-plan.md"
 
@@ -149,11 +149,11 @@ test_repo_init_contract() {
   [[ "$contents" == *'Prepare reusable shared assets for this repo. Safe to run repeatedly.'* ]] || fail "expected repo init to document safe repeated use"
 }
 
-test_agents_records_shared_source_loop() {
+test_current_status_records_shared_source_loop() {
   local contents
-  contents="$(cat "${AGENTS}")"
+  contents="$(cat "${CURRENT_STATUS}")"
 
-  [[ "$contents" == *"bash tests/test-olc-firefox-source.sh"* ]] || fail "expected AGENTS.md to record the shared Firefox source workflow test"
+  [[ "$contents" == *"bash tests/test-olc-firefox-source.sh"* ]] || fail "expected docs/current-status.md to record the shared Firefox source workflow test"
 }
 
 test_docs_record_recommended_source_loop() {
@@ -196,7 +196,7 @@ test_firefox_dev_shell_defaults_to_clang
 test_wasi_toolchain_does_not_poison_native_link_flags
 test_guest_wrapper_contract
 test_repo_init_contract
-test_agents_records_shared_source_loop
+test_current_status_records_shared_source_loop
 test_docs_record_recommended_source_loop
 test_pending_proof_patch_exists
 

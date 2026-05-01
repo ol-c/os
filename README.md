@@ -292,7 +292,7 @@ The build-path roles are summarized in [Firefox Build Paths](#firefox-build-path
 Use this after browser frontend patch edits to package and boot the normal VM path.
 
 ```sh
-git add README.md flake.nix nix/firefox-localhost-fast.nix nix/modules/graphical-session.nix tests/test-build-vm.sh patches/firefox/packaged/0001-close-last-tab-to-localhost.patch AGENTS.md
+git add README.md flake.nix nix/firefox-localhost-fast.nix nix/modules/graphical-session.nix tests/test-build-vm.sh patches/firefox/packaged/0001-close-last-tab-to-localhost.patch docs/current-status.md
 nix build .#firefox-localhost --print-build-logs
 ./launch-vm
 ```
