@@ -47,6 +47,8 @@
     curl
     firefox
     git
+    i3
+    jq
     matchbox
     nodejs
     openssh

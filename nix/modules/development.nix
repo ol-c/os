@@ -1,7 +1,7 @@
 { pkgs, ... }:
 
 let
-  codexVersion = "0.125.0";
+  codexVersion = "0.128.0";
   codexCommand = pkgs.writeShellScriptBin "codex" ''
     set -eu
 

@@ -1,0 +1,252 @@
+diff --git a/browser/components/tabbrowser/content/drag-and-drop.js b/browser/components/tabbrowser/content/drag-and-drop.js
+--- a/browser/components/tabbrowser/content/drag-and-drop.js
++++ b/browser/components/tabbrowser/content/drag-and-drop.js
+@@ -39,6 +39,151 @@
+     throw new Error(`Element "${element.tagName}" is not expected to move`);
+   };
+-
++
++  const SECUREOS_PANE_SPLIT_TARGET_PREF =
++    "browser.olc.panes.splitTargetThicknessPx";
++  const SECUREOS_PANE_SPLIT_TARGET_DEFAULT_PX = 96;
++  const SECUREOS_PANE_SPLIT_TARGET_MIN_PX = 8;
++  const SECUREOS_PANE_SPLIT_TARGET_MAX_PX = 512;
++
++  const gSecureOSPaneSplitDrag = {
++    targetThickness() {
++      let thickness;
++      try {
++        thickness = Services.prefs.getIntPref(
++          SECUREOS_PANE_SPLIT_TARGET_PREF,
++          SECUREOS_PANE_SPLIT_TARGET_DEFAULT_PX
++        );
++      } catch {
++        thickness = SECUREOS_PANE_SPLIT_TARGET_DEFAULT_PX;
++      }
++
++      return Math.min(
++        SECUREOS_PANE_SPLIT_TARGET_MAX_PX,
++        Math.max(SECUREOS_PANE_SPLIT_TARGET_MIN_PX, thickness)
++      );
++    },
++
++    availableRectForEvent(event) {
++      try {
++        let availX = {};
++        let availY = {};
++        let availWidth = {};
++        let availHeight = {};
++        event.screen.GetAvailRectDisplayPix(
++          availX,
++          availY,
++          availWidth,
++          availHeight
++        );
++        return {
++          left: availX.value,
++          top: availY.value,
++          right: availX.value + availWidth.value,
++          bottom: availY.value + availHeight.value,
++        };
++      } catch {
++        return null;
++      }
++    },
++
++    directionForEvent(event) {
++      let rect = this.availableRectForEvent(event);
++      if (!rect) {
++        return null;
++      }
++
++      let thickness = this.targetThickness();
++      let scale = window.devicePixelRatio / window.desktopToDeviceScale;
++      let x = event.screenX * scale;
++      let y = event.screenY * scale;
++      let withinHorizontal =
++        x >= rect.left - thickness && x <= rect.right + thickness;
++      let withinVertical =
++        y >= rect.top - thickness && y <= rect.bottom + thickness;
++      let candidates = [];
++
++      if (withinVertical) {
++        let leftDistance = Math.abs(x - rect.left);
++        if (leftDistance <= thickness) {
++          candidates.push({
++            direction: "left",
++            distance: leftDistance,
++            priority: 1,
++          });
++        }
++
++        let rightDistance = Math.abs(x - rect.right);
++        if (rightDistance <= thickness) {
++          candidates.push({
++            direction: "right",
++            distance: rightDistance,
++            priority: 1,
++          });
++        }
++      }
++
++      if (withinHorizontal) {
++        let bottomDistance = Math.abs(y - rect.bottom);
++        if (bottomDistance <= thickness) {
++          candidates.push({
++            direction: "bottom",
++            distance: bottomDistance,
++            priority: 0,
++          });
++        }
++      }
++
++      if (!candidates.length) {
++        return null;
++      }
++
++      candidates.sort(
++        (first, second) =>
++          first.distance - second.distance || first.priority - second.priority
++      );
++      return candidates[0].direction;
++    },
++
++    runPanectl(args, { allowMissing = false } = {}) {
++      let command =
++        Services.env.get("OLC_PANECTL") ||
++        "/run/current-system/sw/bin/olc-panectl";
++
++      try {
++        let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
++        file.initWithPath(command);
++        if (!file.exists() || !file.isExecutable()) {
++          return allowMissing;
++        }
++
++        let process = Cc["@mozilla.org/process/util;1"].createInstance(
++          Ci.nsIProcess
++        );
++        process.init(file);
++        process.run(true, args, args.length);
++        return process.exitValue == 0;
++      } catch (error) {
++        Cu.reportError(error);
++        return allowMissing;
++      }
++    },
++
++    prepareForEvent(event) {
++      let direction = this.directionForEvent(event);
++      if (!direction) {
++        this.runPanectl(["clear-pending"], { allowMissing: true });
++        return { direction: null, prepared: true };
++      }
++
++      return {
++        direction,
++        prepared: this.runPanectl(["prepare-split", direction], {
++          allowMissing: true,
++        }),
++      };
++    },
++  };
++
+   window.TabDragAndDrop = class {
+     #dragTime = 0;
+     #pinnedDropIndicatorTimeout = null;
+@@ -754,6 +899,13 @@
+         }
+       }
+-
++
++      let secureOSPaneSplit = gSecureOSPaneSplitDrag.prepareForEvent(event);
++      if (!secureOSPaneSplit.prepared) {
++        delete draggedTab._dragData;
++        event.stopPropagation();
++        return;
++      }
++
+       // screen.availLeft et. al. only check the screen that this window is on,
+       // but we want to look at the screen the tab is being dropped onto.
+       var screen = event.screen;
+@@ -813,6 +965,20 @@
+       left /= ourCssToDesktopScale;
+       top /= ourCssToDesktopScale;
+-
++
++      if (secureOSPaneSplit.direction) {
++        let detachedElementCount = draggedTab.multiselected
++          ? gBrowser.selectedElements.length
++          : 1;
++        if (gBrowser.tabs.length == detachedElementCount) {
++          gBrowser.addTrustedTab(BROWSER_NEW_TAB_URL, {
++            skipAnimation: true,
++            // Keep the source pane alive with the system page before the
++            // dragged tab is adopted by the newly opened pane window.
++            tabIndex: 0,
++          });
++        }
++      }
++
+       delete draggedTab._dragData;
+-
++
+       if (gBrowser.tabs.length == 1) {
+diff --git a/browser/components/tabbrowser/content/tabbrowser.js b/browser/components/tabbrowser/content/tabbrowser.js
+--- a/browser/components/tabbrowser/content/tabbrowser.js
++++ b/browser/components/tabbrowser/content/tabbrowser.js
+@@ -5717,10 +5717,13 @@
+       var closeWindow = false;
+       var newTab = false;
+       if (this.#isLastTabInWindow(aTab)) {
++        let closeSecureOSPane =
++          window.gSecureOSPaneSplits?.shouldCloseWindowWithLastTab?.() ?? false;
+         closeWindow =
+           closeWindowWithLastTab != null
+             ? closeWindowWithLastTab
+-            : !window.toolbar.visible ||
++            : closeSecureOSPane ||
++              !window.toolbar.visible ||
+               Services.prefs.getBoolPref("browser.tabs.closeWindowWithLastTab");
+-
++
+         if (closeWindow) {
+diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
+--- a/browser/base/content/browser.js
++++ b/browser/base/content/browser.js
+@@ -569,6 +569,33 @@
+-
++
+ gSecureOSPowerMenu.init();
+-
++
++var gSecureOSPaneSplits = {
++  browserPaneCount() {
++    return BrowserWindowTracker.getOrderedWindows({
++      private: PrivateBrowsingUtils.isWindowPrivate(window),
++    }).filter(win => {
++      return !win.closed && win.gBrowser && win.toolbar?.visible;
++    }).length;
++  },
++
++  shouldCloseWindowWithLastTab() {
++    try {
++      return this.browserPaneCount() > 1;
++    } catch (error) {
++      Cu.reportError(error);
++      return false;
++    }
++  },
++
++  // Exposed for browser-chrome tests and live validation helpers.
++  paneSummary() {
++    return {
++      panes: this.browserPaneCount(),
++      closeLastTabClosesPane: this.shouldCloseWindowWithLastTab(),
++    };
++  },
++};
++
+ ChromeUtils.defineLazyGetter(this, "RTL_UI", () => {
+   return Services.locale.isAppLocaleRTL;
+ });

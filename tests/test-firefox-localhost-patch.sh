@@ -5,6 +5,7 @@ ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 PATCH_FILE="${ROOT_DIR}/patches/firefox/packaged/0001-close-last-tab-to-localhost.patch"
 FXA_PATCH_FILE="${ROOT_DIR}/patches/firefox/packaged/0002-hide-sync-fxa-ui.patch"
 POWER_PATCH_FILE="${ROOT_DIR}/patches/firefox/packaged/0003-add-power-menu-actions.patch"
+PANE_PATCH_FILE="${ROOT_DIR}/patches/firefox/packaged/0004-add-browser-pane-splits.patch"
 CURRENT_STATUS="${ROOT_DIR}/docs/current-status.md"
 FLAKE="${ROOT_DIR}/flake.nix"
 
@@ -74,13 +75,17 @@ test_fast_runtime_overlay_covers_localhost_new_tab_assets() {
   [[ "$contents" == *'browser/components/customizableui/CustomizeMode.sys.mjs'* ]] || fail "expected fast Firefox overlay to apply customize-mode new-window runtime hooks"
   [[ "$contents" == *'browser/components/profiles/ProfilesParent.sys.mjs'* ]] || fail "expected fast Firefox overlay to apply profile cleanup replacement-tab runtime hooks"
   [[ "$contents" == *'browser/components/tabbrowser/content/opentabs-splitview.mjs'* ]] || fail "expected fast Firefox overlay to apply split-view fallback runtime hooks"
+  [[ "$contents" == *'expected exactly four ol-c Firefox patches'* ]] || fail "expected fast Firefox overlay to account for the pane split patch"
+  [[ "$contents" == *'browser/components/tabbrowser/content/drag-and-drop.js'* ]] || fail "expected fast Firefox overlay to apply pane split drag runtime hooks"
+  [[ "$contents" == *'OLC_FIREFOX_PANE_SPLIT_PATCH_APPLIED=1'* ]] || fail "expected fast Firefox overlay to record the pane split patch marker"
 }
 
 test_packaged_patch_ownership_split() {
-  local localhost_contents fxa_contents power_contents
+  local localhost_contents fxa_contents power_contents pane_contents
   localhost_contents="$(cat "${PATCH_FILE}")"
   fxa_contents="$(cat "${FXA_PATCH_FILE}")"
   power_contents="$(cat "${POWER_PATCH_FILE}")"
+  pane_contents="$(cat "${PANE_PATCH_FILE}")"
 
   [[ "$localhost_contents" != *'gSecureOSFxaSyncUi.init();'* ]] || fail "expected localhost packaged patch not to duplicate the FxA/Sync browser.js runtime hunk"
   [[ "$localhost_contents" != *'olc-fxa-sync-ui-hidden'* ]] || fail "expected localhost packaged patch not to own the FxA/Sync browser.js marker"
@@ -91,6 +96,9 @@ test_packaged_patch_ownership_split() {
   [[ "$power_contents" == *'data-olc-power-action="shutdown"'* ]] || fail "expected power menu packaged patch to mark shutdown with an explicit action"
   [[ "$power_contents" == *'appMenu-olc-shutdown-button'* ]] || fail "expected power menu packaged patch to add the shutdown menu item"
   [[ "$power_contents" == *'https://localhost/api/system/power'* ]] || fail "expected power menu packaged patch to call the localhost power API"
+  [[ "$pane_contents" == *'gSecureOSPaneSplitDrag.prepareForEvent(event)'* ]] || fail "expected pane split packaged patch to own tab-drag pane targeting"
+  [[ "$pane_contents" == *'gSecureOSPaneSplits?.shouldCloseWindowWithLastTab'* ]] || fail "expected pane split packaged patch to own pane-aware last-tab closure"
+  [[ "$pane_contents" == *'BrowserWindowTracker.getOrderedWindows'* ]] || fail "expected pane split packaged patch to own browser pane counting"
 }
 
 test_localhost_redirector_contract

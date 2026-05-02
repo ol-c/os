@@ -26,13 +26,14 @@ in {
     work_dir="$(mktemp -d)"
     firefox_patches=(${firefoxPatchArgs})
 
-    if [ "''${#firefox_patches[@]}" -ne 3 ]; then
-      echo "error: expected exactly three ol-c Firefox patches" >&2
+    if [ "''${#firefox_patches[@]}" -ne 4 ]; then
+      echo "error: expected exactly four ol-c Firefox patches" >&2
       exit 1
     fi
     localhost_patch="''${firefox_patches[0]}"
     fxa_sync_ui_patch="''${firefox_patches[1]}"
     power_menu_patch="''${firefox_patches[2]}"
+    pane_split_patch="''${firefox_patches[3]}"
 
     firefox_omnis=(
       "$out/lib/firefox/browser/omni.ja"
@@ -501,6 +502,29 @@ PERL
       exit 1
     fi
 
+    apply_source_patch_to_runtime_asset \
+      "$pane_split_patch" \
+      browser/components/tabbrowser/content/drag-and-drop.js \
+      drag-and-drop.js \
+      'gSecureOSPaneSplitDrag.prepareForEvent(event)'
+
+    apply_source_patch_to_runtime_asset \
+      "$pane_split_patch" \
+      browser/components/tabbrowser/content/tabbrowser.js \
+      tabbrowser.js \
+      'gSecureOSPaneSplits?.shouldCloseWindowWithLastTab'
+
+    apply_source_patch_to_runtime_asset \
+      "$pane_split_patch" \
+      browser/base/content/browser.js \
+      browser.js \
+      'gSecureOSPaneSplits'
+
+    if ! grep -Fq 'paneSummary()' "$browser_js_extract_dir/$browser_js_path"; then
+      echo "error: patched Firefox browser.js runtime asset is missing the ol-c pane split summary hook: $browser_js_omni:$browser_js_path" >&2
+      exit 1
+    fi
+
     for entry in "''${extracted_omnis[@]}"; do
       omni="''${entry%%:*}"
       extract_dir="''${entry#*:}"
@@ -512,6 +536,7 @@ PERL
       echo "OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1"
       echo "OLC_FIREFOX_FXA_SYNC_UI_PATCH_APPLIED=1"
       echo "OLC_FIREFOX_POWER_MENU_PATCH_APPLIED=1"
+      echo "OLC_FIREFOX_PANE_SPLIT_PATCH_APPLIED=1"
       printf 'patch_stack=%s\n' "''${firefox_patches[*]}"
       printf 'redirector_omni=%s\n' "$redirector_omni"
       printf 'redirector_path=%s\n' "$redirector_omni_path"
