@@ -62,6 +62,7 @@
     wireplumber
     xdg-utils
     xorg.xinit
+    xorg.xrandr
     xdotool
   ];
 }

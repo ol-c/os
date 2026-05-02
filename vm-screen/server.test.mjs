@@ -79,11 +79,21 @@ test('serves the VM screen without external assets', async () => {
     assert.match(html, /src="\/screen\.js"/);
     assert.match(html, /Noto Sans/);
     assert.match(html, /Noto Color Emoji/);
+    assert.doesNotMatch(html, /screen-resize/);
+    assert.doesNotMatch(html, /1024x768/);
+    assert.doesNotMatch(html, /Follow browser/);
+    assert.doesNotMatch(html, /Custom/);
     assert.doesNotMatch(html, /https?:\/\/(?!127\.0\.0\.1)/);
 
     const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
     assert.match(script, /import RFB from '\/novnc\/core\/rfb\.js'/);
     assert.match(script, /rfb\.clipboardPasteFrom\(text\)/);
+    assert.match(script, /nextRfb\.resizeSession = true/);
+    assert.doesNotMatch(script, /requestFixedScreenResize/);
+    assert.doesNotMatch(script, /parseScreenSize/);
+    assert.doesNotMatch(script, /screenResizeMode/);
+    assert.doesNotMatch(script, /\/api\/vm\/screen/i);
+    assert.doesNotMatch(script, /screen-size/i);
     assert.match(script, /const guestPasteDelayMs = 100/);
     assert.match(script, /rfb\.sendKey\(XK_Control_L, 'ControlLeft', true\)/);
     assert.match(script, /rfb\.sendKey\(XK_Super_L, 'MetaLeft', false\)/);
@@ -875,6 +885,78 @@ test('viewer trims stale pre-gesture audio to keep playback near live', async ()
     assert.ok(right[0] > 0.5, `expected live audio tail, got ${right[0]}`);
     assert.equal(viewerMessage.hidden, true);
     assert.equal(viewerMessage.textContent, '');
+  } finally {
+    await stopServer(child);
+    await rm(noVncDir, { recursive: true, force: true });
+  }
+});
+
+test('viewer follows browser size through noVNC resizeSession by default', async () => {
+  const noVncDir = await fakeNoVncTree();
+  const { child, url } = await startServer({ OLC_NOVNC_DIR: noVncDir });
+
+  try {
+    const script = await fetch(new URL('/screen.js', url)).then(response => response.text());
+    const resizeSessionChanges = [];
+    const screen = {
+      style: {},
+      focus() {},
+      addEventListener() {},
+    };
+
+    class FakeRFB {
+      constructor() {
+        this._rfbConnectionState = 'connected';
+        this._viewOnly = false;
+        this._fbWidth = 1280;
+        this._fbHeight = 800;
+      }
+
+      addEventListener() {}
+
+      clipboardPasteFrom() {}
+
+      focus() {}
+
+      set resizeSession(value) {
+        this._resizeSession = value;
+        resizeSessionChanges.push(value);
+      }
+
+      get resizeSession() {
+        return this._resizeSession;
+      }
+    }
+
+    const context = {
+      FakeRFB,
+      document: {
+        title: 'ol-c VM',
+        getElementById(id) {
+          return {
+            screen,
+            'viewer-message': { textContent: '', hidden: true },
+          }[id];
+        },
+      },
+      navigator: {},
+      window: {
+        OLC_VM_SCREEN: { host: '127.0.0.1', port: 5720, audio: { enabled: false } },
+        location: { protocol: 'http:' },
+        addEventListener() {},
+        clearTimeout() {},
+        setTimeout() {
+          return 1;
+        },
+      },
+    };
+
+    vm.runInNewContext(
+      script.replace("import RFB from '/novnc/core/rfb.js';", 'const RFB = FakeRFB;'),
+      context,
+    );
+
+    assert.deepEqual(resizeSessionChanges, [ true ]);
   } finally {
     await stopServer(child);
     await rm(noVncDir, { recursive: true, force: true });

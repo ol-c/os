@@ -70,6 +70,8 @@ The source gate is intentionally slower. It appends the repo patch to pinned nix
 
 `launch-vm` uses a browser tab as the VM display. QEMU exposes the VM display through a local-only VNC WebSocket endpoint, and a small repo-owned viewer page uses pinned noVNC assets to render the VM screen in the browser. It also mounts this repo read-write inside the guest at `/source` using QEMU virtiofs, so the in-browser terminal can edit the same source tree that is visible on the host.
 
+The browser viewer requests actual VM framebuffer size changes from the browser viewport, not just browser-side scaling. noVNC sends VNC desktop-size requests down to QEMU as the page size changes, and the guest X session applies the resulting preferred RandR mode with `xrandr`. No resize command is posted to a viewer-local HTTP API.
+
 The browser viewer now also bridges guest audio into that same tab by default. `launch-vm` creates a per-VM local Pulse/PipeWire null sink, points QEMU at it, and the viewer page streams raw PCM from that sink's monitor into Web Audio after the first user gesture. Set `OLC_VM_AUDIO_MODE=none` to disable the bridge explicitly.
 
 The browser display path uses the repo-pinned patched QEMU package exposed as `.#qemu-olc`. The patch preserves horizontal wheel events from noVNC/QEMU VNC and carries them through the USB HID tablet path as AC Pan events. The browser frontend keeps QEMU vdagent clipboard support enabled, disables vdagent mouse forwarding, and disables legacy PS/2/vmport input so VNC pointer input reaches the patched USB tablet path. This build is separate from the VM image and can be built explicitly:

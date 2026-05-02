@@ -8,6 +8,7 @@
 - `edit` from an in-browser terminal opens `/edit`, and `edit <path>` opens a specific file.
 - The normal `./launch-vm` path uses a browser tab as the VM display through local-only QEMU VNC WebSocket plus pinned noVNC assets.
 - `./launch-vm` also bridges guest audio into that browser viewer through a local-only raw PCM stream captured from a per-VM Pulse/PipeWire sink.
+- The browser viewer follows the browser viewport with actual VM framebuffer size changes through noVNC/QEMU VNC resize negotiation; no resize command uses a viewer-local HTTP API. The guest X session applies QEMU's preferred RandR/EDID mode with `xrandr`.
 - The browser viewer supports text copy out of the VM and keyboard or browser-menu text paste into the VM through the QEMU vdagent clipboard path.
 - Firefox's hamburger menu includes ol-c restart and shutdown actions that call the localhost power API; guest shutdown leaves the browser viewer open with a local power-on button.
 - `launch-vm` also exposes a local-only QMP socket and prints it as `qmp socket:`.
@@ -79,6 +80,7 @@ Related design notes:
 - The current pending proof patch dry-runs cleanly against a packaged-only source baseline before it is refreshed in the repo.
 - `./build-vm` succeeds.
 - `./launch-vm` boots to the graphical browser surface and loads the localhost UI.
+- Live framebuffer resize validation passed on May 2, 2026: a VNC `SetDesktopSize(1024x768)` request to a rebuilt VM changed the QMP screenshot header from `1280x800` to `1024x768`.
 - A nested child built from `./build-vm` has been manually validated through Firefox-menu restart, re-login, Firefox-menu shutdown, viewer power-on, and re-login using the shared journal mirror plus browser BiDi checks.
 - The packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`.
 - The fast packaged Firefox output records `OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1`, `OLC_FIREFOX_FXA_SYNC_UI_PATCH_APPLIED=1`, and `OLC_FIREFOX_POWER_MENU_PATCH_APPLIED=1`.

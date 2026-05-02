@@ -833,7 +833,7 @@ function connectRfb() {
   const nextRfb = new RFB(screen, url, { credentials: {} });
   rfb = nextRfb;
   nextRfb.scaleViewport = true;
-  nextRfb.resizeSession = false;
+  nextRfb.resizeSession = true;
   nextRfb.focusOnClick = true;
 
   nextRfb.addEventListener('connect', () => {

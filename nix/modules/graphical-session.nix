@@ -55,8 +55,160 @@ let
     pkgs.xdotool
     pkgs.xorg.xauth
     pkgs.xorg.xinit
+    pkgs.xorg.xrandr
     pkgs.xorg.xsetroot
   ];
+  screenResizeWatcher = pkgs.writeShellScript "olc-screen-resize-watcher" ''
+    set -u
+
+    session_pid="''${1:-}"
+    min_width=320
+    min_height=240
+    max_width=4096
+    max_height=2160
+    last_rejected_target=""
+
+    log() {
+      printf 'olc-screen-resize-watcher %s\n' "$*"
+    }
+
+    while true; do
+      if [ -n "$session_pid" ] && ! kill -0 "$session_pid" 2>/dev/null; then
+        exit 0
+      fi
+
+      if ! query="$(${pkgs.xorg.xrandr}/bin/xrandr --verbose --prop 2>/dev/null)"; then
+        sleep 0.2
+        continue
+      fi
+
+      state="$(
+        printf '%s\n' "$query" | ${pkgs.gawk}/bin/awk '
+          function byte(hex, offset) {
+            return strtonum("0x" substr(hex, (offset * 2) + 1, 2))
+          }
+          function edid_size(hex, hactive_lo, hhigh, vactive_lo, vhigh, width, height) {
+            gsub(/[[:space:]]/, "", hex)
+            if (length(hex) < 144) {
+              return ""
+            }
+            if (byte(hex, 54) == 0 && byte(hex, 55) == 0) {
+              return ""
+            }
+            hactive_lo = byte(hex, 56)
+            hhigh = byte(hex, 58)
+            vactive_lo = byte(hex, 59)
+            vhigh = byte(hex, 61)
+            width = hactive_lo + (and(hhigh, 0xf0) * 16)
+            height = vactive_lo + (and(vhigh, 0xf0) * 16)
+            if (width > 0 && height > 0) {
+              return width "x" height
+            }
+            return ""
+          }
+          function finish_edid() {
+            if (reading_edid) {
+              edid_preferred = edid_size(edid_hex)
+              reading_edid = 0
+              edid_hex = ""
+            }
+          }
+          $2 == "connected" && output == "" {
+            output = $1
+            in_output = 1
+            next
+          }
+          /^[^[:space:]]/ {
+            finish_edid()
+            in_output = 0
+          }
+          in_output && /^[[:space:]]+EDID:/ {
+            reading_edid = 1
+            edid_hex = ""
+            next
+          }
+          reading_edid {
+            if ($1 ~ /^[0-9a-fA-F]+$/) {
+              edid_hex = edid_hex $1
+              next
+            }
+            finish_edid()
+          }
+          in_output && $1 ~ /^[0-9]+x[0-9]+$/ {
+            mode_by_size[$1] = $1
+            if ($0 ~ /\*/) {
+              current = $1
+              current_size = $1
+            }
+            if ($0 ~ /\+/) {
+              preferred = $1
+            }
+          }
+          END {
+            finish_edid()
+            if (output != "") {
+              edid_mode = mode_by_size[edid_preferred]
+              printf "%s\t%s\t%s\t%s\t%s\t%s\n", output, current, current_size, preferred, edid_preferred, edid_mode
+            }
+          }
+        '
+      )"
+
+      if [ -z "$state" ]; then
+        sleep 0.2
+        continue
+      fi
+
+      IFS=$'\t' read -r output current_mode current_size preferred_mode edid_preferred edid_mode <<< "$state"
+
+      target_mode=""
+      target_size=""
+      target_source=""
+      if [ -n "$edid_mode" ] && [ "$edid_preferred" != "$current_size" ]; then
+        target_mode="$edid_mode"
+        target_size="$edid_preferred"
+        target_source="edid-preferred"
+      elif [ -z "$edid_preferred" ] && [ -n "$preferred_mode" ] && [ "$preferred_mode" != "$current_mode" ]; then
+        target_mode="$preferred_mode"
+        target_size="$preferred_mode"
+        target_source="randr-marker"
+      fi
+
+      if [ -z "$target_mode" ]; then
+        sleep 0.2
+        continue
+      fi
+
+      if [[ ! "$target_size" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+        rejected_target="$output:$target_mode"
+        if [ "$rejected_target" != "$last_rejected_target" ]; then
+          log "rejecting output=$output target=$target_mode source=$target_source reason=invalid-mode-name"
+          last_rejected_target="$rejected_target"
+        fi
+        sleep 0.2
+        continue
+      fi
+
+      width="''${BASH_REMATCH[1]}"
+      height="''${BASH_REMATCH[2]}"
+      if (( width < min_width || width > max_width || height < min_height || height > max_height )); then
+        rejected_target="$output:$target_mode"
+        if [ "$rejected_target" != "$last_rejected_target" ]; then
+          log "rejecting output=$output target=$target_mode source=$target_source reason=outside-bounds"
+          last_rejected_target="$rejected_target"
+        fi
+        sleep 0.2
+        continue
+      fi
+
+      last_rejected_target=""
+      log "applying output=$output current=''${current_mode:-unknown} target=$target_mode source=$target_source"
+      if ! ${pkgs.xorg.xrandr}/bin/xrandr --output "$output" --mode "$target_mode"; then
+        log "apply_failed output=$output target=$target_mode source=$target_source"
+      fi
+      sleep 0.2
+    done
+  '';
   userSessionScript = pkgs.writeShellScript "olc-user-xsession" ''
     ${userXinitRc {
       startUrl = "https://localhost";
@@ -247,6 +399,7 @@ let
     export PS4='+greeter-xsession:''${LINENO}: '
     set -x
     xsetroot -solid "#0f172a"
+    ${screenResizeWatcher} "$$" &
     ${pkgs.spice-vdagent}/bin/spice-vdagent &
     matchbox-window-manager -use_titlebar no -use_cursor yes &
     ${greeterProfileScript}
@@ -299,6 +452,7 @@ let
     ${fastBootCheck}
     printf 'olc_fast_boot=%s\n' "$olc_fast_boot"
     xsetroot -solid "#0f172a"
+    ${screenResizeWatcher} "$$" &
     ${pkgs.spice-vdagent}/bin/spice-vdagent &
     matchbox-window-manager -use_titlebar no -use_cursor yes &
     ${userProfileScript}
