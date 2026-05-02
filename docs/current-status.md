@@ -12,6 +12,7 @@
 - Firefox's hamburger menu includes ol-c restart and shutdown actions that call the localhost power API; guest shutdown leaves the browser viewer open with a local power-on button.
 - `launch-vm` also exposes a local-only QMP socket and prints it as `qmp socket:`.
 - `launch-vm` coordinates expected guest shutdown/restart through a per-VM lifecycle directory under `/source/.olc-debug/vm-lifecycle`.
+- Non-VM installs skip the VM lifecycle request file and issue `systemctl reboot` or `systemctl poweroff` directly.
 - `launch-vm` can wait for the guest `olc-vm-ready` journal marker and surface readiness failures.
 - In-VM development uses a host-shared repo mounted at `/source` via `virtiofs`.
 - Nested `olc-launch-test-vm` launches default to a cheap child-boot path and print a reconnect URL for browser viewing.

@@ -217,7 +217,7 @@ This proof prefers image reuse over building a full image inside the parent VM. 
 
 `vm-screen/server.mjs` is the browser viewer used by the default launcher. It serves a local page and pinned noVNC assets; QEMU provides the VNC WebSocket endpoint directly, so this path does not require `remote-viewer` or `websockify`.
 
-The viewer is lifecycle-aware for guest-requested power actions. Firefox's hamburger menu can call the localhost power API to restart or shut down the guest. A restart should show the display reconnecting; a shutdown leaves the viewer open on a powered-off screen with a local `Power on` button that asks `launch-vm` to start QEMU again with the same runtime overlay.
+The viewer is lifecycle-aware for guest-requested power actions. Firefox's hamburger menu can call the localhost power API to restart or shut down the guest. A restart should show the display reconnecting; a shutdown leaves the viewer open on a powered-off screen with a local `Power on` button that asks `launch-vm` to start QEMU again with the same runtime overlay. On non-VM installs, the localhost power API skips the VM lifecycle handshake and directly invokes `systemctl reboot` or `systemctl poweroff`.
 
 `nix/ol-c.nix` is the current guest entry point. It imports focused modules from `nix/modules/`:
 - `base.nix` owns boot, qemu guest support, serial console, hostname, and NixOS state version

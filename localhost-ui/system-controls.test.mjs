@@ -159,6 +159,34 @@ test('real adapter records lifecycle request and invokes systemctl for power com
   }
 });
 
+test('real adapter skips lifecycle request when lifecycle is unavailable', async () => {
+  const base = join(process.cwd(), '.tmp-tests');
+  await mkdir(base, { recursive: true });
+  const dir = await mkdtemp(join(base, 'ol-c-power-command-test-'));
+  const systemctl = join(dir, 'systemctl');
+  const lifecycleRequestPath = join(dir, 'guest-request.json');
+  const systemctlArgsPath = join(dir, 'systemctl.args');
+  await writeFile(systemctl, `#!/bin/sh\nprintf '%s\\n' "$*" > ${JSON.stringify(systemctlArgsPath)}\n`);
+  await chmod(systemctl, 0o755);
+  const adapter = createRealSystemAdapter({
+    firefoxVersion: '149.0.2',
+    lifecycleRequestPath: null,
+    pactl: '/does/not/exist',
+    systemctl,
+  });
+
+  try {
+    const status = await adapter.power({ action: 'restart' });
+
+    assert.equal(status.power.lastAction, 'restart');
+    assert.equal(status.power.lifecycleState, 'restarting');
+    await assert.rejects(readFile(lifecycleRequestPath, 'utf8'), { code: 'ENOENT' });
+    assert.equal((await readFile(systemctlArgsPath, 'utf8')).trim(), 'reboot --no-block');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('fake adapter updates mutable controls', async () => {
   const adapter = createFakeSystemAdapter(createDefaultSystemStatus('all'));
 

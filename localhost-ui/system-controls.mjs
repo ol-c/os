@@ -276,7 +276,7 @@ async function readOlcLifecycleId() {
   }
 
   const serial = await readFile('/sys/class/dmi/id/product_serial', 'utf8').catch(() => '');
-  return parseOlcDmiSerial(serial.trim()).get('olc-lifecycle-id') || 'current';
+  return parseOlcDmiSerial(serial.trim()).get('olc-lifecycle-id') || null;
 }
 
 async function defaultLifecycleRequestPath() {
@@ -286,7 +286,18 @@ async function defaultLifecycleRequestPath() {
 
   const lifecycleRoot = process.env.OLC_VM_LIFECYCLE_ROOT || '/source/.olc-debug/vm-lifecycle';
   const lifecycleId = await readOlcLifecycleId();
+  if (!lifecycleId) {
+    return null;
+  }
   return `${lifecycleRoot}/${lifecycleId}/guest-request.json`;
+}
+
+async function resolveLifecycleRequestPath(options = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, 'lifecycleRequestPath')) {
+    return options.lifecycleRequestPath || null;
+  }
+
+  return defaultLifecycleRequestPath();
 }
 
 async function writeLifecycleRequest(path, action) {
@@ -639,8 +650,10 @@ export function createRealSystemAdapter(options = {}) {
       requireObject(command);
       validatePowerAction(command.action);
       const action = command.action;
-      const requestPath = options.lifecycleRequestPath ?? await defaultLifecycleRequestPath();
-      await writeLifecycleRequest(requestPath, action);
+      const requestPath = await resolveLifecycleRequestPath(options);
+      if (requestPath) {
+        await writeLifecycleRequest(requestPath, action);
+      }
       powerLifecycleState = action === 'restart' ? 'restarting' : 'shutting-down';
       lastPowerAction = action;
       const status = await getStatus();
