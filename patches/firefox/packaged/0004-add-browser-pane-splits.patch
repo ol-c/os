@@ -1,114 +1,17 @@
 diff --git a/browser/components/tabbrowser/content/drag-and-drop.js b/browser/components/tabbrowser/content/drag-and-drop.js
 --- a/browser/components/tabbrowser/content/drag-and-drop.js
 +++ b/browser/components/tabbrowser/content/drag-and-drop.js
-@@ -39,6 +39,151 @@
+@@ -44,6 +44,55 @@
      throw new Error(`Element "${element.tagName}" is not expected to move`);
    };
--
-+
-+  const SECUREOS_PANE_SPLIT_TARGET_PREF =
-+    "browser.olc.panes.splitTargetThicknessPx";
-+  const SECUREOS_PANE_SPLIT_TARGET_DEFAULT_PX = 96;
-+  const SECUREOS_PANE_SPLIT_TARGET_MIN_PX = 8;
-+  const SECUREOS_PANE_SPLIT_TARGET_MAX_PX = 512;
-+
+
 +  const gSecureOSPaneSplitDrag = {
-+    targetThickness() {
-+      let thickness;
-+      try {
-+        thickness = Services.prefs.getIntPref(
-+          SECUREOS_PANE_SPLIT_TARGET_PREF,
-+          SECUREOS_PANE_SPLIT_TARGET_DEFAULT_PX
-+        );
-+      } catch {
-+        thickness = SECUREOS_PANE_SPLIT_TARGET_DEFAULT_PX;
-+      }
-+
-+      return Math.min(
-+        SECUREOS_PANE_SPLIT_TARGET_MAX_PX,
-+        Math.max(SECUREOS_PANE_SPLIT_TARGET_MIN_PX, thickness)
-+      );
-+    },
-+
-+    availableRectForEvent(event) {
-+      try {
-+        let availX = {};
-+        let availY = {};
-+        let availWidth = {};
-+        let availHeight = {};
-+        event.screen.GetAvailRectDisplayPix(
-+          availX,
-+          availY,
-+          availWidth,
-+          availHeight
-+        );
-+        return {
-+          left: availX.value,
-+          top: availY.value,
-+          right: availX.value + availWidth.value,
-+          bottom: availY.value + availHeight.value,
-+        };
-+      } catch {
-+        return null;
-+      }
-+    },
-+
-+    directionForEvent(event) {
-+      let rect = this.availableRectForEvent(event);
-+      if (!rect) {
-+        return null;
-+      }
-+
-+      let thickness = this.targetThickness();
++    desktopPointForEvent(event) {
 +      let scale = window.devicePixelRatio / window.desktopToDeviceScale;
-+      let x = event.screenX * scale;
-+      let y = event.screenY * scale;
-+      let withinHorizontal =
-+        x >= rect.left - thickness && x <= rect.right + thickness;
-+      let withinVertical =
-+        y >= rect.top - thickness && y <= rect.bottom + thickness;
-+      let candidates = [];
-+
-+      if (withinVertical) {
-+        let leftDistance = Math.abs(x - rect.left);
-+        if (leftDistance <= thickness) {
-+          candidates.push({
-+            direction: "left",
-+            distance: leftDistance,
-+            priority: 1,
-+          });
-+        }
-+
-+        let rightDistance = Math.abs(x - rect.right);
-+        if (rightDistance <= thickness) {
-+          candidates.push({
-+            direction: "right",
-+            distance: rightDistance,
-+            priority: 1,
-+          });
-+        }
-+      }
-+
-+      if (withinHorizontal) {
-+        let bottomDistance = Math.abs(y - rect.bottom);
-+        if (bottomDistance <= thickness) {
-+          candidates.push({
-+            direction: "bottom",
-+            distance: bottomDistance,
-+            priority: 0,
-+          });
-+        }
-+      }
-+
-+      if (!candidates.length) {
-+        return null;
-+      }
-+
-+      candidates.sort(
-+        (first, second) =>
-+          first.distance - second.distance || first.priority - second.priority
-+      );
-+      return candidates[0].direction;
++      return {
++        x: Math.round(event.screenX * scale),
++        y: Math.round(event.screenY * scale),
++      };
 +    },
 +
 +    runPanectl(args, { allowMissing = false } = {}) {
@@ -135,18 +38,18 @@ diff --git a/browser/components/tabbrowser/content/drag-and-drop.js b/browser/co
 +      }
 +    },
 +
-+    prepareForEvent(event) {
-+      let direction = this.directionForEvent(event);
-+      if (!direction) {
-+        this.runPanectl(["clear-pending"], { allowMissing: true });
-+        return { direction: null, prepared: true };
-+      }
++    clearPending() {
++      this.runPanectl(["clear-pending"], { allowMissing: true });
++    },
 +
++    prepareForEvent(event) {
++      let point = this.desktopPointForEvent(event);
 +      return {
-+        direction,
-+        prepared: this.runPanectl(["prepare-split", direction], {
-+          allowMissing: true,
-+        }),
++        prepared: this.runPanectl([
++          "prepare-split-at",
++          String(point.x),
++          String(point.y),
++        ]),
 +      };
 +    },
 +  };
@@ -154,11 +57,12 @@ diff --git a/browser/components/tabbrowser/content/drag-and-drop.js b/browser/co
    window.TabDragAndDrop = class {
      #dragTime = 0;
      #pinnedDropIndicatorTimeout = null;
-@@ -754,6 +899,13 @@
+@@ -745,6 +794,15 @@
          }
        }
--
-+
+
++      // Accepted Firefox tab-bar drops return above with dt.dropEffect != "none";
++      // only unhandled tab drags become ol-c pane splits.
 +      let secureOSPaneSplit = gSecureOSPaneSplitDrag.prepareForEvent(event);
 +      if (!secureOSPaneSplit.prepared) {
 +        delete draggedTab._dragData;
@@ -169,29 +73,28 @@ diff --git a/browser/components/tabbrowser/content/drag-and-drop.js b/browser/co
        // screen.availLeft et. al. only check the screen that this window is on,
        // but we want to look at the screen the tab is being dropped onto.
        var screen = event.screen;
-@@ -813,6 +965,20 @@
-       left /= ourCssToDesktopScale;
-       top /= ourCssToDesktopScale;
--
-+
-+      if (secureOSPaneSplit.direction) {
-+        let detachedElementCount = draggedTab.multiselected
-+          ? gBrowser.selectedElements.length
-+          : 1;
-+        if (gBrowser.tabs.length == detachedElementCount) {
-+          gBrowser.addTrustedTab(BROWSER_NEW_TAB_URL, {
-+            skipAnimation: true,
-+            // Keep the source pane alive with the system page before the
-+            // dragged tab is adopted by the newly opened pane window.
-+            tabIndex: 0,
-+          });
-+        }
-+      }
-+
+@@ -807,7 +865,20 @@
+
        delete draggedTab._dragData;
--
+
+-      if (gBrowser.tabs.length == 1) {
++      if (secureOSPaneSplit.prepared) {
++        winWidth /= screenCssToDesktopScale;
++        winHeight /= screenCssToDesktopScale;
 +
-       if (gBrowser.tabs.length == 1) {
++        let props = {
++          screenX: left,
++          screenY: top,
++          suppressanimation: 1,
++          allowAdoptingAllTabs: 1,
++        };
++        if (!gBrowser.replaceTabsWithWindow(draggedTab, props)) {
++          gSecureOSPaneSplitDrag.clearPending();
++        }
++      } else if (gBrowser.tabs.length == 1) {
+         // resize _before_ move to ensure the window fits the new screen.  if
+         // the window is too large for its screen, the window manager may do
+         // automatic repositioning.
 diff --git a/browser/components/tabbrowser/content/tabbrowser.js b/browser/components/tabbrowser/content/tabbrowser.js
 --- a/browser/components/tabbrowser/content/tabbrowser.js
 +++ b/browser/components/tabbrowser/content/tabbrowser.js
@@ -208,18 +111,61 @@ diff --git a/browser/components/tabbrowser/content/tabbrowser.js b/browser/compo
 +            : closeSecureOSPane ||
 +              !window.toolbar.visible ||
                Services.prefs.getBoolPref("browser.tabs.closeWindowWithLastTab");
--
-+
+
          if (closeWindow) {
+@@ -6682,7 +6685,8 @@
+      *   Key-value pairs that will be serialized into the features string.
+      */
+     replaceTabWithWindow(aTab, aOptions = {}) {
+-      if (this.tabs.length == 1) {
++      let { allowAdoptingAllTabs = false, ...windowFeatures } = aOptions;
++      if (this.tabs.length == 1 && !allowAdoptingAllTabs) {
+         return null;
+       }
+       // TODO bug 1967925: Consider handling the case where aTab is a tab group
+@@ -6700,7 +6704,7 @@
+       args.appendElement(aTab.splitview ?? aTab);
+       return BrowserWindowTracker.openWindow({
+         private: PrivateBrowsingUtils.isWindowPrivate(window),
+-        features: Object.entries(aOptions)
++        features: Object.entries(windowFeatures)
+           .map(([key, value]) => `${key}=${value}`)
+           .join(","),
+         openerWindow: window,
+@@ -6714,6 +6718,7 @@
+      * in the current window, in which case this will do nothing.
+      */
+     replaceTabsWithWindow(contextTab, aOptions = {}) {
++      let { allowAdoptingAllTabs = false } = aOptions;
+       if (this.isTabGroupLabel(contextTab)) {
+         // TODO bug 1967937: Pass contextTab.group instead.
+         return this.replaceTabWithWindow(contextTab, aOptions);
+@@ -6726,7 +6731,7 @@
+         elements = [contextTab.splitview ?? contextTab];
+       }
+
+-      if (this.tabs.length == elements.length) {
++      if (this.tabs.length == elements.length && !allowAdoptingAllTabs) {
+         return null;
+       }
+
+@@ -6760,6 +6765,9 @@
+       }
+
+       let win = this.replaceTabWithWindow(selectedTab, aOptions);
++      if (!win) {
++        return null;
++      }
+       win.addEventListener(
+         "before-initial-tab-adopted",
+         () => {
 diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
 --- a/browser/base/content/browser.js
 +++ b/browser/base/content/browser.js
 @@ -569,6 +569,33 @@
--
-+
+
  gSecureOSPowerMenu.init();
--
-+
+
 +var gSecureOSPaneSplits = {
 +  browserPaneCount() {
 +    return BrowserWindowTracker.getOrderedWindows({

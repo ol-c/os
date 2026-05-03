@@ -506,7 +506,7 @@ PERL
       "$pane_split_patch" \
       browser/components/tabbrowser/content/drag-and-drop.js \
       drag-and-drop.js \
-      'gSecureOSPaneSplitDrag.prepareForEvent(event)'
+      'prepare-split-at'
 
     apply_source_patch_to_runtime_asset \
       "$pane_split_patch" \

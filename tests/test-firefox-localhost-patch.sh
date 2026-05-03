@@ -97,6 +97,8 @@ test_packaged_patch_ownership_split() {
   [[ "$power_contents" == *'appMenu-olc-shutdown-button'* ]] || fail "expected power menu packaged patch to add the shutdown menu item"
   [[ "$power_contents" == *'https://localhost/api/system/power'* ]] || fail "expected power menu packaged patch to call the localhost power API"
   [[ "$pane_contents" == *'gSecureOSPaneSplitDrag.prepareForEvent(event)'* ]] || fail "expected pane split packaged patch to own tab-drag pane targeting"
+  [[ "$pane_contents" == *'prepare-split-at'* ]] || fail "expected pane split packaged patch to target panes by drop point"
+  [[ "$pane_contents" == *'allowAdoptingAllTabs'* ]] || fail "expected pane split packaged patch to allow last-tab source pane moves"
   [[ "$pane_contents" == *'gSecureOSPaneSplits?.shouldCloseWindowWithLastTab'* ]] || fail "expected pane split packaged patch to own pane-aware last-tab closure"
   [[ "$pane_contents" == *'BrowserWindowTracker.getOrderedWindows'* ]] || fail "expected pane split packaged patch to own browser pane counting"
 }

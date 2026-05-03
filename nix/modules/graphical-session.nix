@@ -52,172 +52,7 @@ let
       pkgs.i3
       pkgs.jq
     ];
-    text = ''
-      set -euo pipefail
-
-      state_root="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-      state_dir="$state_root/ol-c-panes"
-      pending_file="$state_dir/pending-split.json"
-
-      log() {
-        printf 'olc-panectl %s\n' "$*" >&2
-      }
-
-      now_ms() {
-        date +%s%3N
-      }
-
-      clear_pending() {
-        rm -f "$pending_file"
-      }
-
-      focused_rect() {
-        i3-msg -t get_tree \
-          | jq -er '.. | objects | select(.focused? == true) | .rect | "\(.width) \(.height)"' \
-          | head -n 1
-      }
-
-      prepare_split() {
-        local direction="''${1:-}"
-        case "$direction" in
-          left|right|bottom)
-            ;;
-          *)
-            log "rejecting unknown split direction=$direction"
-            clear_pending
-            exit 2
-            ;;
-        esac
-
-        mkdir -p "$state_dir"
-
-        local rect width height
-        if ! rect="$(focused_rect)"; then
-          log "rejecting direction=$direction reason=missing-focused-i3-container"
-          clear_pending
-          exit 1
-        fi
-        read -r width height <<< "$rect"
-
-        local min_width="''${OLC_PANE_MIN_WIDTH_PX:-320}"
-        local min_height="''${OLC_PANE_MIN_HEIGHT_PX:-240}"
-        if ! [[ "$min_width" =~ ^[0-9]+$ ]]; then
-          min_width=320
-        fi
-        if ! [[ "$min_height" =~ ^[0-9]+$ ]]; then
-          min_height=240
-        fi
-
-        case "$direction" in
-          left|right)
-            if (( width < min_width * 2 )); then
-              log "rejecting direction=$direction reason=too-narrow width=$width min_width=$min_width"
-              clear_pending
-              exit 1
-            fi
-            i3-msg split h >/dev/null
-            ;;
-          bottom)
-            if (( height < min_height * 2 )); then
-              log "rejecting direction=$direction reason=too-short height=$height min_height=$min_height"
-              clear_pending
-              exit 1
-            fi
-            i3-msg split v >/dev/null
-            ;;
-        esac
-
-        printf '{"direction":"%s","createdMs":%s}\n' "$direction" "$(now_ms)" > "$pending_file"
-      }
-
-      firefox_window_event() {
-        local event="$1"
-        local class instance class_lc instance_lc
-        class="$(printf '%s\n' "$event" | jq -r '.container.window_properties.class? // ""')"
-        instance="$(printf '%s\n' "$event" | jq -r '.container.window_properties.instance? // ""')"
-        class_lc="$(printf '%s' "$class" | tr '[:upper:]' '[:lower:]')"
-        instance_lc="$(printf '%s' "$instance" | tr '[:upper:]' '[:lower:]')"
-        [ "$class_lc" = firefox ] || [ "$instance_lc" = firefox ]
-      }
-
-      apply_pending_to_window() {
-        local container_id="$1"
-        local pending direction created_ms ttl_ms age_ms
-
-        [ -s "$pending_file" ] || return 0
-        if ! pending="$(cat "$pending_file")"; then
-          clear_pending
-          return 0
-        fi
-        direction="$(printf '%s\n' "$pending" | jq -r '.direction? // ""')"
-        created_ms="$(printf '%s\n' "$pending" | jq -r '.createdMs? // 0')"
-        ttl_ms="''${OLC_PANE_PENDING_TTL_MS:-3000}"
-        if ! [[ "$ttl_ms" =~ ^[0-9]+$ ]]; then
-          ttl_ms=3000
-        fi
-
-        if ! [[ "$created_ms" =~ ^[0-9]+$ ]]; then
-          clear_pending
-          return 0
-        fi
-
-        age_ms=$(( $(now_ms) - created_ms ))
-        if (( age_ms > ttl_ms )); then
-          log "dropping stale pending split direction=$direction age_ms=$age_ms ttl_ms=$ttl_ms"
-          clear_pending
-          return 0
-        fi
-
-        case "$direction" in
-          left|right|bottom)
-            ;;
-          *)
-            clear_pending
-            return 0
-            ;;
-        esac
-
-        i3-msg "[con_id=$container_id] focus" >/dev/null || true
-        if [ "$direction" = left ]; then
-          i3-msg move left >/dev/null || true
-        fi
-        i3-msg "[con_id=$container_id] focus" >/dev/null || true
-        clear_pending
-      }
-
-      watch_windows() {
-        mkdir -p "$state_dir"
-        i3-msg -t subscribe -m '["window"]' \
-          | while IFS= read -r event; do
-              local change container_id
-              change="$(printf '%s\n' "$event" | jq -r '.change? // ""' 2>/dev/null || true)"
-              [ "$change" = new ] || continue
-              firefox_window_event "$event" || continue
-              container_id="$(printf '%s\n' "$event" | jq -r '.container.id? // empty' 2>/dev/null || true)"
-              [ -n "$container_id" ] || continue
-              apply_pending_to_window "$container_id"
-            done
-      }
-
-      command="''${1:-}"
-      shift || true
-      case "$command" in
-        prepare-split)
-          prepare_split "''${1:-}"
-          ;;
-        clear-pending)
-          mkdir -p "$state_dir"
-          clear_pending
-          ;;
-        watch)
-          watch_windows
-          ;;
-        *)
-          echo "usage: olc-panectl prepare-split <left|right|bottom>|clear-pending|watch" >&2
-          exit 2
-          ;;
-      esac
-    '';
+    text = builtins.readFile ../../tools/olc-panectl;
   };
   sessionPath = lib.makeBinPath [
     pkgs.coreutils
@@ -528,12 +363,6 @@ let
     user_pref("startup.homepage_welcome_url.additional", "");
     user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
     OLC_USERJS
-    olc_pane_split_target_px="''${OLC_PANE_SPLIT_TARGET_PX:-96}"
-    if ! [[ "$olc_pane_split_target_px" =~ ^[0-9]+$ ]]; then
-      olc_pane_split_target_px=96
-    fi
-    printf 'user_pref("browser.olc.panes.splitTargetThicknessPx", %s);\n' \
-      "$olc_pane_split_target_px" >> "$HOME/.mozilla/firefox/ol-c.default/user.js"
   '';
   greeterProfileScript = ''
     mkdir -p "$HOME/.mozilla/firefox/ol-c.greeter"
@@ -662,7 +491,6 @@ let
     }
 
     OLC_PANE_RESIZE_BORDER_PX="$(olc_uint "''${OLC_PANE_RESIZE_BORDER_PX:-8}" 8 0 32)"
-    OLC_PANE_SPLIT_TARGET_PX="$(olc_uint "''${OLC_PANE_SPLIT_TARGET_PX:-96}" 96 16 512)"
     OLC_PANE_MIN_WIDTH_PX="$(olc_uint "''${OLC_PANE_MIN_WIDTH_PX:-320}" 320 160 4096)"
     OLC_PANE_MIN_HEIGHT_PX="$(olc_uint "''${OLC_PANE_MIN_HEIGHT_PX:-240}" 240 120 2160)"
     OLC_PANE_PENDING_TTL_MS="$(olc_uint "''${OLC_PANE_PENDING_TTL_MS:-3000}" 3000 250 10000)"
@@ -670,7 +498,7 @@ let
     OLC_PANE_ACTIVE_BORDER_COLOR="$(olc_color "''${OLC_PANE_ACTIVE_BORDER_COLOR:-$OLC_PANE_BORDER_COLOR}" "$OLC_PANE_BORDER_COLOR")"
     OLC_PANE_INACTIVE_BORDER_COLOR="$(olc_color "''${OLC_PANE_INACTIVE_BORDER_COLOR:-$OLC_PANE_BORDER_COLOR}" "$OLC_PANE_BORDER_COLOR")"
     export OLC_PANECTL='${olcPanectl}/bin/olc-panectl'
-    export OLC_PANE_RESIZE_BORDER_PX OLC_PANE_SPLIT_TARGET_PX OLC_PANE_MIN_WIDTH_PX OLC_PANE_MIN_HEIGHT_PX OLC_PANE_PENDING_TTL_MS
+    export OLC_PANE_RESIZE_BORDER_PX OLC_PANE_MIN_WIDTH_PX OLC_PANE_MIN_HEIGHT_PX OLC_PANE_PENDING_TTL_MS
 
     xsetroot -solid "$OLC_PANE_BORDER_COLOR"
     ${screenResizeWatcher} "$$" &

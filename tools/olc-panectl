@@ -1,0 +1,280 @@
+set -euo pipefail
+
+state_root="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+state_dir="$state_root/ol-c-panes"
+pending_file="$state_dir/pending-split.json"
+
+log() {
+  printf 'olc-panectl %s\n' "$*" >&2
+}
+
+now_ms() {
+  date +%s%3N
+}
+
+clear_pending() {
+  rm -f "$pending_file"
+}
+
+valid_direction() {
+  case "${1:-}" in
+    left|right|top|bottom)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+focused_pane() {
+  i3-msg -t get_tree \
+    | jq -er 'first(.. | objects | select(.focused? == true) | [.id, .rect.width, .rect.height] | @tsv)'
+}
+
+target_pane_at() {
+  local x="$1"
+  local y="$2"
+
+  i3-msg -t get_tree \
+    | jq -er --argjson x "$x" --argjson y "$y" '
+        def lower: ascii_downcase;
+        def firefox_window:
+          ((.window_properties.class? // "" | lower) == "firefox") or
+          ((.window_properties.instance? // "" | lower) == "firefox");
+
+        [
+          .. | objects
+          | select(.window? != null)
+          | select(firefox_window)
+          | select(
+              .rect.x <= $x and $x < (.rect.x + .rect.width) and
+              .rect.y <= $y and $y < (.rect.y + .rect.height)
+            )
+          | {
+              id,
+              width: .rect.width,
+              height: .rect.height,
+              relX: ($x - .rect.x),
+              relY: ($y - .rect.y)
+            }
+        ]
+        | sort_by(.width * .height)
+        | first // empty
+        | [.id, .width, .height, .relX, .relY]
+        | @tsv
+      '
+}
+
+nearest_direction() {
+  local width="$1"
+  local height="$2"
+  local rel_x="$3"
+  local rel_y="$4"
+  local direction="left"
+  local distance="$rel_x"
+  local candidate
+
+  candidate=$(( width - rel_x ))
+  if (( candidate < distance )); then
+    direction="right"
+    distance="$candidate"
+  fi
+
+  if (( rel_y < distance )); then
+    direction="top"
+    distance="$rel_y"
+  fi
+
+  candidate=$(( height - rel_y ))
+  if (( candidate < distance )); then
+    direction="bottom"
+  fi
+
+  printf '%s\n' "$direction"
+}
+
+prepare_split_for_pane() {
+  local direction="$1"
+  local container_id="$2"
+  local width="$3"
+  local height="$4"
+
+  local min_width="${OLC_PANE_MIN_WIDTH_PX:-320}"
+  local min_height="${OLC_PANE_MIN_HEIGHT_PX:-240}"
+  if ! [[ "$min_width" =~ ^[0-9]+$ ]]; then
+    min_width=320
+  fi
+  if ! [[ "$min_height" =~ ^[0-9]+$ ]]; then
+    min_height=240
+  fi
+
+  case "$direction" in
+    left|right)
+      if (( width < min_width * 2 )); then
+        log "rejecting direction=$direction reason=too-narrow width=$width min_width=$min_width"
+        clear_pending
+        exit 1
+      fi
+      ;;
+    top|bottom)
+      if (( height < min_height * 2 )); then
+        log "rejecting direction=$direction reason=too-short height=$height min_height=$min_height"
+        clear_pending
+        exit 1
+      fi
+      ;;
+  esac
+
+  mkdir -p "$state_dir"
+
+  if ! i3-msg "[con_id=$container_id] focus" >/dev/null; then
+    log "rejecting direction=$direction reason=target-focus-failed con_id=$container_id"
+    clear_pending
+    exit 1
+  fi
+
+  case "$direction" in
+    left|right)
+      i3-msg split h >/dev/null
+      ;;
+    top|bottom)
+      i3-msg split v >/dev/null
+      ;;
+  esac
+
+  printf '{"direction":"%s","createdMs":%s,"targetConId":%s}\n' \
+    "$direction" "$(now_ms)" "$container_id" > "$pending_file"
+}
+
+prepare_split() {
+  local direction="${1:-}"
+  if ! valid_direction "$direction"; then
+    log "rejecting unknown split direction=$direction"
+    clear_pending
+    exit 2
+  fi
+
+  local pane container_id width height
+  if ! pane="$(focused_pane)"; then
+    log "rejecting direction=$direction reason=missing-focused-i3-container"
+    clear_pending
+    exit 1
+  fi
+  IFS=$'\t' read -r container_id width height <<< "$pane"
+
+  prepare_split_for_pane "$direction" "$container_id" "$width" "$height"
+}
+
+prepare_split_at() {
+  local x="${1:-}"
+  local y="${2:-}"
+  if ! [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]]; then
+    log "rejecting split point x=$x y=$y reason=invalid-coordinate"
+    clear_pending
+    exit 2
+  fi
+
+  local pane container_id width height rel_x rel_y direction
+  if ! pane="$(target_pane_at "$x" "$y")"; then
+    log "rejecting split point x=$x y=$y reason=missing-firefox-pane"
+    clear_pending
+    exit 1
+  fi
+  IFS=$'\t' read -r container_id width height rel_x rel_y <<< "$pane"
+  direction="$(nearest_direction "$width" "$height" "$rel_x" "$rel_y")"
+
+  prepare_split_for_pane "$direction" "$container_id" "$width" "$height"
+}
+
+firefox_window_event() {
+  local event="$1"
+  local class instance class_lc instance_lc
+  class="$(printf '%s\n' "$event" | jq -r '.container.window_properties.class? // ""')"
+  instance="$(printf '%s\n' "$event" | jq -r '.container.window_properties.instance? // ""')"
+  class_lc="$(printf '%s' "$class" | tr '[:upper:]' '[:lower:]')"
+  instance_lc="$(printf '%s' "$instance" | tr '[:upper:]' '[:lower:]')"
+  [ "$class_lc" = firefox ] || [ "$instance_lc" = firefox ]
+}
+
+apply_pending_to_window() {
+  local container_id="$1"
+  local pending direction created_ms ttl_ms age_ms
+
+  [ -s "$pending_file" ] || return 0
+  if ! pending="$(cat "$pending_file")"; then
+    clear_pending
+    return 0
+  fi
+  direction="$(printf '%s\n' "$pending" | jq -r '.direction? // ""')"
+  created_ms="$(printf '%s\n' "$pending" | jq -r '.createdMs? // 0')"
+  ttl_ms="${OLC_PANE_PENDING_TTL_MS:-3000}"
+  if ! [[ "$ttl_ms" =~ ^[0-9]+$ ]]; then
+    ttl_ms=3000
+  fi
+
+  if ! [[ "$created_ms" =~ ^[0-9]+$ ]]; then
+    clear_pending
+    return 0
+  fi
+
+  age_ms=$(( $(now_ms) - created_ms ))
+  if (( age_ms > ttl_ms )); then
+    log "dropping stale pending split direction=$direction age_ms=$age_ms ttl_ms=$ttl_ms"
+    clear_pending
+    return 0
+  fi
+
+  if ! valid_direction "$direction"; then
+    clear_pending
+    return 0
+  fi
+
+  i3-msg "[con_id=$container_id] focus" >/dev/null || true
+  case "$direction" in
+    left)
+      i3-msg move left >/dev/null || true
+      ;;
+    top)
+      i3-msg move up >/dev/null || true
+      ;;
+  esac
+  i3-msg "[con_id=$container_id] focus" >/dev/null || true
+  clear_pending
+}
+
+watch_windows() {
+  mkdir -p "$state_dir"
+  i3-msg -t subscribe -m '["window"]' \
+    | while IFS= read -r event; do
+        local change container_id
+        change="$(printf '%s\n' "$event" | jq -r '.change? // ""' 2>/dev/null || true)"
+        [ "$change" = new ] || continue
+        firefox_window_event "$event" || continue
+        container_id="$(printf '%s\n' "$event" | jq -r '.container.id? // empty' 2>/dev/null || true)"
+        [ -n "$container_id" ] || continue
+        apply_pending_to_window "$container_id"
+      done
+}
+
+command="${1:-}"
+shift || true
+case "$command" in
+  prepare-split)
+    prepare_split "${1:-}"
+    ;;
+  prepare-split-at)
+    prepare_split_at "${1:-}" "${2:-}"
+    ;;
+  clear-pending)
+    mkdir -p "$state_dir"
+    clear_pending
+    ;;
+  watch)
+    watch_windows
+    ;;
+  *)
+    echo "usage: olc-panectl prepare-split <left|right|top|bottom>|prepare-split-at <x> <y>|clear-pending|watch" >&2
+    exit 2
+    ;;
+esac

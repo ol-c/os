@@ -11,7 +11,7 @@
 - The browser viewer follows the browser viewport with actual VM framebuffer size changes through noVNC/QEMU VNC resize negotiation; no resize command uses a viewer-local HTTP API. The guest X session applies QEMU's preferred RandR/EDID mode with `xrandr`.
 - The browser viewer supports text copy out of the VM and keyboard or browser-menu text paste into the VM through the QEMU vdagent clipboard path.
 - Firefox's hamburger menu includes ol-c restart and shutdown actions that call the localhost power API; guest shutdown leaves the browser viewer open with a local power-on button.
-- Normal Firefox sessions run under i3-backed browser panes; tab drags into the configured left, right, or bottom edge target regions prepare a pane split, and closing the last tab in a non-final pane removes that pane.
+- Normal Firefox sessions run under i3-backed browser panes; dropping a dragged tab onto another Firefox tab bar uses native Firefox tab transfer, while dropping over pane content or non-tabbar chrome splits the pane under the pointer toward the nearest left, right, top, or bottom edge.
 - `launch-vm` also exposes a local-only QMP socket and prints it as `qmp socket:`.
 - `launch-vm` coordinates expected guest shutdown/restart through a per-VM lifecycle directory under `/source/.olc-debug/vm-lifecycle`.
 - Non-VM installs skip the VM lifecycle request file and issue `systemctl reboot` or `systemctl poweroff` directly.
@@ -28,7 +28,7 @@ Active milestone:
 - Milestone 7.
 
 Immediate next task:
-- Decide the next browser-pane polish target after live i3 validation, such as automated GUI coverage, pane-session restore, or split affordance tuning.
+- Decide the next browser-pane polish target after live natural-drop validation, such as automated GUI coverage, pane-session restore, or split affordance tuning.
 
 Current Milestone 6 direction:
 - Make the standard Firefox source-tree loop the primary development path for Firefox behavior changes.
@@ -74,6 +74,7 @@ Related design notes:
   - `bash tests/test-build-firefox-remote.sh`
   - `bash tests/test-firefox-localhost-patch.sh`
   - `bash tests/test-browser-pane-splits.sh`
+  - `bash tests/test-olc-panectl.sh`
   - `bash tests/test-olc-firefox-source.sh`
 - The recommended shared source-tree loop is documented in `README.md` and `docs/firefox-source-workflow-plan.md`.
 - The current dev-only proof patch adds an appearance toggle button beside the unified extensions button from `patches/firefox/pending/0003-add-plugin-button-dev-icon.patch`.
@@ -83,7 +84,8 @@ Related design notes:
 - `./build-vm` succeeds.
 - `./launch-vm` boots to the graphical browser surface and loads the localhost UI.
 - Live framebuffer resize validation passed on May 2, 2026: a VNC `SetDesktopSize(1024x768)` request to a rebuilt VM changed the QMP screenshot header from `1280x800` to `1024x768`.
-- Live browser-pane validation passed in a nested embedded VM on May 2, 2026: a rebuilt image booted to a normal Firefox session under i3; QMP-driven tab drags created bottom, right, and left pane splits; closing the last tab in a non-final pane removed that pane; closing the final pane's last tab kept Firefox open on the System page; dragging the horizontal i3 resize border changed the top/bottom pane heights.
+- Earlier live browser-pane validation passed in a nested embedded VM on May 2, 2026: a rebuilt image booted to a normal Firefox session under i3; QMP-driven tab drags created bottom, right, and left pane splits; closing the last tab in a non-final pane removed that pane; closing the final pane's last tab kept Firefox open on the System page; dragging the horizontal i3 resize border changed the top/bottom pane heights.
+- Live natural pane-drop validation passed in a nested embedded VM on May 3, 2026: a rebuilt image booted to setup, a throwaway admin was created, the normal Firefox session launched under i3, QMP-driven tab drags split a tab out of the source pane into a right pane, dragged that tab back onto another Firefox tab bar without creating a pane, created a top split from an upper content drop, and moved the last tab out of the top pane into a new right split while the old top pane closed.
 - A nested child built from `./build-vm` has been manually validated through Firefox-menu restart, re-login, Firefox-menu shutdown, viewer power-on, and re-login using the shared journal mirror plus browser BiDi checks.
 - The packaged Firefox build succeeds and reports `Mozilla Firefox 149.0.2`.
 - The fast packaged Firefox output records `OLC_FIREFOX_LOCALHOST_PATCH_APPLIED=1`, `OLC_FIREFOX_FXA_SYNC_UI_PATCH_APPLIED=1`, `OLC_FIREFOX_POWER_MENU_PATCH_APPLIED=1`, and `OLC_FIREFOX_PANE_SPLIT_PATCH_APPLIED=1`.
