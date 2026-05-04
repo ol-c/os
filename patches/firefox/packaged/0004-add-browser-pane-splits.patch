@@ -1,17 +1,33 @@
 diff --git a/browser/components/tabbrowser/content/drag-and-drop.js b/browser/components/tabbrowser/content/drag-and-drop.js
 --- a/browser/components/tabbrowser/content/drag-and-drop.js
 +++ b/browser/components/tabbrowser/content/drag-and-drop.js
-@@ -44,6 +44,55 @@
+@@ -44,6 +44,75 @@
      throw new Error(`Element "${element.tagName}" is not expected to move`);
    };
 
 +  const gSecureOSPaneSplitDrag = {
++    desktopScale() {
++      return window.devicePixelRatio / window.desktopToDeviceScale;
++    },
++
 +    desktopPointForEvent(event) {
-+      let scale = window.devicePixelRatio / window.desktopToDeviceScale;
++      let scale = this.desktopScale();
 +      return {
 +        x: Math.round(event.screenX * scale),
 +        y: Math.round(event.screenY * scale),
 +      };
++    },
++
++    sourcePointForWindow() {
++      let scale = this.desktopScale();
++      return {
++        x: Math.round((window.screenX + window.outerWidth / 2) * scale),
++        y: Math.round((window.screenY + window.outerHeight / 2) * scale),
++      };
++    },
++
++    sourceWillCloseAfterDrag() {
++      return gBrowser.tabs.length == 1 ? "1" : "0";
 +    },
 +
 +    runPanectl(args, { allowMissing = false } = {}) {
@@ -44,11 +60,15 @@ diff --git a/browser/components/tabbrowser/content/drag-and-drop.js b/browser/co
 +
 +    prepareForEvent(event) {
 +      let point = this.desktopPointForEvent(event);
++      let sourcePoint = this.sourcePointForWindow();
 +      return {
 +        prepared: this.runPanectl([
 +          "prepare-split-at",
 +          String(point.x),
 +          String(point.y),
++          String(sourcePoint.x),
++          String(sourcePoint.y),
++          this.sourceWillCloseAfterDrag(),
 +        ]),
 +      };
 +    },

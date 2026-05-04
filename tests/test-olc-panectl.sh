@@ -70,6 +70,39 @@ write_two_pane_tree() {
 JSON
 }
 
+write_three_narrow_pane_tree() {
+  cat > "${CASE_TMP}/tree.json" <<'JSON'
+{
+  "id": 1,
+  "focused": false,
+  "rect": {"x": 0, "y": 0, "width": 1920, "height": 900},
+  "nodes": [
+    {
+      "id": 10,
+      "focused": false,
+      "window": 1001,
+      "rect": {"x": 0, "y": 0, "width": 480, "height": 900},
+      "window_properties": {"class": "Firefox", "instance": "firefox"}
+    },
+    {
+      "id": 11,
+      "focused": true,
+      "window": 1002,
+      "rect": {"x": 480, "y": 0, "width": 480, "height": 900},
+      "window_properties": {"class": "Firefox", "instance": "firefox"}
+    },
+    {
+      "id": 12,
+      "focused": false,
+      "window": 1003,
+      "rect": {"x": 960, "y": 0, "width": 960, "height": 900},
+      "window_properties": {"class": "Firefox", "instance": "firefox"}
+    }
+  ]
+}
+JSON
+}
+
 run_panectl() {
   PATH="${CASE_TMP}/fakebin:$PATH" \
     XDG_RUNTIME_DIR="${CASE_TMP}/runtime" \
@@ -129,22 +162,52 @@ test_prepare_split_at_rejects_missing_target() {
   assert_log_contains "-t get_tree"
 }
 
-test_prepare_split_at_rejects_too_small_target() {
-  local status
+test_prepare_split_at_allows_narrow_target() {
+  setup_case
+  write_three_narrow_pane_tree
+
+  run_panectl prepare-split-at 10 450 720 450 1
+
+  [[ "$(jq -r '.direction' "$(pending_file)")" = left ]] || fail "expected narrow left split"
+  [[ "$(jq -r '.targetConId' "$(pending_file)")" = 10 ]] || fail "expected narrow target pane 10"
+  assert_log_contains "[con_id=10] focus"
+  assert_log_contains "split h"
+}
+
+test_prepare_split_at_retargets_closing_source_to_adjacent_left_pane() {
   setup_case
   write_two_pane_tree
 
-  set +e
-  PATH="${CASE_TMP}/fakebin:$PATH" \
-    XDG_RUNTIME_DIR="${CASE_TMP}/runtime" \
-    OLC_PANE_MIN_WIDTH_PX=500 \
-    "${TEST_FAKE_BASH}" "$SCRIPT_PATH" prepare-split-at 810 450 >/dev/null 2>&1
-  status=$?
-  set -e
+  run_panectl prepare-split-at 810 450 1200 450 1 2>/dev/null
 
-  [[ "$status" -ne 0 ]] || fail "expected too-small target to fail"
-  [[ ! -e "$(pending_file)" ]] || fail "expected no pending split after size rejection"
-  ! grep -Fxq -- "split h" "${CASE_TMP}/i3.log" || fail "expected rejected target not to split"
+  [[ "$(jq -r '.direction' "$(pending_file)")" = left ]] || fail "expected left split"
+  [[ "$(jq -r '.targetConId' "$(pending_file)")" = 10 ]] || fail "expected closing source split to retarget pane 10"
+  assert_log_contains "[con_id=10] focus"
+  assert_log_contains "split h"
+}
+
+test_prepare_split_at_retargets_closing_source_to_adjacent_right_pane() {
+  setup_case
+  write_two_pane_tree
+
+  run_panectl prepare-split-at 790 450 400 450 1 2>/dev/null
+
+  [[ "$(jq -r '.direction' "$(pending_file)")" = right ]] || fail "expected right split"
+  [[ "$(jq -r '.targetConId' "$(pending_file)")" = 11 ]] || fail "expected closing source split to retarget pane 11"
+  assert_log_contains "[con_id=11] focus"
+  assert_log_contains "split h"
+}
+
+test_prepare_split_at_keeps_nonclosing_source_target() {
+  setup_case
+  write_two_pane_tree
+
+  run_panectl prepare-split-at 810 450 1200 450 0
+
+  [[ "$(jq -r '.direction' "$(pending_file)")" = left ]] || fail "expected left split"
+  [[ "$(jq -r '.targetConId' "$(pending_file)")" = 11 ]] || fail "expected non-closing source split to keep pane 11"
+  assert_log_contains "[con_id=11] focus"
+  assert_log_contains "split h"
 }
 
 test_watch_moves_new_left_and_top_panes() {
@@ -175,7 +238,10 @@ trap cleanup_case EXIT
 test_prepare_split_at_targets_pane_under_pointer
 test_prepare_split_at_supports_top_edge
 test_prepare_split_at_rejects_missing_target
-test_prepare_split_at_rejects_too_small_target
+test_prepare_split_at_allows_narrow_target
+test_prepare_split_at_retargets_closing_source_to_adjacent_left_pane
+test_prepare_split_at_retargets_closing_source_to_adjacent_right_pane
+test_prepare_split_at_keeps_nonclosing_source_target
 test_watch_moves_new_left_and_top_panes
 
 echo "PASS: olc-panectl"

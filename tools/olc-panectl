@@ -53,6 +53,8 @@ target_pane_at() {
             )
           | {
               id,
+              x: .rect.x,
+              y: .rect.y,
               width: .rect.width,
               height: .rect.height,
               relX: ($x - .rect.x),
@@ -61,7 +63,65 @@ target_pane_at() {
         ]
         | sort_by(.width * .height)
         | first // empty
-        | [.id, .width, .height, .relX, .relY]
+        | [.id, .width, .height, .relX, .relY, .x, .y]
+        | @tsv
+      '
+}
+
+adjacent_pane_in_direction() {
+  local source_id="$1"
+  local source_x="$2"
+  local source_y="$3"
+  local source_width="$4"
+  local source_height="$5"
+  local direction="$6"
+
+  i3-msg -t get_tree \
+    | jq -er \
+        --argjson sourceId "$source_id" \
+        --argjson sx "$source_x" \
+        --argjson sy "$source_y" \
+        --argjson sw "$source_width" \
+        --argjson sh "$source_height" \
+        --arg direction "$direction" '
+        def lower: ascii_downcase;
+        def firefox_window:
+          ((.window_properties.class? // "" | lower) == "firefox") or
+          ((.window_properties.instance? // "" | lower) == "firefox");
+        def min2(a; b): if a < b then a else b end;
+        def max2(a; b): if a > b then a else b end;
+        def overlap(a1; a2; b1; b2): min2(a2; b2) - max2(a1; b1);
+
+        [
+          .. | objects
+          | select(.window? != null)
+          | select(firefox_window)
+          | select(.id != $sourceId)
+          | {
+              id,
+              width: .rect.width,
+              height: .rect.height,
+              x: .rect.x,
+              y: .rect.y,
+              right: (.rect.x + .rect.width),
+              bottom: (.rect.y + .rect.height)
+            }
+          | . + (
+              if $direction == "left" then
+                { gap: ($sx - .right), overlap: overlap($sy; $sy + $sh; .y; .bottom) }
+              elif $direction == "right" then
+                { gap: (.x - ($sx + $sw)), overlap: overlap($sy; $sy + $sh; .y; .bottom) }
+              elif $direction == "top" then
+                { gap: ($sy - .bottom), overlap: overlap($sx; $sx + $sw; .x; .right) }
+              else
+                { gap: (.y - ($sy + $sh)), overlap: overlap($sx; $sx + $sw; .x; .right) }
+              end
+            )
+          | select(.gap >= 0 and .overlap > 0)
+        ]
+        | sort_by(.gap, -(.overlap), .id)
+        | first // empty
+        | [.id, .width, .height]
         | @tsv
       '
 }
@@ -97,34 +157,6 @@ nearest_direction() {
 prepare_split_for_pane() {
   local direction="$1"
   local container_id="$2"
-  local width="$3"
-  local height="$4"
-
-  local min_width="${OLC_PANE_MIN_WIDTH_PX:-320}"
-  local min_height="${OLC_PANE_MIN_HEIGHT_PX:-240}"
-  if ! [[ "$min_width" =~ ^[0-9]+$ ]]; then
-    min_width=320
-  fi
-  if ! [[ "$min_height" =~ ^[0-9]+$ ]]; then
-    min_height=240
-  fi
-
-  case "$direction" in
-    left|right)
-      if (( width < min_width * 2 )); then
-        log "rejecting direction=$direction reason=too-narrow width=$width min_width=$min_width"
-        clear_pending
-        exit 1
-      fi
-      ;;
-    top|bottom)
-      if (( height < min_height * 2 )); then
-        log "rejecting direction=$direction reason=too-short height=$height min_height=$min_height"
-        clear_pending
-        exit 1
-      fi
-      ;;
-  esac
 
   mkdir -p "$state_dir"
 
@@ -175,14 +207,41 @@ prepare_split_at() {
     exit 2
   fi
 
-  local pane container_id width height rel_x rel_y direction
+  local source_x="${3:-}"
+  local source_y="${4:-}"
+  local source_will_close="${5:-0}"
+  if [[ -n "$source_x$source_y" ]] && ! [[ "$source_x" =~ ^[0-9]+$ && "$source_y" =~ ^[0-9]+$ ]]; then
+    log "rejecting split point x=$x y=$y reason=invalid-source-coordinate source_x=$source_x source_y=$source_y"
+    clear_pending
+    exit 2
+  fi
+  if ! [[ "$source_will_close" =~ ^[01]$ ]]; then
+    source_will_close=0
+  fi
+
+  local pane container_id width height rel_x rel_y _target_x _target_y direction
   if ! pane="$(target_pane_at "$x" "$y")"; then
     log "rejecting split point x=$x y=$y reason=missing-firefox-pane"
     clear_pending
     exit 1
   fi
-  IFS=$'\t' read -r container_id width height rel_x rel_y <<< "$pane"
+  IFS=$'\t' read -r container_id width height rel_x rel_y _target_x _target_y <<< "$pane"
   direction="$(nearest_direction "$width" "$height" "$rel_x" "$rel_y")"
+
+  # A last-tab drag from a pane onto that same pane's inner edge would otherwise
+  # split beside the pane that is about to close, producing no visible reorder.
+  if [[ "$source_will_close" = 1 && -n "$source_x" && -n "$source_y" ]]; then
+    local source_pane source_id source_width source_height _source_rel_x _source_rel_y source_rect_x source_rect_y adjacent_pane
+    if source_pane="$(target_pane_at "$source_x" "$source_y")"; then
+      IFS=$'\t' read -r source_id source_width source_height _source_rel_x _source_rel_y source_rect_x source_rect_y <<< "$source_pane"
+      if [[ "$source_id" = "$container_id" ]]; then
+        if adjacent_pane="$(adjacent_pane_in_direction "$source_id" "$source_rect_x" "$source_rect_y" "$source_width" "$source_height" "$direction")"; then
+          IFS=$'\t' read -r container_id width height <<< "$adjacent_pane"
+          log "retargeting closing source split direction=$direction source_con_id=$source_id target_con_id=$container_id"
+        fi
+      fi
+    fi
+  fi
 
   prepare_split_for_pane "$direction" "$container_id" "$width" "$height"
 }
@@ -264,7 +323,7 @@ case "$command" in
     prepare_split "${1:-}"
     ;;
   prepare-split-at)
-    prepare_split_at "${1:-}" "${2:-}"
+    prepare_split_at "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}"
     ;;
   clear-pending)
     mkdir -p "$state_dir"
