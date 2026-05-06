@@ -57,9 +57,16 @@ Question this milestone answers:
 Goal:
 - Decide whether developing ol-c from inside ol-c is a primary workflow or a later capability.
 
+First proof:
+- Provide a repo-built CLI installer ISO with a guarded, partition-aware installer for UEFI hardware.
+- Use only explicitly selected unallocated GPT free space; do not resize, move, delete, or format existing partitions.
+- Keep this as a developer self-hosting proof, not the later non-developer verified installer path.
+- Enable NetworkManager Wi-Fi, preserve the installed system source under `/etc/ol-c/source`, and allow developer checkouts under user home directories after first boot.
+
 Success criteria:
 - “Develop inside the OS” is defined concretely.
 - Editing, building, testing, and nested-virtualization constraints are understood.
+- First hardware install, boot, Wi-Fi, installed-source, and post-boot developer-checkout constraints are understood.
 - We decide whether self-hosting is primary or deferred.
 
 Question this milestone answers:

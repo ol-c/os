@@ -1,0 +1,340 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SELF_PATH="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0")"
+ROOT_DIR="$(dirname -- "$SELF_PATH")"
+
+usage() {
+  cat <<'EOF'
+Usage: make-install-usb [--iso PATH] [options]
+
+Build or write an installer ISO to a removable USB memory stick.
+
+Options:
+  --iso PATH          ISO image to write. When omitted, builds
+                      .#ol-c-installer-iso from this repo.
+  --dry-run           List targets and print the write plan without writing.
+  --help              Show this help text.
+
+Safety model:
+  - Only lists whole disks with TYPE=disk, TRAN=usb, RM=1, and RO=0.
+  - Does not list internal disks or USB-attached non-removable SSD/HDD devices.
+  - Writes to the whole selected device, never to a partition.
+  - Refuses to write if the selected device or its partitions are mounted.
+  - Builds and plans as the calling user; only the final device write needs root.
+  - Requires an exact confirmation phrase before writing.
+EOF
+}
+
+fail() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
+}
+
+interactive_enabled() {
+  [[ -t 0 && -t 1 ]]
+}
+
+read_prompt() {
+  local prompt="$1"
+  local default_value="${2:-}"
+  local reply
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s [%s]: ' "$prompt" "$default_value" >&2
+  else
+    printf '%s: ' "$prompt" >&2
+  fi
+
+  if ! read -r reply; then
+    fail "unable to read interactive input"
+  fi
+
+  if [[ -z "$reply" ]]; then
+    printf '%s\n' "$default_value"
+  else
+    printf '%s\n' "$reply"
+  fi
+}
+
+read_number_choice() {
+  local prompt="$1"
+  local max="$2"
+  local default_value="${3:-1}"
+  local reply
+
+  while true; do
+    reply="$(read_prompt "$prompt" "$default_value")"
+    if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= max )); then
+      printf '%s\n' "$reply"
+      return
+    fi
+    echo "Enter a number from 1 to ${max}." >&2
+  done
+}
+
+field_value() {
+  local line="$1"
+  local key="$2"
+  sed -n "s/.*${key}=\"\\([^\"]*\\)\".*/\\1/p" <<< "$line"
+}
+
+format_bytes() {
+  local bytes="$1"
+  awk -v bytes="$bytes" 'BEGIN {
+    split("B KiB MiB GiB TiB", unit, " ");
+    value = bytes + 0;
+    unit_index = 1;
+    while (value >= 1024 && unit_index < 5) {
+      value = value / 1024;
+      unit_index++;
+    }
+    if (unit_index == 1) {
+      printf "%d %s", value, unit[unit_index];
+    } else {
+      printf "%.2f %s", value, unit[unit_index];
+    }
+  }'
+}
+
+resolve_iso_path() {
+  local input="$1"
+  [[ -n "$input" ]] || fail "--iso is required"
+  [[ -f "$input" ]] || fail "ISO file not found: $input"
+  [[ -r "$input" ]] || fail "ISO file is not readable: $input"
+  (
+    cd "$(dirname -- "$input")"
+    printf '%s/%s\n' "$(pwd)" "$(basename -- "$input")"
+  )
+}
+
+resolve_built_iso_path() {
+  local target out_path iso_count
+
+  require_command nix
+  target="${OLC_INSTALLER_ISO_TARGET:-.#ol-c-installer-iso}"
+  out_path="$(cd "$ROOT_DIR" && nix build "$target" --print-out-paths --no-link)"
+  mapfile -t BUILT_ISO_CHOICES < <(
+    find "$out_path" -maxdepth 2 -type f -name '*.iso' |
+      LC_ALL=C sort
+  )
+  iso_count="${#BUILT_ISO_CHOICES[@]}"
+  if (( iso_count == 0 )); then
+    fail "built installer output does not contain an ISO: $out_path"
+  fi
+  if (( iso_count > 1 )); then
+    printf 'error: built installer output contains multiple ISO files:\n' >&2
+    printf '  %s\n' "${BUILT_ISO_CHOICES[@]}" >&2
+    exit 1
+  fi
+  printf '%s\n' "${BUILT_ISO_CHOICES[0]}"
+}
+
+device_has_mounts() {
+  local device="$1"
+  lsblk -nr -o MOUNTPOINTS "$device" 2>/dev/null | sed '/^[[:space:]]*$/d' | grep -q .
+}
+
+collect_usb_sticks() {
+  local line path type tran rm ro size model vendor
+
+  USB_CHOICES=()
+  while IFS= read -r line; do
+    path="$(field_value "$line" PATH)"
+    type="$(field_value "$line" TYPE)"
+    tran="$(field_value "$line" TRAN)"
+    rm="$(field_value "$line" RM)"
+    ro="$(field_value "$line" RO)"
+    size="$(field_value "$line" SIZE)"
+    model="$(field_value "$line" MODEL)"
+    vendor="$(field_value "$line" VENDOR)"
+
+    [[ "$type" == "disk" ]] || continue
+    [[ "$tran" == "usb" ]] || continue
+    [[ "$rm" == "1" ]] || continue
+    [[ "$ro" == "0" ]] || continue
+    [[ -n "$path" && -n "$size" ]] || continue
+
+    USB_CHOICES+=("${path}"$'\t'"${size}"$'\t'"${vendor}"$'\t'"${model}")
+  done < <(lsblk -P -b -dn -o PATH,TYPE,TRAN,RM,RO,SIZE,VENDOR,MODEL)
+}
+
+choose_target() {
+  local index line path size vendor model choice mounted_text
+
+  collect_usb_sticks
+  ((${#USB_CHOICES[@]} > 0)) || fail "no removable USB memory sticks found"
+
+  echo "Removable USB memory sticks:" >&2
+  index=1
+  for line in "${USB_CHOICES[@]}"; do
+    IFS=$'\t' read -r path size vendor model <<< "$line"
+    mounted_text="no"
+    if device_has_mounts "$path"; then
+      mounted_text="yes"
+    fi
+    printf '  %s. %s  size=%s  mounted=%s' "$index" "$path" "$(format_bytes "$size")" "$mounted_text" >&2
+    if [[ -n "$vendor$model" ]]; then
+      printf '  device=%s %s' "$vendor" "$model" >&2
+    fi
+    printf '\n' >&2
+    index=$((index + 1))
+  done
+
+  choice="$(read_number_choice "Select USB stick to overwrite" "${#USB_CHOICES[@]}" 1)"
+  IFS=$'\t' read -r TARGET_DEVICE TARGET_SIZE TARGET_VENDOR TARGET_MODEL <<< "${USB_CHOICES[$((choice - 1))]}"
+}
+
+print_plan() {
+  cat <<EOF
+USB installer write plan
+iso:       ${ISO_PATH}
+target:    ${TARGET_DEVICE}
+size:      $(format_bytes "$TARGET_SIZE")
+device:    ${TARGET_VENDOR} ${TARGET_MODEL}
+mode:      $([[ "$DRY_RUN" == "1" ]] && printf dry-run || printf write)
+
+This will overwrite the whole target device:
+  ${TARGET_DEVICE}
+EOF
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    cat <<'EOF'
+
+dry-run only: no USB device was written.
+EOF
+  fi
+}
+
+confirm_write() {
+  local expected confirmation
+  expected="WRITE ISO to ${TARGET_DEVICE}"
+
+  if [[ "$WRITE_CONFIRMED" == "1" || "${OLC_USB_CONFIRM:-}" == "$expected" ]]; then
+    return
+  fi
+
+  cat >&2 <<EOF
+
+About to overwrite ${TARGET_DEVICE} with:
+  ${ISO_PATH}
+
+Type exactly this phrase to continue:
+  ${expected}
+EOF
+  read -r confirmation
+  [[ "$confirmation" == "$expected" ]] || fail "confirmation did not match; aborting"
+}
+
+choose_privilege_helper() {
+  if command -v run0 >/dev/null 2>&1; then
+    PRIVILEGE_HELPER=(run0)
+  elif command -v sudo >/dev/null 2>&1; then
+    PRIVILEGE_HELPER=(sudo)
+  elif command -v doas >/dev/null 2>&1; then
+    PRIVILEGE_HELPER=(doas)
+  elif command -v pkexec >/dev/null 2>&1; then
+    PRIVILEGE_HELPER=(pkexec)
+  else
+    fail "writing the USB device requires root or a privilege helper (run0, sudo, doas, pkexec)"
+  fi
+}
+
+exec_privileged_write() {
+  choose_privilege_helper
+  exec "${PRIVILEGE_HELPER[@]}" \
+    "$SELF_PATH" \
+    --write-iso "$ISO_PATH" \
+    --write-device "$TARGET_DEVICE" \
+    --confirmed
+}
+
+write_iso() {
+  device_has_mounts "$TARGET_DEVICE" && fail "selected USB stick or one of its partitions is mounted; unmount it before writing"
+  confirm_write
+  if [[ "$(id -u)" != "0" ]]; then
+    exec_privileged_write
+  fi
+  dd if="$ISO_PATH" of="$TARGET_DEVICE" bs=4M status=progress conv=fsync
+  sync
+  echo "USB installer written to ${TARGET_DEVICE}"
+}
+
+ISO_PATH=""
+ISO_SUPPLIED=0
+DRY_RUN=0
+TARGET_DEVICE=""
+TARGET_SIZE=""
+TARGET_VENDOR=""
+TARGET_MODEL=""
+PRIVILEGE_HELPER=()
+PRIVILEGED_WRITE_ONLY=0
+WRITE_CONFIRMED=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --iso)
+      [[ $# -ge 2 ]] || fail "--iso requires a path"
+      ISO_PATH="$2"
+      ISO_SUPPLIED=1
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    --write-iso)
+      [[ $# -ge 2 ]] || fail "--write-iso requires a path"
+      ISO_PATH="$2"
+      PRIVILEGED_WRITE_ONLY=1
+      shift 2
+      ;;
+    --write-device)
+      [[ $# -ge 2 ]] || fail "--write-device requires a path"
+      TARGET_DEVICE="$2"
+      PRIVILEGED_WRITE_ONLY=1
+      shift 2
+      ;;
+    --confirmed)
+      WRITE_CONFIRMED=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+done
+
+require_command awk
+require_command dd
+require_command grep
+require_command lsblk
+require_command sed
+require_command sync
+
+if [[ "$PRIVILEGED_WRITE_ONLY" == "1" ]]; then
+  [[ -n "$ISO_PATH" ]] || fail "--write-iso is required in internal write mode"
+  [[ -n "$TARGET_DEVICE" ]] || fail "--write-device is required in internal write mode"
+  ISO_PATH="$(resolve_iso_path "$ISO_PATH")"
+else
+  if [[ "$ISO_SUPPLIED" == "1" ]]; then
+    ISO_PATH="$(resolve_iso_path "$ISO_PATH")"
+  else
+    ISO_PATH="$(resolve_built_iso_path)"
+  fi
+
+  choose_target
+  print_plan
+fi
+
+if [[ "$DRY_RUN" != "1" ]]; then
+  write_iso
+fi

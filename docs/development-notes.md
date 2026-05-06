@@ -44,3 +44,4 @@
 - Investigate browser terminal breakage after printing nested-child serial boot output with heavy raw OSC/ANSI control sequences; likely fix is to filter or redirect that boot stream before it hits the browser terminal session.
 - Investigate Codex CLI exits back to a raw shell prompt during nested-child launch work; the likely trigger is the same unfiltered serial boot/control-sequence stream reaching the interactive Codex terminal, so prefer redirecting child serial logs to files and only tailing filtered output on demand.
 - Investigate Codex CLI exits during long `Working` periods with multiple background terminal sessions open; the likely mitigation is to avoid stacked long-lived waits or pollers and prefer short explicit polling commands with no lingering background terminals.
+- Can xtermjs support the terminal bell sound?

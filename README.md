@@ -215,6 +215,57 @@ olc-vmctl key enter
 
 This proof prefers image reuse over building a full image inside the parent VM. Local in-guest `./build-vm` remains guarded by the `/nix` free-space check.
 
+## Milestone 7 Hardware Installer Proof
+
+Milestone 7 now includes a developer-oriented hardware install proof. This is intentionally not the later non-developer release installer: it builds a repo-owned installer ISO that installs the bundled ol-c system source so ol-c can boot on real hardware and expose installation, Wi-Fi, and self-hosted development issues early.
+
+First-proof assumptions:
+- UEFI only, with Secure Boot disabled.
+- GPT target disk.
+- Existing unallocated free space only; the installer never resizes, moves, deletes, or formats existing partitions.
+- No root encryption for v1; first-user homed storage still uses the existing LUKS-backed setup path.
+- NetworkManager is enabled for Wi-Fi.
+- The installed system keeps its rebuild source at `/etc/ol-c/source`; developer checkouts can live under the user's home directory.
+
+After booting the ol-c installer USB, run the guided dry-run first:
+
+```sh
+sudo install-olc
+```
+
+The guided flow lists candidate disks, prompts for the target disk, prompts for install options, and lets you pick a usable unallocated free-space gap when more than one exists. The dry-run prints the exact partitions and actions it would perform without changing the disk.
+
+For scripted use, pass options directly:
+
+```sh
+sudo install-olc --disk /dev/nvme0n1 --gap START-END --wifi interactive
+```
+
+To install, add `--execute` and type the exact confirmation phrase shown by the script:
+
+```sh
+sudo install-olc --execute
+```
+
+The installer creates a new `OLC-EFI` ESP and `OLC-ROOT` ext4 partition inside the selected unallocated gap, mounts them under `/mnt`, copies the bundled ol-c system source to `/mnt/etc/ol-c/source`, generates hardware config, writes an installed rebuild flake under `/mnt/etc/nixos`, and runs `nixos-install` against the `olc.nixosModules.hardware` profile.
+
+Validate the installer contract without touching real disks:
+
+```sh
+bash tests/test-install-olc.sh
+```
+
+## Creating An ol-c Install USB
+
+Use `make-install-usb` from a Linux machine to build the repo-owned ol-c installer ISO and write it to a removable USB memory stick:
+
+```sh
+./make-install-usb --dry-run
+./make-install-usb
+```
+
+When `--iso` is omitted, the script builds `.#ol-c-installer-iso` from this checkout and writes that ISO. Passing `--iso /path/to/file.iso` remains available for debugging. The script builds and plans as the calling user, then elevates only the final raw device write through an available privilege helper (`run0`, `sudo`, `doas`, or `pkexec`). It only lists whole disks reported by `lsblk` as removable USB disks (`TYPE=disk`, `TRAN=usb`, `RM=1`, and writable). It intentionally does not list internal disks or USB-attached non-removable SSD/HDD devices. It refuses mounted targets and requires an exact confirmation phrase before running `dd`.
+
 ## Nix Layout
 
 `vm-screen/server.mjs` is the browser viewer used by the default launcher. It serves a local page and pinned noVNC assets; QEMU provides the VNC WebSocket endpoint directly, so this path does not require `remote-viewer` or `websockify`.
@@ -283,6 +334,8 @@ Run the current shell contract tests with:
 
 ```sh
 bash tests/test-build-vm.sh
+bash tests/test-install-olc.sh
+bash tests/test-make-install-usb.sh
 bash tests/test-launch-vm.sh
 node --test tests/test-olc-vmctl.mjs
 ```

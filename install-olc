@@ -1,0 +1,774 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage: install-olc [--disk /dev/DISK] [options]
+
+Partition-aware ol-c hardware installer proof. Defaults to dry-run.
+
+Options:
+  --disk PATH          Target GPT disk. Prompted when omitted in interactive mode.
+  --execute           Actually partition, format, mount, and run nixos-install.
+  --gap START-END     Use this exact free byte range from the dry-run plan.
+  --efi-size SIZE     ESP size. Default: 1GiB.
+  --root-size SIZE    Root size. Default: remaining selected free gap.
+  --target-root PATH  Target mount root. Default: /mnt.
+  --repo PATH         ol-c system source to install. Default: bundled
+                      installer payload when present, otherwise this script's repo.
+  --wifi MODE         Wi-Fi provisioning mode: interactive or none.
+                      Default: interactive.
+  --interactive       Prompt for missing disk, gap, and install options.
+                      Default when stdin/stdout are terminals.
+  --non-interactive   Fail instead of prompting for missing choices.
+  --help              Show this help text.
+
+Safety model:
+  - UEFI only.
+  - GPT disks only.
+  - Consumes only already-unallocated space.
+  - Never resizes, moves, deletes, or formats existing partitions.
+  - Requires --execute plus an exact confirmation phrase before mutation.
+EOF
+}
+
+fail() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
+}
+
+interactive_enabled() {
+  case "$INTERACTIVE_MODE" in
+    1|yes|true|on) return 0 ;;
+    0|no|false|off) return 1 ;;
+    auto) [[ -t 0 && -t 1 ]] ;;
+    *) fail "invalid interactive mode: $INTERACTIVE_MODE" ;;
+  esac
+}
+
+read_prompt() {
+  local prompt="$1"
+  local default_value="${2:-}"
+  local reply
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s [%s]: ' "$prompt" "$default_value" >&2
+  else
+    printf '%s: ' "$prompt" >&2
+  fi
+
+  if ! read -r reply; then
+    fail "unable to read interactive input"
+  fi
+
+  if [[ -z "$reply" ]]; then
+    printf '%s\n' "$default_value"
+  else
+    printf '%s\n' "$reply"
+  fi
+}
+
+read_number_choice() {
+  local prompt="$1"
+  local max="$2"
+  local default_value="${3:-1}"
+  local reply
+
+  while true; do
+    reply="$(read_prompt "$prompt" "$default_value")"
+    if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= max )); then
+      printf '%s\n' "$reply"
+      return
+    fi
+    echo "Enter a number from 1 to ${max}." >&2
+  done
+}
+
+strip_trailing_slash() {
+  local value="$1"
+  while [[ "$value" != "/" && "$value" == */ ]]; do
+    value="${value%/}"
+  done
+  printf '%s\n' "$value"
+}
+
+parse_size_bytes() {
+  local value="$1"
+  local number unit multiplier
+
+  if [[ ! "$value" =~ ^([0-9]+)(B|K|KiB|M|MiB|G|GiB|T|TiB)?$ ]]; then
+    fail "invalid size: $value"
+  fi
+
+  number="${BASH_REMATCH[1]}"
+  unit="${BASH_REMATCH[2]:-B}"
+  case "$unit" in
+    B) multiplier=1 ;;
+    K|KiB) multiplier=1024 ;;
+    M|MiB) multiplier=$((1024 * 1024)) ;;
+    G|GiB) multiplier=$((1024 * 1024 * 1024)) ;;
+    T|TiB) multiplier=$((1024 * 1024 * 1024 * 1024)) ;;
+    *) fail "unsupported size unit: $unit" ;;
+  esac
+
+  printf '%s\n' "$((number * multiplier))"
+}
+
+parse_parted_bytes() {
+  local value="$1"
+  value="${value%B}"
+  [[ "$value" =~ ^[0-9]+$ ]] || fail "invalid parted byte value: $1"
+  printf '%s\n' "$value"
+}
+
+format_bytes() {
+  local bytes="$1"
+  awk -v bytes="$bytes" 'BEGIN {
+    split("B KiB MiB GiB TiB", unit, " ");
+    value = bytes + 0;
+    unit_index = 1;
+    while (value >= 1024 && unit_index < 5) {
+      value = value / 1024;
+      unit_index++;
+    }
+    if (unit_index == 1) {
+      printf "%d %s", value, unit[unit_index];
+    } else {
+      printf "%.2f %s", value, unit[unit_index];
+    }
+  }'
+}
+
+parse_gap_spec() {
+  local spec="$1"
+  if [[ ! "$spec" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+    fail "invalid --gap value; expected START-END byte range from dry-run output"
+  fi
+  GAP_SPEC_START="${BASH_REMATCH[1]}"
+  GAP_SPEC_END="${BASH_REMATCH[2]}"
+  if (( GAP_SPEC_END <= GAP_SPEC_START )); then
+    fail "invalid --gap range: end must be greater than start"
+  fi
+}
+
+disk_partition_path() {
+  local disk="$1"
+  local number="$2"
+  if [[ "$disk" =~ [0-9]$ ]]; then
+    printf '%sp%s\n' "$disk" "$number"
+  else
+    printf '%s%s\n' "$disk" "$number"
+  fi
+}
+
+repo_has_olc_flake() {
+  local repo="$1"
+  [[ -f "$repo/flake.nix" && -f "$repo/nix/ol-c.nix" && -f "$repo/nix/ol-c-hardware.nix" ]]
+}
+
+choose_disk_interactive() {
+  local line index choice name type size model
+  mapfile -t DISK_CHOICES < <(
+    lsblk -dn -o NAME,TYPE,SIZE,MODEL |
+      awk '
+        $2 == "disk" {
+          name = $1;
+          size = $3;
+          $1 = "";
+          $2 = "";
+          $3 = "";
+          sub(/^[[:space:]]+/, "");
+          printf "/dev/%s\t%s\t%s\n", name, size, $0;
+        }
+      '
+  )
+
+  ((${#DISK_CHOICES[@]} > 0)) || fail "no candidate disks found"
+
+  echo "Candidate install disks:" >&2
+  index=1
+  for line in "${DISK_CHOICES[@]}"; do
+    IFS=$'\t' read -r name size model <<< "$line"
+    if [[ -n "$model" ]]; then
+      printf '  %s. %s  size=%s  model=%s\n' "$index" "$name" "$size" "$model" >&2
+    else
+      printf '  %s. %s  size=%s\n' "$index" "$name" "$size" >&2
+    fi
+    index=$((index + 1))
+  done
+
+  choice="$(read_number_choice "Select target disk" "${#DISK_CHOICES[@]}" 1)"
+  IFS=$'\t' read -r DISK size model <<< "${DISK_CHOICES[$((choice - 1))]}"
+}
+
+prompt_install_options_interactive() {
+  local reply
+
+  if (( TARGET_ROOT_SET == 0 )); then
+    TARGET_ROOT="$(strip_trailing_slash "$(read_prompt "Target mount root" "$TARGET_ROOT")")"
+  fi
+
+  if (( EFI_SIZE_SET == 0 )); then
+    EFI_SIZE_SPEC="$(read_prompt "EFI system partition size" "$EFI_SIZE_SPEC")"
+  fi
+
+  if (( WIFI_MODE_SET == 0 )); then
+    while true; do
+      reply="$(read_prompt "Wi-Fi provisioning mode (interactive/none)" "$WIFI_MODE")"
+      case "$reply" in
+        interactive|none)
+          WIFI_MODE="$reply"
+          break
+          ;;
+        *)
+          echo "Enter interactive or none." >&2
+          ;;
+      esac
+    done
+  fi
+}
+
+check_uefi() {
+  local efi_dir="${OLC_INSTALL_EFI_DIR:-/sys/firmware/efi}"
+  [[ -d "$efi_dir" ]] || fail "UEFI firmware is required for this installer proof; boot a NixOS live ISO in UEFI mode"
+}
+
+check_disk_device() {
+  if [[ "${OLC_INSTALL_SKIP_BLOCK_CHECK:-0}" == "1" ]]; then
+    return
+  fi
+  [[ -b "$DISK" ]] || fail "target disk is not a block device: $DISK"
+}
+
+check_disk_not_mounted() {
+  local mounts
+  mounts="$(lsblk -nr -o MOUNTPOINTS "$DISK" 2>/dev/null | sed '/^[[:space:]]*$/d' || true)"
+  [[ -z "$mounts" ]] || fail "target disk or one of its partitions is mounted; unmount it before installing: $DISK"
+}
+
+read_parted_free() {
+  PARTED_FREE_OUTPUT="$(parted -m "$DISK" unit B print free)"
+}
+
+assert_gpt_disk() {
+  local header label
+  header="$(printf '%s\n' "$PARTED_FREE_OUTPUT" | awk -F: -v disk="$DISK" '$1 == disk { print; exit }')"
+  [[ -n "$header" ]] || fail "unable to read disk header for $DISK"
+  label="$(printf '%s\n' "$header" | awk -F: '{ print $6 }')"
+  [[ "$label" == "gpt" ]] || fail "target disk must use a GPT partition table; found: ${label:-unknown}"
+}
+
+collect_partition_numbers() {
+  printf '%s\n' "$PARTED_FREE_OUTPUT" |
+    awk -F: '
+      $1 ~ /^[0-9]+$/ && $0 !~ /:free[;:]/ {
+        print $1
+      }
+    ' |
+    LC_ALL=C sort -n
+}
+
+next_partition_number() {
+  local next used
+  next=1
+  while read -r used; do
+    [[ -n "$used" ]] || continue
+    if (( used == next )); then
+      next=$((next + 1))
+    elif (( used > next )); then
+      break
+    fi
+  done < <(collect_partition_numbers)
+  printf '%s\n' "$next"
+}
+
+collect_valid_gaps() {
+  local minimum="$1"
+  printf '%s\n' "$PARTED_FREE_OUTPUT" |
+    awk -F: -v minimum="$minimum" '
+      /:free[;:]/ {
+        start = "";
+        end = "";
+        size = "";
+        if ($2 ~ /^[0-9]+B$/ && $3 ~ /^[0-9]+B$/ && $4 ~ /^[0-9]+B$/) {
+          start = $2;
+          end = $3;
+          size = $4;
+        } else if ($1 ~ /^[0-9]+B$/ && $2 ~ /^[0-9]+B$/ && $3 ~ /^[0-9]+B$/) {
+          start = $1;
+          end = $2;
+          size = $3;
+        }
+        gsub(/B/, "", start);
+        gsub(/B/, "", end);
+        gsub(/B/, "", size);
+        if (start != "" && end != "" && size + 0 >= minimum + 0) {
+          print start "\t" end "\t" size;
+        }
+      }
+    '
+}
+
+select_gap() {
+  local minimum gap_count line start end size
+  minimum="$((EFI_SIZE_BYTES + MIN_ROOT_BYTES))"
+  mapfile -t VALID_GAPS < <(collect_valid_gaps "$minimum")
+  gap_count="${#VALID_GAPS[@]}"
+
+  if [[ -n "$GAP_SPEC" ]]; then
+    for line in "${VALID_GAPS[@]}"; do
+      IFS=$'\t' read -r start end size <<< "$line"
+      if [[ "$start" == "$GAP_SPEC_START" && "$end" == "$GAP_SPEC_END" ]]; then
+        SELECTED_GAP_START="$start"
+        SELECTED_GAP_END="$end"
+        SELECTED_GAP_SIZE="$size"
+        return
+      fi
+    done
+    fail "requested --gap ${GAP_SPEC} is not an unallocated range large enough for ol-c"
+  fi
+
+  if (( gap_count == 0 )); then
+    fail "no unallocated GPT free-space gap is large enough; need at least $(format_bytes "$minimum")"
+  fi
+  if (( gap_count > 1 )); then
+    if interactive_enabled; then
+      echo "Usable unallocated free-space gaps:" >&2
+      local index choice
+      index=1
+      for line in "${VALID_GAPS[@]}"; do
+        IFS=$'\t' read -r start end size <<< "$line"
+        echo "  ${index}. range=${start}-${end} size=$(format_bytes "$size")" >&2
+        index=$((index + 1))
+      done
+      choice="$(read_number_choice "Select free-space gap" "$gap_count" 1)"
+      IFS=$'\t' read -r SELECTED_GAP_START SELECTED_GAP_END SELECTED_GAP_SIZE <<< "${VALID_GAPS[$((choice - 1))]}"
+      return
+    fi
+
+    echo "multiple usable unallocated gaps found; rerun with --gap START-END:" >&2
+    for line in "${VALID_GAPS[@]}"; do
+      IFS=$'\t' read -r start end size <<< "$line"
+      echo "  --gap ${start}-${end}  size=$(format_bytes "$size")" >&2
+    done
+    exit 1
+  fi
+
+  IFS=$'\t' read -r SELECTED_GAP_START SELECTED_GAP_END SELECTED_GAP_SIZE <<< "${VALID_GAPS[0]}"
+}
+
+prompt_root_size_interactive() {
+  local reply remaining_size
+  (( ROOT_SIZE_SET == 0 )) || return
+  interactive_enabled || return 0
+
+  remaining_size="$((SELECTED_GAP_SIZE - EFI_SIZE_BYTES))"
+  reply="$(read_prompt "Root partition size, or remaining" "remaining")"
+  case "$reply" in
+    ""|remaining|Remaining|REMAINING)
+      ROOT_SIZE_SPEC=""
+      ;;
+    *)
+      ROOT_SIZE_SPEC="$reply"
+      echo "Selected root size: $ROOT_SIZE_SPEC of available $(format_bytes "$remaining_size") after ESP" >&2
+      ;;
+  esac
+}
+
+build_partition_plan() {
+  local available root_size
+
+  available="$((SELECTED_GAP_END - SELECTED_GAP_START + 1))"
+  (( available >= EFI_SIZE_BYTES + MIN_ROOT_BYTES )) || fail "selected gap is too small"
+
+  EFI_START="$SELECTED_GAP_START"
+  EFI_END="$((EFI_START + EFI_SIZE_BYTES - 1))"
+  ROOT_START="$((EFI_END + 1))"
+
+  if [[ -n "$ROOT_SIZE_SPEC" ]]; then
+    root_size="$(parse_size_bytes "$ROOT_SIZE_SPEC")"
+    ROOT_END="$((ROOT_START + root_size - 1))"
+  else
+    ROOT_END="$SELECTED_GAP_END"
+    root_size="$((ROOT_END - ROOT_START + 1))"
+  fi
+
+  (( root_size >= MIN_ROOT_BYTES )) || fail "root partition must be at least $(format_bytes "$MIN_ROOT_BYTES")"
+  (( ROOT_END <= SELECTED_GAP_END )) || fail "requested partition sizes do not fit selected free-space gap"
+
+  EFI_PARTITION_NUMBER="$(next_partition_number)"
+  ROOT_PARTITION_NUMBER="$((EFI_PARTITION_NUMBER + 1))"
+  EFI_PARTITION="$(disk_partition_path "$DISK" "$EFI_PARTITION_NUMBER")"
+  ROOT_PARTITION="$(disk_partition_path "$DISK" "$ROOT_PARTITION_NUMBER")"
+}
+
+print_plan() {
+  cat <<EOF
+ol-c installer plan
+mode:        $([[ "$EXECUTE" == "1" ]] && printf execute || printf dry-run)
+disk:        $DISK
+repo:        $REPO_DIR
+target root: $TARGET_ROOT
+wifi:        $WIFI_MODE
+
+selected free-space gap:
+  range: ${SELECTED_GAP_START}-${SELECTED_GAP_END}
+  size:  $(format_bytes "$SELECTED_GAP_SIZE")
+
+new partitions:
+  ESP:   ${EFI_PARTITION} number=${EFI_PARTITION_NUMBER} range=${EFI_START}-${EFI_END} size=$(format_bytes "$EFI_SIZE_BYTES") fs=fat32 label=OLC-EFI
+  root:  ${ROOT_PARTITION} number=${ROOT_PARTITION_NUMBER} range=${ROOT_START}-${ROOT_END} size=$(format_bytes "$((ROOT_END - ROOT_START + 1))") fs=ext4 label=OLC-ROOT
+
+install actions:
+  1. save partition table backup
+  2. create OLC-EFI and OLC-ROOT inside the selected unallocated gap
+  3. format only those new partitions
+  4. mount root at ${TARGET_ROOT} and ESP at ${TARGET_ROOT}/boot
+  5. copy the ol-c system source to ${TARGET_ROOT}/etc/ol-c/source
+  6. generate hardware config and install ol-c hardware profile with nixos-install
+EOF
+
+  if [[ "$EXECUTE" != "1" ]]; then
+    cat <<EOF
+
+dry-run only: no disk changes were made.
+To execute, rerun with --execute and type the exact confirmation phrase when prompted.
+EOF
+  fi
+}
+
+confirm_execute() {
+  local expected confirmation
+  expected="INSTALL ol-c to ${DISK}"
+  if [[ "${OLC_INSTALL_CONFIRM:-}" == "$expected" ]]; then
+    return
+  fi
+  cat >&2 <<EOF
+
+About to modify ${DISK}.
+This will create and format only:
+  ${EFI_PARTITION}
+  ${ROOT_PARTITION}
+
+Existing partitions are not resized, moved, deleted, or formatted.
+Type exactly this phrase to continue:
+  ${expected}
+EOF
+  read -r confirmation
+  [[ "$confirmation" == "$expected" ]] || fail "confirmation did not match; aborting"
+}
+
+require_execute_commands() {
+  require_command sfdisk
+  require_command mkfs.vfat
+  require_command mkfs.ext4
+  require_command mount
+  require_command nixos-generate-config
+  require_command nixos-install
+  require_command tar
+}
+
+prepare_work_dir() {
+  WORK_DIR="$(mktemp -d "${OLC_INSTALL_WORK_TEMPLATE:-/tmp/olc-install.XXXXXX}")"
+  mkdir -p "$WORK_DIR"
+}
+
+save_partition_backups() {
+  sfdisk --dump "$DISK" > "$WORK_DIR/partition-table-before.sfdisk"
+  printf '%s\n' "$PARTED_FREE_OUTPUT" > "$WORK_DIR/parted-print-free-before.txt"
+}
+
+create_partitions() {
+  parted -s "$DISK" unit B mkpart OLC-EFI fat32 "${EFI_START}B" "${EFI_END}B"
+  parted -s "$DISK" set "$EFI_PARTITION_NUMBER" esp on
+  parted -s "$DISK" unit B mkpart OLC-ROOT ext4 "${ROOT_START}B" "${ROOT_END}B"
+  if command -v partprobe >/dev/null 2>&1; then
+    partprobe "$DISK" || true
+  fi
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle || true
+  fi
+}
+
+format_new_partitions() {
+  mkfs.vfat -F 32 -n OLC-EFI "$EFI_PARTITION"
+  mkfs.ext4 -F -L OLC-ROOT "$ROOT_PARTITION"
+}
+
+mount_target() {
+  mkdir -p "$TARGET_ROOT"
+  mount "$ROOT_PARTITION" "$TARGET_ROOT"
+  mkdir -p "$TARGET_ROOT/boot"
+  mount "$EFI_PARTITION" "$TARGET_ROOT/boot"
+}
+
+copy_system_source_to_target() {
+  mkdir -p "$TARGET_ROOT/etc/ol-c/source"
+  tar \
+    --exclude='./.olc-firefox' \
+    --exclude='./.olc-debug' \
+    --exclude='./.tmp-tests' \
+    --exclude='./result' \
+    -C "$REPO_DIR" \
+    -cpf - . |
+    tar -C "$TARGET_ROOT/etc/ol-c/source" -xpf -
+}
+
+write_wifi_connection() {
+  local ssid passphrase connection_dir connection_file
+  [[ "$WIFI_MODE" == "interactive" ]] || return 0
+
+  ssid="${OLC_INSTALL_WIFI_SSID:-}"
+  passphrase="${OLC_INSTALL_WIFI_PASSPHRASE:-}"
+  if [[ -z "$ssid" ]]; then
+    read -r -p "Wi-Fi SSID: " ssid
+  fi
+  if [[ -z "$passphrase" ]]; then
+    read -r -s -p "Wi-Fi passphrase: " passphrase
+    printf '\n'
+  fi
+
+  [[ "$ssid" != *$'\n'* && "$passphrase" != *$'\n'* ]] || fail "Wi-Fi SSID/passphrase must not contain newlines"
+  if (( ${#passphrase} < 8 || ${#passphrase} > 63 )); then
+    fail "Wi-Fi passphrase must be 8-63 characters for WPA-PSK"
+  fi
+
+  connection_dir="$TARGET_ROOT/etc/NetworkManager/system-connections"
+  connection_file="$connection_dir/ol-c-wifi.nmconnection"
+  mkdir -p "$connection_dir"
+  umask 077
+  cat > "$connection_file" <<EOF
+[connection]
+id=ol-c-wifi
+type=wifi
+autoconnect=true
+
+[wifi]
+mode=infrastructure
+ssid=${ssid}
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=${passphrase}
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+EOF
+}
+
+write_target_flake() {
+  mkdir -p "$TARGET_ROOT/etc/nixos"
+  cat > "$TARGET_ROOT/etc/nixos/flake.nix" <<'EOF'
+{
+  description = "Installed ol-c hardware system";
+
+  inputs = {
+    olc.url = "path:/etc/ol-c/source";
+    nixpkgs.follows = "olc/nixpkgs";
+  };
+
+  outputs = { nixpkgs, olc, ... }: {
+    nixosConfigurations.ol-c-hardware = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        olc.nixosModules.hardware
+        ./hardware-configuration.nix
+      ];
+    };
+  };
+}
+EOF
+
+  cat > "$WORK_DIR/flake.nix" <<EOF
+{
+  description = "Transient ol-c hardware installer flake";
+
+  inputs = {
+    olc.url = "path:${TARGET_ROOT}/etc/ol-c/source";
+    nixpkgs.follows = "olc/nixpkgs";
+  };
+
+  outputs = { nixpkgs, olc, ... }: {
+    nixosConfigurations.ol-c-hardware = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        olc.nixosModules.hardware
+        ${TARGET_ROOT}/etc/nixos/hardware-configuration.nix
+      ];
+    };
+  };
+}
+EOF
+}
+
+run_nixos_install() {
+  export NIX_CONFIG="${NIX_CONFIG:-}
+experimental-features = nix-command flakes"
+  nixos-generate-config --root "$TARGET_ROOT"
+  write_target_flake
+  nixos-install --root "$TARGET_ROOT" --flake "$WORK_DIR#ol-c-hardware" --no-root-passwd
+}
+
+record_install_artifacts() {
+  local artifact_dir
+  artifact_dir="$TARGET_ROOT/var/lib/ol-c/install"
+  mkdir -p "$artifact_dir"
+  cp "$WORK_DIR/partition-table-before.sfdisk" "$artifact_dir/"
+  cp "$WORK_DIR/parted-print-free-before.txt" "$artifact_dir/"
+  {
+    printf 'disk=%s\n' "$DISK"
+    printf 'efi_partition=%s\n' "$EFI_PARTITION"
+    printf 'root_partition=%s\n' "$ROOT_PARTITION"
+    printf 'repo_source=%s\n' "$REPO_DIR"
+    printf 'installed_source=/etc/ol-c/source\n'
+    printf 'installed_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$artifact_dir/manifest.env"
+}
+
+execute_install() {
+  confirm_execute
+  require_execute_commands
+  prepare_work_dir
+  save_partition_backups
+  create_partitions
+  format_new_partitions
+  mount_target
+  copy_system_source_to_target
+  write_wifi_connection
+  run_nixos_install
+  record_install_artifacts
+  echo "ol-c install complete. Reboot into the new UEFI boot entry when ready."
+  echo "install artifacts: ${TARGET_ROOT}/var/lib/ol-c/install"
+}
+
+EXECUTE=0
+DISK=""
+GAP_SPEC=""
+GAP_SPEC_START=""
+GAP_SPEC_END=""
+EFI_SIZE_SPEC="1GiB"
+ROOT_SIZE_SPEC=""
+TARGET_ROOT="/mnt"
+REPO_DIR="${OLC_INSTALL_REPO:-$ROOT_DIR}"
+WIFI_MODE="interactive"
+MIN_ROOT_BYTES="$(parse_size_bytes 80GiB)"
+INTERACTIVE_MODE="${OLC_INSTALL_INTERACTIVE:-auto}"
+EFI_SIZE_SET=0
+ROOT_SIZE_SET=0
+TARGET_ROOT_SET=0
+WIFI_MODE_SET=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --disk)
+      [[ $# -ge 2 ]] || fail "--disk requires a path"
+      DISK="$2"
+      shift 2
+      ;;
+    --execute)
+      EXECUTE=1
+      shift
+      ;;
+    --gap)
+      [[ $# -ge 2 ]] || fail "--gap requires START-END"
+      GAP_SPEC="$2"
+      parse_gap_spec "$GAP_SPEC"
+      shift 2
+      ;;
+    --efi-size)
+      [[ $# -ge 2 ]] || fail "--efi-size requires a size"
+      EFI_SIZE_SPEC="$2"
+      EFI_SIZE_SET=1
+      shift 2
+      ;;
+    --root-size)
+      [[ $# -ge 2 ]] || fail "--root-size requires a size"
+      ROOT_SIZE_SPEC="$2"
+      ROOT_SIZE_SET=1
+      shift 2
+      ;;
+    --target-root)
+      [[ $# -ge 2 ]] || fail "--target-root requires a path"
+      TARGET_ROOT="$(strip_trailing_slash "$2")"
+      TARGET_ROOT_SET=1
+      shift 2
+      ;;
+    --repo)
+      [[ $# -ge 2 ]] || fail "--repo requires a path"
+      REPO_DIR="$(strip_trailing_slash "$2")"
+      shift 2
+      ;;
+    --wifi)
+      [[ $# -ge 2 ]] || fail "--wifi requires a mode"
+      WIFI_MODE="$2"
+      WIFI_MODE_SET=1
+      shift 2
+      ;;
+    --interactive)
+      INTERACTIVE_MODE=1
+      shift
+      ;;
+    --non-interactive)
+      INTERACTIVE_MODE=0
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+done
+
+require_command awk
+require_command lsblk
+require_command sed
+
+if [[ -z "$DISK" ]]; then
+  if interactive_enabled; then
+    choose_disk_interactive
+  else
+    fail "--disk is required; rerun with --interactive to choose from detected disks"
+  fi
+fi
+
+if interactive_enabled; then
+  prompt_install_options_interactive
+fi
+
+case "$WIFI_MODE" in
+  interactive|none) ;;
+  *) fail "unsupported --wifi mode: $WIFI_MODE" ;;
+esac
+
+EFI_SIZE_BYTES="$(parse_size_bytes "$EFI_SIZE_SPEC")"
+(( EFI_SIZE_BYTES >= 268435456 )) || fail "ESP must be at least 256MiB"
+REPO_DIR="$(cd "$REPO_DIR" && pwd)"
+repo_has_olc_flake "$REPO_DIR" || fail "repo does not look like an ol-c checkout: $REPO_DIR"
+
+require_command parted
+
+check_uefi
+check_disk_device
+check_disk_not_mounted
+read_parted_free
+assert_gpt_disk
+select_gap
+prompt_root_size_interactive
+build_partition_plan
+print_plan
+
+if [[ "$EXECUTE" == "1" ]]; then
+  execute_install
+fi

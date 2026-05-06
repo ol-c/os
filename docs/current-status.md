@@ -19,6 +19,10 @@
 - In-VM development uses a host-shared repo mounted at `/source` via `virtiofs`.
 - Nested `olc-launch-test-vm` launches default to a cheap child-boot path and print a reconnect URL for browser viewing.
 - `olc-vmctl` provides low-level QMP control primitives including `key`, `type`, `move`, `click`, `screenshot`, and `raw`.
+- `.#ol-c-installer-iso` is the first Milestone 7 install medium proof: it builds a CLI installer ISO from this repo with NetworkManager and the bundled `install-olc` payload.
+- `make-install-usb` builds the installer ISO as the calling user, selects only removable writable USB disks, and elevates only the final whole-device write.
+- `install-olc` is the first Milestone 7 hardware installer proof: it targets UEFI systems from the ol-c installer ISO, interactively lists candidate disks and usable free-space gaps, consumes only explicitly selected unallocated GPT free space, creates new `OLC-EFI` and `OLC-ROOT` partitions, installs the hardware flake profile, enables NetworkManager Wi-Fi provisioning, and preserves the installed system source under `/etc/ol-c/source`.
+- The hardware install profile is separate from the VM profile so real installs do not inherit QEMU-only GRUB `/dev/vda` or virtiofs `/source` assumptions.
 - Firefox localhost shell behavior opens new tabs to `https://localhost/` and replaces last-tab closure with a localhost tab.
 - Noto is the default OS, browser-shell, terminal, editor, and generic browser font family set; the bundled baseline is Noto base, CJK Sans, CJK Serif, and Color Emoji.
 
@@ -28,7 +32,7 @@ Active milestone:
 - Milestone 7.
 
 Immediate next task:
-- Decide the next browser-pane polish target after live natural-drop validation, such as automated GUI coverage, pane-session restore, or split affordance tuning.
+- Build and write `.#ol-c-installer-iso`, then validate `install-olc` on a real UEFI target, including dry-run gap selection, first boot, first-user setup, Wi-Fi, and a developer checkout under the installed user's home directory.
 
 Current Milestone 6 direction:
 - Make the standard Firefox source-tree loop the primary development path for Firefox behavior changes.
@@ -70,6 +74,8 @@ Related design notes:
   - `cd terminal-client && npm test && npm run build`
   - `bash tests/test-build-vm.sh`
   - `bash tests/test-launch-vm.sh`
+  - `bash tests/test-install-olc.sh`
+  - `bash tests/test-make-install-usb.sh`
   - `bash tests/test-noto-fonts.sh`
   - `bash tests/test-build-firefox-remote.sh`
   - `bash tests/test-firefox-localhost-patch.sh`

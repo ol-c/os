@@ -260,6 +260,69 @@
         inherit system;
         overlays = [ qemuInputOverlay ];
       };
+      installerPayload = lib.cleanSourceWith {
+        src = ./.;
+        filter = path: type:
+          let
+            name = baseNameOf path;
+          in
+            !(lib.elem name [
+              ".git"
+              ".olc-debug"
+              ".olc-firefox"
+              ".tmp-tests"
+              "result"
+            ]);
+      };
+      installerIsoModule = { lib, modulesPath, pkgs, ... }:
+        let
+          installOlcCommand = pkgs.writeShellScriptBin "install-olc" ''
+            export OLC_INSTALL_REPO="${installerPayload}"
+            exec ${pkgs.bash}/bin/bash "${installerPayload}/install-olc" "$@"
+          '';
+        in {
+          imports = [
+            "${modulesPath}/installer/cd-dvd/installation-cd-minimal.nix"
+          ];
+
+          isoImage.edition = lib.mkForce "ol-c-installer";
+          isoImage.volumeID = lib.mkForce "OL_C_INSTALLER";
+          isoImage.compressImage = false;
+
+          networking.hostName = "ol-c-installer";
+          networking.networkmanager.enable = true;
+
+          nix.settings.experimental-features = [ "nix-command" "flakes" ];
+
+          environment.systemPackages = [
+            installOlcCommand
+            pkgs.curl
+            pkgs.dosfstools
+            pkgs.e2fsprogs
+            pkgs.git
+            pkgs.iw
+            pkgs.jq
+            pkgs.networkmanager
+            pkgs.parted
+            pkgs.pciutils
+            pkgs.ripgrep
+            pkgs.usbutils
+          ];
+
+          environment.etc."ol-c-installer/README".text = ''
+            ol-c installer ISO
+
+            1. Connect networking if needed. NetworkManager is enabled.
+            2. Run: sudo install-olc
+            3. Reboot without the USB after installation completes.
+
+            This ISO installs the bundled ol-c system source from:
+              ${installerPayload}
+
+            The installed system keeps that source under:
+              /etc/ol-c/source
+          '';
+        };
       overlayModule = {
         nixpkgs.overlays = [ firefoxFastOverlay qemuInputOverlay ];
       };
@@ -269,15 +332,30 @@
       overlays.source = firefoxSourceOverlay;
       overlays.qemu-input = qemuInputOverlay;
 
+      nixosModules = {
+        vm = { ... }: {
+          imports = [ overlayModule olcModule ];
+        };
+        hardware = { ... }: {
+          imports = [ overlayModule ./nix/ol-c-hardware.nix ];
+        };
+      };
+
       nixosConfigurations."ol-c" = nixpkgs.lib.nixosSystem {
         inherit system;
-        modules = [ overlayModule olcModule ];
+        modules = [ self.nixosModules.vm ];
+      };
+
+      nixosConfigurations."ol-c-installer" = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [ installerIsoModule ];
       };
 
       packages.${system} = {
         firefox-localhost = firefoxPkgs.firefox;
         firefox-localhost-source = firefoxSourcePkgs.firefox;
         novnc = basePkgs.novnc;
+        "ol-c-installer-iso" = self.nixosConfigurations."ol-c-installer".config.system.build.isoImage;
         pulseaudio = basePkgs.pulseaudio;
         qemu-olc = qemuPkgs.qemu_kvm;
         "ol-c-image" = self.nixosConfigurations."ol-c".config.system.build.images.qemu;
